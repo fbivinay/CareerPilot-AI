@@ -59,7 +59,6 @@ option at ₹0.
 6. **Clients** → Create client → **Web application**. Under *Authorized redirect URIs* add:
    - `http://localhost:3000/api/gmail/callback`
    - `http://127.0.0.1:3000/api/gmail/callback`
-   - later, your Vercel address: `https://<your-app>.vercel.app/api/gmail/callback`
 7. Copy the **Client ID** and **Client secret** shown into `careerpilot/.env` (Notepad), as
    `GOOGLE_CLIENT_ID=...` and `GOOGLE_CLIENT_SECRET=...`. Never paste them into a chat.
 
