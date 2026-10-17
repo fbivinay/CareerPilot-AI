@@ -44,6 +44,9 @@ test('newsletters, social notices and promos are not hiring events', () => {
   assert.equal(c('notifications-noreply@linkedin.com', 'You have 1 new message', 'See who reached out'), 'other');
   assert.equal(c('updates-noreply@linkedin.com', 'Someone and others just posted', 'Hiring for Fund Accounting'), 'other');
   assert.equal(c('jobalerts-noreply@linkedin.com', 'Data Scientist: 12 new jobs in Bengaluru', 'x'), 'job_alert');
+  // Platform fraud warnings mention "job offer" in every footer.
+  assert.equal(c('noreply@monsterindia.com', 'foundit (Monster): Verify your email address', 'Please verify your email address. '
+    + 'foundit also advises users to beware of any fraudulent communication asking for personal /banking information or seeking money for any job offer.'), 'other');
 });
 
 test('sent application detection', () => {

@@ -65,6 +65,8 @@ const SIGNALS = [
   }],
 ];
 const CONDITION_BEFORE = /\b(if|should|once(?! again)|in case|whether|in the event)\b/;
+// Fraud warnings in platform footers ("beware of ... seeking money for any job offer") are boilerplate.
+const DISCLAIMER = /\b(fraud|scam|phish)\w*|\bbeware\b|\bnever (asks?|charges?|requests?)\b/;
 const hit = (sentence, re) => {
   const m = re.exec(sentence);
   return m != null && !CONDITION_BEFORE.test(sentence.slice(0, m.index));
@@ -99,7 +101,7 @@ export function classifyEmail(msg, { ourThreadIds = new Set() } = {}) {
   const subject = String(msg.subject ?? '');
   const fromAddr = String(msg.fromAddr ?? '');
   const own = stripQuoted(msg.text).slice(0, 8000);
-  const parts = sentences(`${subject}\n${own}`.toLowerCase());
+  const parts = sentences(`${subject}\n${own}`.toLowerCase()).filter((p) => !DISCLAIMER.test(p));
   const inOurThread = ourThreadIds.has(msg.threadId);
   if (/^(mailer-daemon|postmaster)@/i.test(fromAddr)
     && /delivery status notification|undeliverable|delivery (has )?failed|address not found|returned mail|failure notice|could not be delivered/i.test(subject)) {
