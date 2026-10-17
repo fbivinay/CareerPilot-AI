@@ -1,0 +1,70 @@
+# CareerPilot scheduled pipeline: discovery, AI fit scoring, Gmail sync, application prep,
+# email applications/outreach within policy, and the daily digest.
+#
+# Free-tier budget (private repo on GitHub Free: 2,000 Linux minutes/month):
+#   12 runs/day x ~3 min (billed per started minute) ~= 1,100 min/month, leaving headroom for CI.
+# GitHub may start scheduled runs late (often 5-30 min) or skip them under load; every stage is
+# idempotent and incremental, so a late or skipped run just catches up on the next one.
+name: careerpilot-pipeline
+
+on:
+  schedule:
+    - cron: '23 */2 * * *'   # every 2 hours, off the top of the hour to avoid peak queueing
+  workflow_dispatch:
+    inputs:
+      stages:
+        description: 'Stages to run (all, or comma list: discover,ai,gmail,prepare,outreach,digest)'
+        default: all
+
+permissions:
+  contents: read
+
+concurrency:
+  group: careerpilot-pipeline
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Restore dependencies
+        id: deps
+        uses: actions/cache@v4
+        with:
+          path: |
+            node_modules
+            careerpilot/node_modules
+          key: deps-${{ runner.os }}-${{ hashFiles('package.json', 'careerpilot/package-lock.json') }}
+      - name: Install dependencies
+        if: steps.deps.outputs.cache-hit != 'true'
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+        run: |
+          npm install --ignore-scripts --no-audit --no-fund
+          npm ci --prefix careerpilot --ignore-scripts --no-audit --no-fund
+      - name: Run pipeline
+        working-directory: careerpilot
+        env:
+          RUN_BUDGET_MINUTES: '11'
+          TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+          TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+          APP_ENCRYPTION_KEY: ${{ secrets.APP_ENCRYPTION_KEY }}
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GMAIL_REFRESH_TOKEN: ${{ secrets.GMAIL_REFRESH_TOKEN }}
+          GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          STAGES: ${{ inputs.stages || 'all' }}
+        run: |
+          if [ -z "$TURSO_DATABASE_URL" ]; then
+            echo "::error::TURSO_DATABASE_URL secret is not set; refusing to run against a throwaway database."
+            exit 1
+          fi
+          node scripts/run.mjs "$STAGES"

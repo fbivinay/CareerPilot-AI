@@ -272,3 +272,16 @@ data/interview-prep/
 /tectonic.exe
 /tectonic.part
 /tectonic.part.exe
+
+# ── CareerPilot AI (personal data and secrets — never commit) ──
+careerpilot/private/
+careerpilot/.data/
+careerpilot/.env
+careerpilot/.env.*
+!careerpilot/.env.example
+careerpilot/.next/
+careerpilot/node_modules/
+careerpilot/.vercel/
+.env.local
+!careerpilot/package-lock.json
+.playwright-mcp/

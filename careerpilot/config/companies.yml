@@ -1,0 +1,22 @@
+# Curated employer boards scanned every run. Only public ATS board URLs (no logins).
+# Each URL below was verified to return live postings on 2026-10-17.
+# The daily aggregator sweep adds more boards automatically (origin: discovered).
+# Add a company: append {name, careers_url}. Supported hosts include
+# job-boards.greenhouse.io/<slug>, jobs.lever.co/<slug>, jobs.ashbyhq.com/<slug>,
+# <tenant>.wdN.myworkdayjobs.com/<site>, careers.smartrecruiters.com/<slug>, apply.workable.com/<slug>.
+companies:
+  - { name: Sarvam AI, careers_url: https://jobs.ashbyhq.com/sarvam }
+  - { name: Atlan, careers_url: https://jobs.ashbyhq.com/atlan }
+  - { name: Composio, careers_url: https://jobs.ashbyhq.com/composio }
+  - { name: ElevenLabs, careers_url: https://jobs.ashbyhq.com/elevenlabs }
+  - { name: Groww, careers_url: https://job-boards.greenhouse.io/groww }
+  - { name: Glance, careers_url: https://job-boards.greenhouse.io/glance }
+  - { name: InMobi, careers_url: https://job-boards.greenhouse.io/inmobi }
+  - { name: Druva, careers_url: https://job-boards.greenhouse.io/druva }
+  - { name: Databricks, careers_url: https://job-boards.greenhouse.io/databricks }
+  - { name: Rubrik, careers_url: https://job-boards.greenhouse.io/rubrik }
+  - { name: CRED, careers_url: https://jobs.lever.co/cred }
+  - { name: FamPay, careers_url: https://jobs.lever.co/fampay }
+  - { name: Paytm, careers_url: https://jobs.lever.co/paytm }
+  - { name: Meesho, careers_url: https://jobs.lever.co/meesho }
+  - { name: Zeta, careers_url: https://jobs.lever.co/zeta }

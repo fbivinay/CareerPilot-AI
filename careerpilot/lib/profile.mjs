@@ -1,0 +1,51 @@
+// Candidate profile: the single source of truth for every fact written on the user's behalf.
+// Locally it is read from private/profile.yml; in GitHub Actions/Vercel from the encrypted vault.
+import { existsSync, readFileSync } from 'node:fs';
+import path from 'node:path';
+import { load as loadYaml } from 'js-yaml';
+import { vaultGet } from './vault.mjs';
+
+const PRIVATE = path.resolve(import.meta.dirname ? path.join(import.meta.dirname, '..') : process.cwd(), 'private');
+
+export async function loadProfile(db, env = process.env) {
+  if (env.APP_ENCRYPTION_KEY) {
+    const blob = await vaultGet(db, 'profile', env);
+    if (blob) return JSON.parse(blob.toString('utf8'));
+  }
+  const file = path.join(PRIVATE, 'profile.yml');
+  return existsSync(file) ? loadYaml(readFileSync(file, 'utf8')) : null;
+}
+
+export async function loadResumePdf(db, env = process.env) {
+  if (env.APP_ENCRYPTION_KEY) {
+    const blob = await vaultGet(db, 'resume.pdf', env);
+    if (blob) return blob;
+  }
+  const file = path.join(PRIVATE, 'master-resume.pdf');
+  return existsSync(file) ? readFileSync(file) : null;
+}
+
+// Resume facts for an LLM prompt, without contact details (data class "profile").
+export function profileFacts(p) {
+  const lines = [`Headline: ${p.headline}`];
+  for (const e of p.education ?? []) lines.push(`Education: ${e.degree}, ${e.institution} (${e.dates}, ${e.grade})`);
+  for (const x of p.experience ?? []) lines.push(`Experience: ${x.title} at ${x.company} (${x.dates}): ${x.points.join(' ')}`);
+  for (const pr of p.projects ?? []) lines.push(`Project: ${pr.name} [${pr.stack}]: ${pr.points.join(' ')}`);
+  for (const [k, v] of Object.entries(p.skills ?? {})) lines.push(`Skills (${k.replace(/_/g, ' ')}): ${v.join(', ')}`);
+  for (const a of p.achievements ?? []) lines.push(`Achievement: ${a}`);
+  return lines.join('\n');
+}
+
+// Every token of verified fact text, used to reject generated text that introduces numbers
+// or claims not present in the profile or the job description.
+export function factCorpus(p, extra = '') {
+  return (JSON.stringify(p) + ' ' + extra).toLowerCase();
+}
+
+// Numbers in generated text must appear in the facts (blocks invented metrics, years, CGPA, etc.).
+const numbers = (s) => (String(s).match(/\d[\d,.]*/g) ?? []).map((n) => n.replace(/[.,]+$/, '').replace(/,/g, ''));
+
+export function unverifiedNumbers(text, corpus) {
+  const known = new Set(numbers(corpus));
+  return numbers(text).filter((n) => !known.has(n));
+}

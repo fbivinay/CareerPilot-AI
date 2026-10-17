@@ -1,3 +1,6 @@
+> **CareerPilot AI** — this repository is a personal job-search system built on career-ops (MIT, pinned at v1.37.0).
+> The CareerPilot pipeline, dashboard and setup guide live in [`careerpilot/`](careerpilot/README.md). The upstream career-ops README follows.
+
 <p align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/wordmark-dark.svg"><img src="docs/wordmark-light.svg" alt="career-ops" width="250" height="56"></picture></p>
 
 <p align="center">The open-source AI job search agent.</p>

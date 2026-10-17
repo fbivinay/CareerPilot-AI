@@ -1,0 +1,29 @@
+# Tests and dashboard build. No secrets: tests use in-memory databases and fake Gmail/AI clients.
+name: careerpilot-ci
+
+on:
+  push:
+    paths: ['careerpilot/**', 'providers/**', 'url-key.mjs', '.github/workflows/careerpilot-*.yml']
+  pull_request:
+    paths: ['careerpilot/**', 'providers/**', 'url-key.mjs']
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm install --ignore-scripts --no-audit --no-fund
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+      - run: npm ci --prefix careerpilot --no-audit --no-fund
+      - run: npm test --prefix careerpilot
+      - run: npm run build --prefix careerpilot
+        env:
+          SESSION_SECRET: ci-only-not-a-secret-ci-only-not-a-secret
