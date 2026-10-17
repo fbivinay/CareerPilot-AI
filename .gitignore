@@ -285,3 +285,7 @@ careerpilot/.vercel/
 .env.local
 !careerpilot/package-lock.json
 .playwright-mcp/
+
+# OAuth client secrets downloaded from Google (never commit)
+/private/
+client_secret*.json
