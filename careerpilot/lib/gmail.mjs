@@ -107,9 +107,7 @@ export function parseMessage(m) {
   })(m.payload);
   // Trust only the Authentication-Results header Gmail's own MX added; a sender can forge others.
   const authResults = (m.payload?.headers ?? []).find((h) => h.name.toLowerCase() === 'authentication-results' && /^\s*mx\.google\.com/i.test(h.value))?.value ?? '';
-  const from = headers.from ?? '';
-  const addr = (from.match(/<([^>]+)>/)?.[1] ?? from).trim().toLowerCase();
-  const name = from.includes('<') ? from.slice(0, from.indexOf('<')).replace(/"/g, '').trim() : '';
+  const { addr, name, valid: fromValid } = parseFrom(headers.from);
   return {
     id: m.id,
     threadId: m.threadId,
@@ -121,7 +119,7 @@ export function parseMessage(m) {
     messageId: headers['message-id'] ?? null,
     references: headers.references ?? null,
     listUnsubscribe: headers['list-unsubscribe'] ?? null,
-    authenticated: fromAuthenticated(authResults, addr),
+    authenticated: fromValid && fromAuthenticated(authResults, addr),
     date: m.internalDate ? new Date(Number(m.internalDate)).toISOString() : null,
     snippet: decodeEntities(m.snippet ?? ''),
     // Quoted history (Gmail's gmail_quote div, <blockquote>) is dropped so replies are judged on new text only.
@@ -133,11 +131,29 @@ export function parseMessage(m) {
 
 // The visible From domain is proven only by DMARC alignment, or by a passing DKIM signature whose
 // signing domain is the From domain (or its parent). Plain SPF checks the envelope sender, not From.
+// Every result is bound to the domain of the parsed From address, so a pass for some other domain
+// (e.g. the attacker's own, behind a display name that imitates a company) never counts.
 export function fromAuthenticated(authResults, fromAddr) {
-  if (/\bdmarc=pass\b/i.test(authResults)) return true;
-  const domain = String(fromAddr).split('@')[1] ?? '';
-  return [...authResults.matchAll(/\bdkim=pass\b[^;]*?header\.(?:i=[^@\s;]*@|d=)([a-z0-9.-]+)/gi)]
-    .some(([, d]) => domain && (domain === d.toLowerCase() || domain.endsWith('.' + d.toLowerCase())));
+  const domain = (String(fromAddr).split('@')[1] ?? '').toLowerCase();
+  if (!domain) return false;
+  const dmarc = String(authResults).match(/\bdmarc=pass\b[^;]*?header\.from=([a-z0-9.-]+)/i);
+  if (dmarc && dmarc[1].toLowerCase() === domain) return true;
+  return [...String(authResults).matchAll(/\bdkim=pass\b[^;]*?header\.(?:i=[^@\s;]*@|d=)([a-z0-9.-]+)/gi)]
+    .some(([, d]) => domain === d.toLowerCase() || domain.endsWith('.' + d.toLowerCase()));
+}
+
+// RFC 5322 From parsing that a display name cannot fool: quoted strings and comments are removed
+// before looking for the angle address, and anything with more than one address is rejected.
+export function parseFrom(header) {
+  const raw = String(header ?? '');
+  const bare = raw.replace(/"(?:[^"\\]|\\.)*"/g, '""').replace(/\((?:[^()\\]|\\.)*\)/g, '');
+  const angles = [...bare.matchAll(/<([^<>]*)>/g)];
+  const addr = (angles.length === 1 ? angles[0][1] : angles.length ? '' : bare).trim().toLowerCase();
+  if ((bare.match(/</g) ?? []).length > 1 || !/^[^\s@<>",;]+@[a-z0-9-]+(\.[a-z0-9-]+)*\.[a-z]{2,}$/i.test(addr)) {
+    return { addr: '', name: raw.replace(/["<>]/g, '').trim().slice(0, 120), valid: false };
+  }
+  const name = angles.length ? raw.slice(0, raw.lastIndexOf('<')).replace(/"/g, '').trim() : '';
+  return { addr, name, valid: true };
 }
 
 const encodeHeader = (s) => (/^[\x20-\x7e]*$/.test(s) ? s : `=?UTF-8?B?${Buffer.from(s).toString('base64')}?=`);

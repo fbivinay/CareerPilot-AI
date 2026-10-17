@@ -77,3 +77,21 @@ test('HTML-only replies drop the quoted history', () => {
   assert.match(m.text, /Tuesday/);
   assert.doesNotMatch(m.text, /unsubscribe/);
 });
+
+test('a display name cannot smuggle in a trusted sender address', async () => {
+  const { parseFrom } = await import('../lib/gmail.mjs');
+  assert.deepEqual(parseFrom('Acme Hiring <no-reply@hire.lever.co>'), { addr: 'no-reply@hire.lever.co', name: 'Acme Hiring', valid: true });
+  assert.equal(parseFrom('hr@acme.in').addr, 'hr@acme.in');
+  // The quoted display name contains a fake angle address; the real address is the attacker's.
+  assert.equal(parseFrom('"<hr@acme.com>" <attacker@evil.com>').addr, 'attacker@evil.com');
+  assert.equal(parseFrom('<hr@acme.com> <attacker@evil.com>').valid, false);
+  assert.equal(parseFrom('Acme <hr@acme.com>, Other <x@y.com>').valid, false);
+  const msg = (from, auth) => parseMessage({ id: '1', threadId: 't', payload: { headers: [
+    { name: 'From', value: from }, { name: 'Authentication-Results', value: auth }, { name: 'Subject', value: 'x' }] } });
+  // DMARC passed for evil.com; the message must not be treated as authenticated mail from acme.com.
+  const spoof = msg('"<hr@acme.com>" <attacker@evil.com>', 'mx.google.com; dkim=pass header.i=@evil.com; dmarc=pass (p=NONE) header.from=evil.com');
+  assert.equal(spoof.fromAddr, 'attacker@evil.com');
+  assert.ok(!(spoof.fromAddr.endsWith('acme.com') && spoof.authenticated));
+  assert.equal(msg('HR <hr@acme.com>', 'mx.google.com; dmarc=pass (p=REJECT) header.from=evil.com').authenticated, false);
+  assert.equal(msg('HR <hr@acme.com>', 'mx.google.com; dmarc=pass (p=REJECT) header.from=acme.com').authenticated, true);
+});
