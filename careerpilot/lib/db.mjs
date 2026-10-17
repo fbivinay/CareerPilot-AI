@@ -137,6 +137,8 @@ const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS ai_cache (key TEXT PRIMARY KEY, value TEXT NOT NULL, created_at TEXT NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS vault (name TEXT PRIMARY KEY, ciphertext TEXT NOT NULL, updated_at TEXT NOT NULL)`,
+  // Answer packs are rebuilt from the encrypted profile on demand; never keep plaintext copies.
+  `UPDATE applications SET answers = NULL WHERE answers IS NOT NULL`,
 ];
 
 let shared;

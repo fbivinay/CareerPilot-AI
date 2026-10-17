@@ -4,7 +4,8 @@ import { all, audit, run } from './db.mjs';
 import { aiJson, AiUnavailable } from './ai.mjs';
 import { loadProfile, profileFacts } from './profile.mjs';
 
-export const AI_EXCLUDE_BELOW = 35;
+export { AI_EXCLUDE_BELOW } from './match.mjs';
+import { AI_EXCLUDE_BELOW } from './match.mjs';
 
 export async function aiScoreJobs(db, settings, { limit = 15, env = process.env } = {}) {
   const profile = await loadProfile(db, env);
@@ -18,6 +19,7 @@ export async function aiScoreJobs(db, settings, { limit = 15, env = process.env 
     try {
       r = await aiJson(db, {
         name: 'job-fit',
+        tier: 'fast',
         dataClass: 'profile',
         system: 'You assess fit between a fresher candidate and a job. Judge only from the given text. Reply with JSON: '
           + '{"score": integer 0-100, "summary": one sentence on fit, "matched_skills": [strings from the candidate facts], "gaps": [requirements the candidate facts do not show]}.',

@@ -2,7 +2,10 @@
 // compensation. Every decision carries a human-readable reason.
 
 // Bump when rules change so stored jobs are re-evaluated on the next run.
-export const RULES_VERSION = 2;
+export const RULES_VERSION = 4;
+
+// An AI fit score below this excludes a rule-qualified job (shown with its reason, reversible in the dashboard).
+export const AI_EXCLUDE_BELOW = 25;
 
 export const ROLE_FAMILIES = {
   ai: {
@@ -22,7 +25,7 @@ export const ROLE_FAMILIES = {
   da: {
     label: 'Data Analyst / Product Analyst / Decision Scientist',
     title: [/\bdata analy(st|tics)\b/, /\bproduct analy(st|tics)\b/, /\bdecision scien/, /\bbusiness intelligence\b/, /\bbi (analyst|developer|engineer)\b/,
-      /\banalytics (associate|analyst|intern|trainee)\b/, /\bquantitative analyst\b/, /\binsights analyst\b/],
+      /\banalytics (associate|analyst|intern|trainee)\b/, /\bquantitative analyst\b/, /\binsights analyst\b/, /\bstatistic(ian|al analyst)\b/],
   },
 };
 
@@ -33,12 +36,14 @@ const EXCLUDED_TITLES = [
   [/\bai application developer\b/, 'AI Application Developer roles are excluded'],
   [/\bfull[\s-]?stack\b/, 'Full-stack roles are excluded'],
   [/\b(qa|quality assurance|sdet|tester|testing|test automation)\b/, 'QA/testing roles are excluded'],
+  [/\b(quality control|annotat\w*|label(l)?ing|labeler|data entry|content moderat\w*|transcription|rater|evaluator|language specialist)\b/, 'Data annotation / QC gigs are excluded'],
+  [/\b(technical support|support specialist|helpdesk|help desk)\b/, 'Support roles are excluded'],
   [/\bfront[\s-]?end\b/, 'Frontend roles are excluded'],
   [/\b(android|ios|mobile|flutter|react native)\b/, 'Mobile development roles are excluded'],
   [/\b(sales|account (executive|manager)|business development|marketing manager|recruiter|talent acquisition|hr\b|customer success|support engineer|devrel|developer advocate)\b/, 'Not a target role family'],
 ];
 
-const SENIOR_TITLE = /\b(senior|sr\.?|lead|principal|staff|manager|head|director|architect|vp|vice president|chief|expert|experienced|iii|iv)\b/;
+const SENIOR_TITLE = /\b(senior|sr\.?|lead|leader|leadership|principal|staff|manager|head|director|architect|vp|vice president|chief|expert|experienced|iii|iv)\b/;
 const MID_TITLE = /\b(ii|2|mid[\s-]?level)\b/;
 // Strong entry-level signals override seniority words; 'associate' alone does not ("Senior Associate" is 2-5 years).
 const JUNIOR_TITLE = /\b(junior|jr\.?|intern(ship)?|trainee|graduate|new grad|fresher|entry[\s-]?level|apprentice|campus|early career|0-1|0 ?- ?2)\b/;
@@ -59,66 +64,113 @@ export function roleFamily(title) {
 export function employmentType(title, description = '') {
   const t = lower(title);
   if (INTERN_TITLE.test(t)) return 'internship';
-  const d = lower(description).slice(0, 4000);
-  if (/\b(internship|stipend)\b/.test(d) && !/\bfull[\s-]?time\b/.test(d)) return 'internship';
-  if (/\bcontract(ual)?\b|\bfreelance\b/.test(t)) return 'contract';
+  if (/\b(contract(ual)?|freelance|temporary)\b/.test(t)) return 'contract';
+  const d = lower(description).slice(0, 6000);
+  const internshipBody = /\b(this is an? (paid |unpaid )?internship|internship (duration|period|opportunity|program(me)?)|duration of (the )?internship|\d+[\s-]*months?( long)? internship|stipend)\b/;
+  if (internshipBody.test(d) && !/\bfull[\s-]?time (role|position|employment|opportunity|job)\b/.test(d)) return 'internship';
   return 'full_time';
 }
 
-// Returns {min, max} years or null. Picks the first explicit requirement in the text.
-export function parseExperience(text) {
-  const s = lower(text).replace(/–|—/g, '-');
-  if (/\b(fresher|freshers|no experience required|new grads?|recent graduates?|0\s*years?)\b/.test(s)) {
-    const range = s.match(/\b0\s*(?:-|to)\s*(\d{1,2})\s*\+?\s*(?:years?|yrs?)/);
-    return { min: 0, max: range ? Number(range[1]) : 1 };
+// Experience requirement in years, or null. Each "N years" mention is judged by its surroundings:
+// requirement phrasing ("2+ years of experience", "1-3 years in analytics", "Experience: 2 years")
+// counts; company boilerplate ("for over 30 years", "built over 15 years", "with over 20 years at")
+// does not. The first requirement found wins.
+const YEARS_RE = /\b(\d{1,2}(?:\.\d)?)\s*(\+\s*)?(?:(?:-|to)\s*(\d{1,2}(?:\.\d)?)\s*\+?\s*)?(?:years?|yrs?)\b/g;
+const EXPLICIT_AFTER = /^\s*(of\s+)?([\w/&,.()+-]+\s+){0,6}?(experience|expertise)\b/;
+const GENERIC_AFTER = /^\s*(in|building|developing|designing|working|leading|managing|delivering|operating|shipping|writing|as an?|of (relevant|professional|industry|work|hands-on|practical|proven|post))\b/;
+const EXPERIENCE_BEFORE = /\b(experience|exp)\.?\s*(required|requirement|level|needed)?\s*[:\-]?\s*(of\s*)?(minimum|min\.?|at least)?\s*$/;
+const MINIMUM_BEFORE = /\b(minimum|min\.?|at least|requires?|need|needs)\s*(of\s*)?$/;
+const BOILERPLATE_BEFORE = /(\b(?<!(looking|searching|seeking|hiring) )for\b|\b(with|built|founded|established|since|history|legacy|trusted|serving|been)\b)[^.;:\n]{0,25}$/;
+const FRESHER_RE = /\b(freshers?|no (prior )?experience (is )?required|new grads?|recent graduates?|entry[\s-]level|0\s*(?:-|to)\s*\d+\s*(?:years?|yrs?))\b/;
+const NOT_FRESHER_RE = /\b(not (suitable |open )?for freshers|no freshers|freshers (need not|should not|are not eligible))\b/;
+
+export function parseExperience(text, { requireContext = true } = {}) {
+  const s = lower(text).replace(/[–—]/g, '-');
+  let explicit = null;
+  for (const m of s.matchAll(YEARS_RE)) {
+    const before = s.slice(Math.max(0, m.index - 40), m.index);
+    const after = s.slice(m.index + m[0].length, m.index + m[0].length + 80);
+    const min = Number(m[1]);
+    if (requireContext) {
+      const stated = EXPLICIT_AFTER.test(after) || EXPERIENCE_BEFORE.test(before) || MINIMUM_BEFORE.test(before);
+      const boilerplate = BOILERPLATE_BEFORE.test(before) && !EXPERIENCE_BEFORE.test(before) && !MINIMUM_BEFORE.test(before);
+      const requirement = stated ? !boilerplate || EXPLICIT_AFTER.test(after) && min <= 15 : GENERIC_AFTER.test(after) && !boilerplate && min <= 20;
+      if (!requirement) continue;
+    }
+    const openEnded = m[2] || /\b(minimum|min\.?|at least|over|more than)\s*(of\s*)?$/.test(before);
+    explicit = { min, max: m[3] != null ? Number(m[3]) : openEnded ? null : min };
+    break;
   }
-  const range = s.match(/\b(\d{1,2}(?:\.\d)?)\s*(?:-|to)\s*(\d{1,2}(?:\.\d)?)\s*\+?\s*(?:years?|yrs?)/);
-  if (range) return { min: Number(range[1]), max: Number(range[2]) };
-  const plus = s.match(/\b(?:minimum|min\.?|at least|over)?\s*(\d{1,2}(?:\.\d)?)\s*\+\s*(?:years?|yrs?)/)
-    || s.match(/\b(?:minimum|min\.?|at least)\s*(?:of\s*)?(\d{1,2}(?:\.\d)?)\s*(?:years?|yrs?)/)
-    || s.match(/\b(\d{1,2})\s*(?:years?|yrs?)\s*(?:of\s*)?(?:relevant\s*|professional\s*|industry\s*|hands-on\s*|work\s*)?experience/);
-  if (plus) return { min: Number(plus[1]), max: null };
-  return null;
+  if (FRESHER_RE.test(s) && !NOT_FRESHER_RE.test(s)) return { min: 0, max: explicit?.max ?? (explicit?.min || 1) };
+  return explicit;
 }
 
-const INR_WORD = /(₹|inr|rs\.?|rupees)/;
+const amount = (v) => (String(v).endsWith('k') ? parseFloat(v) * 1000 : Number(v));
+const CUR = '(?:₹|inr|rs\\.?|rupees)';
+const AMT = '(\\d{1,3}(?:\\.\\d+)?k|\\d{4,8})';
+const MONTHLY_RE = new RegExp(`${CUR}\\s*${AMT}(?:\\s*(?:-|to)\\s*${CUR}?\\s*${AMT})?\\s*(?:(?:/|per|a|p\\.?)\\s*(?:month|mo)\\b|(?:pm|monthly)\\b)`);
+const STIPEND_RE = new RegExp(`stipend[^.\\n]{0,40}?${CUR}?\\s*${AMT}(?:\\s*(?:-|to)\\s*${CUR}?\\s*${AMT})?`);
+const ANNUAL_CONTEXT_RE = new RegExp(`(?:ctc|salary|package|compensation)[^.\\n]{0,30}?${CUR}?\\s*(\\d{6,8})(?:\\s*(?:-|to)\\s*${CUR}?\\s*(\\d{6,8}))?`);
+const ANNUAL_UNIT_RE = new RegExp(`${CUR}\\s*(\\d{6,8})(?:\\s*(?:-|to)\\s*${CUR}?\\s*(\\d{6,8}))?\\s*(?:per annum|p\\.? ?a\\b|per year|annually|/\\s*(?:year|annum)|a year)`);
 
-// Normalized compensation: {min, max, period: 'year'|'month', currency, source:'disclosed'}.
-// Only explicit figures are parsed; nothing is inferred.
+// Compensation explicitly stated in a posting, split into annual (CTC) and monthly (stipend) figures.
+// Nothing is inferred; amounts without a pay context or unit are ignored.
 export function parseCompensation(text) {
-  const s = lower(text).replace(/,/g, '').replace(/–|—/g, '-');
-  const lpa = s.match(/(?:₹|inr|rs\.?)?\s*(\d{1,2}(?:\.\d{1,2})?)\s*(?:-|to)?\s*(\d{1,2}(?:\.\d{1,2})?)?\s*(?:lpa|lakhs?\s*(?:per annum|p\.?a\.?|\/\s*annum|per year)|l\.p\.a)/);
-  if (lpa) {
-    const min = Number(lpa[1]) * 1e5;
-    return { min, max: lpa[2] ? Number(lpa[2]) * 1e5 : min, period: 'year', currency: 'INR', source: 'disclosed' };
-  }
-  const monthly = s.match(/(?:stipend|salary|pay|ctc)?[^.\n]{0,40}?(₹|inr|rs\.?)\s*(\d{4,6})(?:\s*(?:-|to)\s*(?:₹|inr|rs\.?)?\s*(\d{4,6}))?\s*(?:\/|per|a|p\.?)\s*(?:month|mo\b|pm\b)/)
-    || s.match(/stipend[^.\n]{0,30}?(₹|inr|rs\.?)?\s*(\d{2,3})k(?:\s*(?:-|to)\s*(\d{2,3})k)?/);
+  const s = lower(text).replace(/(\d),(?=\d)/g, '$1').replace(/[–—]/g, '-').replace(/\s+/g, ' ');
+  const out = {};
+  const range = (a, b, scale = 1) => ({ min: amount(a) * scale, max: amount(b ?? a) * scale });
+
+  const lpa = s.match(/(\d{1,2}(?:\.\d+)?)\s*(?:l|lpa|lakhs?|lacs?)?\s*(?:-|to)\s*(?:₹|inr|rs\.?)?\s*(\d{1,2}(?:\.\d+)?)\s*(?:lpa|l\.p\.a|lakhs?|lacs?)\b/)
+    ?? s.match(/(\d{1,2}(?:\.\d+)?)\s*(?:lpa|l\.p\.a)\b/)
+    ?? s.match(/(?:ctc|salary|package|compensation)[^.\n]{0,25}?(\d{1,2}(?:\.\d+)?)\s*(?:lakhs?|lacs?|l)\b/)
+    ?? s.match(/(\d{1,2}(?:\.\d+)?)\s*(?:lakhs?|lacs?)\s*(?:per annum|p\.? ?a\b|per year|annually|a year)/);
+  if (lpa) out.annual = range(lpa[1], lpa[2], 1e5);
+
+  const monthly = s.match(MONTHLY_RE) ?? s.match(STIPEND_RE);
   if (monthly) {
-    const k = monthly[0].includes('k') && !monthly[0].match(/\d{4}/) ? 1000 : 1;
-    const min = Number(monthly[2]) * k;
-    return { min, max: monthly[3] ? Number(monthly[3]) * k : min, period: 'month', currency: 'INR', source: 'disclosed' };
+    const [a, b] = monthly.slice(1).filter((v) => v != null);
+    const m = range(a, b);
+    if (m.min >= 1000 && m.max <= 500000) out.monthly = m;
   }
-  const annual = s.match(/(₹|inr|rs\.?)\s*(\d{6,8})(?:\s*(?:-|to)\s*(?:₹|inr|rs\.?)?\s*(\d{6,8}))?/);
-  if (annual && INR_WORD.test(annual[0])) {
-    const min = Number(annual[2]);
-    return { min, max: annual[3] ? Number(annual[3]) : min, period: 'year', currency: 'INR', source: 'disclosed' };
+
+  if (!out.annual) {
+    const annual = s.match(ANNUAL_CONTEXT_RE) ?? s.match(ANNUAL_UNIT_RE);
+    if (annual) out.annual = range(annual[1], annual[2]);
   }
-  return null;
+  return out.annual || out.monthly ? out : null;
 }
+
+// The figure that matters for this employment type: stipend for internships, CTC otherwise.
+export function chooseCompensation(parsed, type) {
+  if (!parsed) return null;
+  const [period, value] = type === 'internship'
+    ? (parsed.monthly ? ['month', parsed.monthly] : ['year', parsed.annual])
+    : (parsed.annual ? ['year', parsed.annual] : ['month', parsed.monthly]);
+  return { ...value, period, currency: 'INR', source: 'disclosed' };
+}
+
+const CITY_ALIASES = [[/\bbangalore\b/g, 'bengaluru'], [/\bbombay\b/g, 'mumbai'], [/\bgurgaon\b/g, 'gurugram'], [/\bnew delhi\b/g, 'delhi'],
+  [/\bmadras\b/g, 'chennai'], [/\bcalcutta\b/g, 'kolkata'], [/\bmysore\b/g, 'mysuru'], [/\bmangalore\b/g, 'mangaluru'],
+  [/\btrivandrum\b/g, 'thiruvananthapuram'], [/\bcochin\b/g, 'kochi']];
+export const normalizeCities = (s) => CITY_ALIASES.reduce((acc, [re, to]) => acc.replace(re, to), lower(s));
+
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const hasWord = (hay, words) => words.some((w) => new RegExp(`(^|[^a-z])${escapeRe(w)}([^a-z]|$)`).test(hay));
+const NON_INDIA = /\b(united states|usa|u\.s\.a?|us|uk|united kingdom|england|london|canada|toronto|europe|emea|germany|berlin|france|paris|spain|poland|netherlands|amsterdam|ireland|dublin|singapore|philippines|manila|australia|sydney|new zealand|latam|brazil|mexico|japan|tokyo|china|vietnam|indonesia|malaysia|uae|dubai|israel|switzerland|sweden|portugal|lisbon|argentina|colombia|south africa|nigeria|kenya|egypt|turkey|romania|ukraine|pakistan|bangladesh|sri lanka|nepal|korea|taiwan|hong kong|thailand|saudi|qatar|indiana|indianapolis|california|new york|texas|washington|seattle|san francisco|boston|chicago|atlanta|austin|denver)\b/;
 
 export function locationTier(location, description, settings) {
   const loc = lower(location);
   const { primary, india } = settings.locations;
-  if (primary.some((c) => loc.includes(c))) return { tier: 1, reason: 'Bengaluru' };
-  const remote = /\bremote|work from home|wfh|anywhere\b/.test(loc);
-  const inIndia = india.some((c) => loc.includes(c));
+  if (hasWord(loc, primary)) return { tier: 1, reason: 'Bengaluru' };
+  const remote = /\bremote\b|\bwork from home\b|\bwfh\b|\banywhere\b/.test(loc);
+  const inIndia = hasWord(loc, india);
   if (remote && inIndia) return { tier: 2, reason: 'Remote (India)' };
   if (inIndia) return { tier: 3, reason: 'India (other city)' };
+  if (NON_INDIA.test(loc)) return { tier: null, reason: `Outside India (${location})`, excluded: true };
   if (!loc.trim() || remote) {
     const d = lower(description).slice(0, 6000);
-    if (primary.some((c) => d.includes(c))) return { tier: 1, reason: 'Bengaluru (from description)' };
-    if (/\bindia\b/.test(d)) return { tier: remote ? 2 : 3, reason: 'India (from description)' };
+    if (hasWord(d, primary)) return { tier: 1, reason: 'Bengaluru (from description)', uncertain: true };
+    if (/\bindia\b/.test(d)) return { tier: remote ? 2 : 3, reason: 'India (from description)', uncertain: true };
     return { tier: null, reason: remote ? 'Remote but India eligibility unclear' : 'Location not stated', uncertain: true };
   }
   return { tier: null, reason: `Outside India (${location})`, excluded: true };
@@ -129,14 +181,13 @@ export function normalizeTitle(title) {
 }
 
 export function fingerprint({ company, title, location }) {
-  const city = lower(location).split(/[,;|·/]/)[0].replace(/[^a-z]+/g, '');
+  const city = normalizeCities(location).split(/[,;|·/]/)[0].replace(/[^a-z]+/g, '');
   return [lower(company).replace(/[^a-z0-9]+/g, ''), normalizeTitle(title), city].join('|');
 }
 
 // Full evaluation. Returns fields to persist on the job row.
 export function evaluateJob(job, settings) {
   const reasons = [];
-  const text = `${job.title}\n${job.description ?? ''}`;
   const result = (status, exclusion = null) => ({
     status, exclusion_reason: exclusion, score, confidence, role_category: family,
     employment_type: type, experience_min: exp?.min ?? null, experience_max: exp?.max ?? null,
@@ -148,10 +199,11 @@ export function evaluateJob(job, settings) {
   let confidence = 'high';
   const { family, excluded } = roleFamily(job.title);
   const type = employmentType(job.title, job.description);
-  const exp = parseExperience(job.description ?? '') ?? parseExperience(job.title);
+  // A title such as 'Data Analyst (3+ yrs)' states the requirement directly, so no context is needed there.
+  const exp = parseExperience(job.description ?? '') ?? parseExperience(job.title, { requireContext: false });
   const comp = job.salary?.min || job.salary?.max
-    ? { min: job.salary.min ?? job.salary.max, max: job.salary.max ?? job.salary.min, period: job.salary.period ?? 'year', currency: (job.salary.currency || '').toUpperCase() || null, source: 'disclosed' }
-    : parseCompensation(job.description ?? '');
+    ? { min: job.salary.min ?? job.salary.max, max: job.salary.max ?? job.salary.min, period: job.salary.period ?? 'year', currency: (job.salary.currency || '').toUpperCase() || null, source: 'provider' }
+    : chooseCompensation(parseCompensation(job.description ?? ''), type);
 
   if (!family) return result('excluded', excluded);
   score += 40;

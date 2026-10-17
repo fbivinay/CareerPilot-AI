@@ -2,6 +2,7 @@
 //   ready      – qualified and prepared; waiting for submission (portal needs the candidate)
 //   blocked    – cannot proceed automatically; blocked_reason says why
 //   failed     – an automatic submission attempt failed (e.g. Gmail send error)
+//   expired    – the posting closed before submission (reopens to ready/blocked if the posting returns)
 //   submitted  – we have proof we sent it (Gmail message id / confirmation page)
 //   confirmed  – employer acknowledged receipt (confirmation email)
 //   assessment / interview / offer / rejected / withdrawn
@@ -9,7 +10,7 @@
 import { randomUUID } from 'node:crypto';
 import { all, audit, now, one, run } from './db.mjs';
 
-export const RANK = { ready: 0, blocked: 0, failed: 0, submitted: 1, confirmed: 2, assessment: 3, interview: 4, offer: 5 };
+export const RANK = { ready: 0, blocked: 0, failed: 0, expired: 0, submitted: 1, confirmed: 2, assessment: 3, interview: 4, offer: 5 };
 export const TERMINAL = new Set(['rejected', 'withdrawn']);
 export const APPLIED = ['submitted', 'confirmed', 'assessment', 'interview', 'offer', 'rejected'];
 
@@ -21,7 +22,9 @@ export function canTransition(from, to) {
   if (from === 'withdrawn' || from === 'rejected') return false;
   if (from === 'offer') return to === 'rejected'; // offer rescinded; declining is 'withdrawn' above
   if (to === 'rejected') return true;
-  if (to === 'blocked' || to === 'ready' || to === 'failed') return RANK[from] === 0;
+  // A bounce proves an emailed application never arrived, so 'submitted' can still fall back to 'failed'.
+  if (to === 'failed') return RANK[from] === 0 || from === 'submitted';
+  if (to === 'blocked' || to === 'ready' || to === 'expired') return RANK[from] === 0;
   return (RANK[to] ?? -1) > (RANK[from] ?? -1);
 }
 

@@ -31,6 +31,7 @@ export const DEFAULT_SETTINGS = {
     emailApplicationsPerDay: 10,
     perCompanyCooldownDays: 21,
     maxContactsPerCompany: 2,
+    maxApplicationsPerAddress: 2,   // email applications to one employer address per cooldown window
     followUpAfterDays: 7,
     maxFollowUps: 1,
     sendWindow: { tz: 'Asia/Kolkata', days: [1, 2, 3, 4, 5], startHour: 9.5, endHour: 18.5 },

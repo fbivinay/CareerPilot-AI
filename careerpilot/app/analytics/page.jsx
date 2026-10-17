@@ -36,7 +36,7 @@ export default async function Analytics() {
             { label: 'Prepared', value: n(f.prepared), to: '/applications' },
             { label: 'Applied', value: n(f.applied), to: '/applications?status=applied' },
             { label: 'Heard back', value: n(f.responded), to: '/applications?status=responded', note: pct(n(f.responded), n(f.applied)) },
-            { label: 'Interviewed', value: n(f.interviewed), to: '/applications?status=interview', note: pct(n(f.interviewed), n(f.applied)) },
+            { label: 'Interviewed', value: n(f.interviewed), to: '/applications?status=interviewed', note: pct(n(f.interviewed), n(f.applied)) },
             { label: 'Offers', value: n(f.offers), to: '/applications?status=offer' },
           ]} />
         </Card>
@@ -44,7 +44,7 @@ export default async function Analytics() {
           <div className="grid grid-cols-2 gap-4">
             {[
               ['Response rate', pct(n(f.responded), n(f.applied)), '/applications?status=responded'],
-              ['Interview rate', pct(n(f.interviewed), n(f.applied)), '/applications?status=interview'],
+              ['Interview rate', pct(n(f.interviewed), n(f.applied)), '/applications?status=interviewed'],
               ['Offer rate', pct(n(f.offers), n(f.applied)), '/applications?status=offer'],
               ['Outreach reply rate', pct(n(a.outreach.replied), n(a.outreach.sent)), '/outreach?replied=1'],
             ].map(([l, v, to]) => (

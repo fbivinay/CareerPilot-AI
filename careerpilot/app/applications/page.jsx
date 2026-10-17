@@ -5,7 +5,7 @@ export const dynamic = 'force-dynamic';
 
 const STATUS_OPTIONS = [['', 'All'], ['applied', 'Applied (any outcome)'], ['pending', 'Needs you (ready/blocked/failed)'], ['ready', 'Ready to apply'],
   ['blocked', 'Blocked'], ['failed', 'Failed'], ['submitted', 'Submitted'], ['confirmed', 'Confirmed'], ['responded', 'Heard back'],
-  ['assessment', 'Assessment'], ['interview', 'Interview'], ['offer', 'Offer'], ['rejected', 'Rejected'], ['withdrawn', 'Withdrawn']];
+  ['assessment', 'Assessment'], ['interview', 'Interview'], ['interviewed', 'Ever interviewed'], ['expired', 'Posting closed'], ['offer', 'Offer'], ['rejected', 'Rejected'], ['withdrawn', 'Withdrawn']];
 
 export default async function Applications({ searchParams }) {
   const params = await searchParams;

@@ -101,7 +101,8 @@ export function boardFromPostingUrl(url) {
   return null;
 }
 
-const prettyCompany = (slug) => String(slug).replace(/[-_]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+// ATS slugs like "brillio-2" or "appen_2" carry a numeric suffix that is not part of the name.
+const prettyCompany = (slug) => String(slug).replace(/[-_]\d+$/, '').replace(/[-_]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 
 export async function sweepAggregator(db, settings, { fetchImpl = fetch, minHours = 20 } = {}) {
   const last = await kvGet(db, 'aggregator:last_sweep');

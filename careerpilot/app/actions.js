@@ -1,5 +1,4 @@
 'use server';
-import { scryptSync, timingSafeEqual } from 'node:crypto';
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
@@ -9,6 +8,7 @@ import { createApplication, transition } from '@/lib/applications.mjs';
 import { applyEvaluation } from '@/lib/evaluate.mjs';
 import { DEFAULT_SETTINGS, getSettings, saveSettings } from '@/lib/settings.mjs';
 import { addManualContact } from '@/lib/outreach.mjs';
+import { verifyPassword } from '@/lib/password.mjs';
 
 const readOnly = () => process.env.DASHBOARD_READONLY === '1';
 
@@ -17,15 +17,7 @@ async function requireSession({ write = true } = {}) {
   if (write && readOnly()) throw new Error('This dashboard is deployed read-only.');
 }
 
-function checkPassword(password) {
-  const stored = process.env.DASHBOARD_PASSWORD_HASH;
-  if (!stored || !password) return false;
-  const [scheme, salt, hash] = stored.split('$');
-  if (scheme !== 'scrypt') return false;
-  const expected = Buffer.from(hash, 'base64');
-  const actual = scryptSync(password, Buffer.from(salt, 'base64'), expected.length);
-  return timingSafeEqual(expected, actual);
-}
+const checkPassword = (password) => verifyPassword(password, process.env.DASHBOARD_PASSWORD_HASH);
 
 export async function login(_prev, formData) {
   const ok = checkPassword(String(formData.get('password') ?? ''));

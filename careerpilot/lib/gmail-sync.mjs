@@ -7,6 +7,7 @@ import { createApplication, transition } from './applications.mjs';
 import { classifyEmail, extractDetails, parseJobAlert, platformSender } from './email-intel.mjs';
 import { upsertJob } from './jobs.mjs';
 import { domainMatchesCompany, upsertContact } from './contacts.mjs';
+import { recordBounce } from './outreach.mjs';
 import { log } from './log.mjs';
 
 const CATEGORY_STATUS = {
@@ -59,6 +60,7 @@ async function aiClassify(db, msg, settings) {
   try {
     return await aiJson(db, {
       name: 'email-classify',
+      tier: 'fast',
       dataClass: 'email',
       system: 'You classify job-search emails. Reply with JSON only: {"category": one of "application_confirmation","assessment","interview","rejection","offer","recruiter_reply","job_alert","other", "confidence": number 0-1, "next_step": short string or ""}. Use only what the email says.',
       user: `From: ${msg.fromName} <${msg.fromAddr}>\nSubject: ${msg.subject}\n\n${(msg.text ?? '').slice(0, 4000)}`,
@@ -86,6 +88,13 @@ export async function processMessage(db, msg, settings, { ourThreadIds }) {
       if (r?.created) result.jobs++;
     }
     if (!parsed.length) log.warn('job alert had no parseable job links', { platform: cls.platform });
+  } else if (cls.category === 'bounce') {
+    const sent = await recordBounce(db, { threadId: msg.threadId, text: msg.text, emailId: msg.id });
+    if (sent?.job_id) {
+      const app = await one(db, 'SELECT id FROM applications WHERE job_id = ?', [sent.job_id]);
+      link = { app_id: app?.id ?? null, job_id: sent.job_id, how: 'bounce' };
+    }
+    result.review = !sent; // a bounce we cannot match to anything we sent needs a look
   } else {
     link = await linkEmail(db, msg);
     if ((cls.category === 'other' || cls.category === 'ats_update') && (link?.app_id || cls.category === 'ats_update')) {

@@ -5,12 +5,13 @@
 //   node scripts/setup.mjs profile     encrypt private/profile.yml + master resume into the database vault
 //   node scripts/setup.mjs github      copy the pipeline's secrets from .env to GitHub Actions secrets (gh CLI)
 //   node scripts/setup.mjs check       show which settings are present (names only)
-import { randomBytes, scryptSync } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
 import { load as loadYaml } from 'js-yaml';
+import { hashPassword } from '../lib/password.mjs';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const ENV_FILE = path.join(ROOT, '.env');
@@ -21,12 +22,18 @@ const ACTIONS_SECRETS = ['TURSO_DATABASE_URL', 'TURSO_AUTH_TOKEN', 'APP_ENCRYPTI
   'GMAIL_REFRESH_TOKEN', 'GMAIL_ADDRESS', 'GROQ_API_KEY', 'GEMINI_API_KEY', 'OPENROUTER_API_KEY'];
 const ALL = [...ACTIONS_SECRETS, 'SESSION_SECRET', 'DASHBOARD_PASSWORD_HASH'];
 
+// Line-based so values are written verbatim (no regex replacement patterns).
 function setEnv(name, value) {
-  let env = existsSync(ENV_FILE) ? readFileSync(ENV_FILE, 'utf8') : '';
-  const line = `${name}=${value}`;
-  env = new RegExp(`^${name}=.*$`, 'm').test(env) ? env.replace(new RegExp(`^${name}=.*$`, 'm'), line) : `${env.replace(/\n?$/, '\n')}${line}\n`;
-  writeFileSync(ENV_FILE, env);
+  const lines = (existsSync(ENV_FILE) ? readFileSync(ENV_FILE, 'utf8') : '').split(/\r?\n/).filter(Boolean);
+  const i = lines.findIndex((l) => l.startsWith(`${name}=`));
+  if (i >= 0) lines[i] = `${name}=${value}`; else lines.push(`${name}=${value}`);
+  writeFileSync(ENV_FILE, lines.join('\n') + '\n');
   process.env[name] = value;
+}
+
+function repoSlug() {
+  const url = execFileSync('git', ['remote', 'get-url', 'origin'], { encoding: 'utf8' }).trim();
+  return url.match(/github\.com[/:]([^/]+\/[^/.]+)/)?.[1];
 }
 
 function hiddenPrompt(question) {
@@ -37,10 +44,6 @@ function hiddenPrompt(question) {
   });
 }
 
-export function hashPassword(password) {
-  const salt = randomBytes(16);
-  return `scrypt$${salt.toString('base64')}$${scryptSync(password, salt, 32).toString('base64')}`;
-}
 
 const commands = {
   keys() {
@@ -73,9 +76,12 @@ const commands = {
     if (unknown.length) console.log(`Unanswered (applications needing them stay Blocked): ${unknown.join(', ')}`);
   },
   github() {
+    const repo = repoSlug();
+    if (!repo) throw new Error('Could not read the GitHub repository from `git remote get-url origin`.');
+    console.log(`Setting Actions secrets on ${repo}`);
     for (const name of ACTIONS_SECRETS) {
       if (!process.env[name]) { console.log(`skip ${name} (not set)`); continue; }
-      execFileSync('gh', ['secret', 'set', name], { input: process.env[name], stdio: ['pipe', 'ignore', 'inherit'] });
+      execFileSync('gh', ['secret', 'set', name, '--repo', repo], { input: process.env[name], stdio: ['pipe', 'ignore', 'inherit'] });
       console.log(`set GitHub Actions secret ${name}`);
     }
   },

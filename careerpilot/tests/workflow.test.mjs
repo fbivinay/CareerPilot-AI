@@ -10,6 +10,8 @@ import { buildMime } from '../lib/gmail.mjs';
 import { templateEmail } from '../lib/compose.mjs';
 import { unverifiedNumbers, factCorpus } from '../lib/profile.mjs';
 import { vaultPut } from '../lib/vault.mjs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { upsertJob } from '../lib/jobs.mjs';
 import { DEFAULT_SETTINGS } from '../lib/settings.mjs';
 
@@ -127,7 +129,7 @@ test('outreach policy gate', async () => {
   const job = { id: 'j', status: 'qualified', score: 90, confidence: 'low', company: 'Acme' };
   const contact = { id: 'c', opted_out: 0, domain_match: 1, source_type: 'jd' };
   assert.equal(await blockReason(db, { job, contact, kind: 'initial' }, settings), null);
-  assert.equal(await blockReason(db, { job, contact: { ...contact, opted_out: 1 }, kind: 'initial' }, settings), 'contact opted out');
+  assert.equal(await blockReason(db, { job, contact: { ...contact, opted_out: 1 }, kind: 'initial' }, settings), 'contact opted out or address bounced');
   assert.match(await blockReason(db, { job, contact: { ...contact, domain_match: 0 }, kind: 'initial' }, settings), /domain does not match/);
   assert.match(await blockReason(db, { job, contact: { ...contact, domain_match: 0 }, kind: 'application' }, settings), /domain does not match/);
   assert.match(await blockReason(db, { job: { ...job, score: 50 }, contact, kind: 'initial' }, settings), /below auto-action/);
@@ -188,4 +190,58 @@ test('login redirect target is restricted to this origin', async () => {
   assert.equal(safeNext('//evil.com'), '/');
   assert.equal(safeNext(String.raw`/\evil.com`), '/');
   assert.equal(safeNext('https://evil.com/x'), '/');
+});
+
+test('dry run previews emails without sending or recording anything', async () => {
+  const db = await openDb({ url: ':memory:' });
+  let sent = 0;
+  const gmail = { send: async () => { sent++; return { id: 'g', threadId: 't' }; } };
+  await upsertJob(db, { url: 'https://jobs.lever.co/acme/8', title: 'Junior Data Scientist', company: 'Acme', location: 'Bengaluru',
+    description: 'Freshers welcome. Send your resume to careers@acme.in' }, { source: 'lever', settings });
+  const env = { APP_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString('base64'), CAREERPILOT_DRY_RUN: '1',
+    CAREERPILOT_PREVIEW_FILE: path.join(tmpdir(), `cp-preview-${process.pid}.md`) };
+  await vaultPut(db, 'profile', JSON.stringify(profile), env);
+  await vaultPut(db, 'resume.pdf', Buffer.from('%PDF-1.7 test'), env);
+  const stats = await runOutreach(db, gmail, settings, { env });
+  assert.equal(stats.previews, 1);
+  assert.equal(sent, 0);
+  assert.equal((await all(db, 'SELECT * FROM outreach')).length, 0);
+  assert.equal((await all(db, 'SELECT * FROM applications')).length, 0);
+});
+
+test('a bounce marks the email application failed and blocks the address', async () => {
+  const db = await openDb({ url: ':memory:' });
+  const gmail = { send: async () => ({ id: 'g1', threadId: 'thr1' }) };
+  const { id } = await upsertJob(db, { url: 'https://jobs.lever.co/acme/9', title: 'Junior Data Scientist', company: 'Acme', location: 'Bengaluru',
+    description: 'Freshers welcome. Send your resume to careers@acme.in' }, { source: 'lever', settings });
+  await runWithProfile(db, gmail);
+  assert.equal((await one(db, 'SELECT status FROM applications WHERE job_id = ?', [id])).status, 'submitted');
+  const r = await processMessage(db, { id: 'b1', threadId: 'thr1', fromAddr: 'mailer-daemon@googlemail.com', fromName: 'Mail Delivery Subsystem',
+    subject: 'Delivery Status Notification (Failure)', text: "Address not found. Your message wasn't delivered to careers@acme.in", snippet: '',
+    date: '2026-10-20T10:00:00.000Z', html: '' }, settings, { ourThreadIds: new Set(['thr1']) });
+  assert.equal(r.category, 'bounce');
+  assert.equal((await one(db, 'SELECT status FROM applications WHERE job_id = ?', [id])).status, 'failed');
+  assert.equal((await one(db, `SELECT status FROM outreach WHERE gmail_thread_id = 'thr1'`)).status, 'bounced');
+  assert.equal((await one(db, `SELECT opted_out FROM contacts WHERE email = 'careers@acme.in'`)).opted_out, 1);
+});
+
+test('a failed send can be retried, but not endlessly', async () => {
+  const db = await openDb({ url: ':memory:' });
+  let calls = 0;
+  const gmail = { send: async () => { calls++; throw new Error('Gmail API 500'); } };
+  await upsertJob(db, { url: 'https://jobs.lever.co/acme/10', title: 'Junior Data Scientist', company: 'Acme', location: 'Bengaluru',
+    description: 'Freshers welcome. Send your resume to careers@acme.in' }, { source: 'lever', settings });
+  for (let i = 0; i < 5; i++) await runWithProfile(db, gmail);
+  assert.equal(calls, 3);
+  assert.equal((await one(db, `SELECT status FROM applications`)).status, 'failed');
+});
+
+test('dashboard password hashes survive .env loading (no $ expansion) and verify', async () => {
+  const { hashPassword, verifyPassword } = await import('../lib/password.mjs');
+  const hash = hashPassword('correct horse battery');
+  assert.ok(!hash.includes('$'));
+  assert.ok(verifyPassword('correct horse battery', hash));
+  assert.ok(!verifyPassword('wrong password here', hash));
+  assert.ok(!verifyPassword('correct horse battery', 'scrypt$old$format'));
+  assert.ok(!verifyPassword('x', undefined));
 });

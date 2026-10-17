@@ -3,6 +3,8 @@
 import { all, getDb, kvGet, one } from './db.mjs';
 import { APPLIED } from './applications.mjs';
 import { providerHealth } from './ai.mjs';
+import { loadProfile } from './profile.mjs';
+import { answerPack } from './prepare.mjs';
 
 export const PAGE_SIZE = 50;
 
@@ -22,8 +24,9 @@ function jobFilters(f) {
   const where = [];
   const args = [];
   const status = f.status ?? 'qualified';
-  if (status === 'active') where.push(`j.status IN ('qualified','excluded','new')`);
-  else if (status !== 'all') { where.push('j.status = ?'); args.push(status); }
+  // "all" means every tracked job with duplicates merged, matching the Overview count.
+  if (status === 'all') where.push(`j.status != 'duplicate'`);
+  else { where.push('j.status = ?'); args.push(status); }
   if (f.q) { where.push('(lower(j.title) LIKE ? OR lower(j.company) LIKE ? OR lower(j.location) LIKE ?)'); const q = `%${f.q.toLowerCase()}%`; args.push(q, q, q); }
   if (f.category) { where.push('j.role_category = ?'); args.push(f.category); }
   if (f.confidence) { where.push('j.confidence = ?'); args.push(f.confidence); }
@@ -32,7 +35,7 @@ function jobFilters(f) {
   if (f.company) { where.push('j.company = ?'); args.push(f.company); }
   if (f.location === 'bengaluru') where.push(`(lower(j.location) LIKE '%bengaluru%' OR lower(j.location) LIKE '%bangalore%')`);
   if (f.location === 'remote') where.push(`lower(j.location) LIKE '%remote%'`);
-  if (f.comp === 'disclosed') where.push(`j.comp_source = 'disclosed'`);
+  if (f.comp === 'disclosed') where.push('j.comp_source IS NOT NULL');
   if (f.comp === 'undisclosed') where.push('j.comp_source IS NULL');
   if (f.since) { where.push('j.first_seen >= ?'); args.push(new Date(Date.now() - Number(f.since) * 864e5).toISOString()); }
   return { where: where.length ? where.join(' AND ') : '1=1', args };
@@ -71,7 +74,10 @@ export async function getJob(id) {
 function appFilters(f) {
   const where = [];
   const args = [];
-  if (f.status) {
+  if (f.status === 'interviewed') {
+    // Ever reached an interview, including ones later rejected or turned into offers.
+    where.push(`(a.status IN ('interview','offer') OR a.id IN (SELECT entity_id FROM events WHERE entity = 'application' AND to_status = 'interview'))`);
+  } else if (f.status) {
     const set = APP_GROUPS[f.status] ?? [f.status];
     where.push(`a.status IN (${placeholders(set)})`);
     args.push(...set);
@@ -101,15 +107,18 @@ export async function listApplications(f) {
 
 export async function getApplication(id) {
   const db = await getDb();
-  const app = await one(db, `SELECT a.*, j.title, j.company, j.url, j.location, j.id job_id, j.score, j.description FROM applications a
+  const app = await one(db, `SELECT a.*, j.title, j.company, j.url, j.location, j.id job_id, j.score, j.description, j.employment_type FROM applications a
     JOIN jobs j ON j.id = a.job_id WHERE a.id = ?`, [id]);
   if (!app) return null;
-  const [emails, outreach, events] = await Promise.all([
+  const [emails, outreach, events, profile] = await Promise.all([
     all(db, 'SELECT * FROM emails WHERE application_id = ? OR (thread_id IS NOT NULL AND thread_id = ?) ORDER BY received_at DESC', [id, app.gmail_thread_id]),
     all(db, `SELECT o.*, c.email, c.name FROM outreach o JOIN contacts c ON c.id = o.contact_id WHERE o.job_id = ? ORDER BY o.created_at DESC`, [app.job_id]),
     all(db, `SELECT * FROM events WHERE entity = 'application' AND entity_id = ? ORDER BY id DESC`, [id]),
+    loadProfile(db).catch(() => null),
   ]);
-  return { app, emails, outreach, events };
+  // Built on demand from the encrypted profile; absent where the decryption key is not configured.
+  const pack = profile ? answerPack(profile, app) : null;
+  return { app, emails, outreach, events, pack };
 }
 
 export async function listOutreach(f) {

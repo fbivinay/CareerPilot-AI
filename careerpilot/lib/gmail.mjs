@@ -124,7 +124,8 @@ export function parseMessage(m) {
     authenticated: fromAuthenticated(authResults, addr),
     date: m.internalDate ? new Date(Number(m.internalDate)).toISOString() : null,
     snippet: decodeEntities(m.snippet ?? ''),
-    text: text || htmlToPlain(html),
+    // Quoted history (Gmail's gmail_quote div, <blockquote>) is dropped so replies are judged on new text only.
+    text: text || htmlToPlain(html.replace(/<blockquote[\s\S]*?<\/blockquote>/gi, ' ').replace(/<div[^>]+class="[^"]*gmail_quote[\s\S]*$/i, ' ')),
     html,
     attachments,
   };

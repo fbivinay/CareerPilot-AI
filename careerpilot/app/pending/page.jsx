@@ -6,14 +6,16 @@ export const dynamic = 'force-dynamic';
 
 export default async function Pending() {
   const db = await getDb();
-  const [apps, review, unknown, upcoming, s] = await Promise.all([
+  const [apps, appCount, review, unknown, upcoming, s] = await Promise.all([
     all(db, `SELECT a.id, a.status, a.method, a.blocked_reason, j.title, j.company, j.url, j.score FROM applications a JOIN jobs j ON j.id = a.job_id
-      WHERE a.status IN ('ready','blocked','failed') AND j.status != 'expired' ORDER BY a.status = 'failed' DESC, j.score DESC LIMIT 100`),
+      WHERE a.status IN ('ready','blocked','failed') ORDER BY a.status = 'failed' DESC, j.score DESC LIMIT 100`),
+    all(db, `SELECT count(*) n FROM applications WHERE status IN ('ready','blocked','failed')`),
     all(db, `SELECT * FROM emails WHERE needs_review = 1 AND reviewed = 0 ORDER BY received_at DESC LIMIT 50`),
     all(db, `SELECT o.id, o.subject, c.email FROM outreach o JOIN contacts c ON c.id = o.contact_id WHERE o.status = 'unknown'`),
     all(db, `SELECT * FROM emails WHERE category IN ('interview','assessment','offer') AND received_at >= ? ORDER BY received_at DESC`, [new Date(Date.now() - 14 * 864e5).toISOString()]),
     systemStatus(),
   ]);
+  const appTotal = Number(appCount[0].n);
   const problems = [
     s.gmail && !s.gmail.ok && ['Gmail authorization', s.gmail.error],
     ...Object.entries(s.runs).filter(([, r]) => r && !r.ok).map(([n, r]) => [`Stage “${n}” failed`, r.error]),
@@ -49,7 +51,9 @@ export default async function Pending() {
           ) : <p className="text-sm text-ink-3">All clear.</p>}
         </Card>
       </div>
-      <h2 className="mb-2 mt-6 text-sm font-semibold text-ink-2">Applications waiting for you ({apps.length})</h2>
+      <h2 className="mb-2 mt-6 text-sm font-semibold text-ink-2">
+        Applications waiting for you ({appTotal}){appTotal > apps.length && <> · showing the top {apps.length}, <A to="/applications?status=pending">see all</A></>}
+      </h2>
       <Table head={['Role', 'Company', 'Status', 'What is needed', '']} empty="Nothing to submit right now.">
         {apps.map((a) => (
           <tr key={a.id} className="hover:bg-surface-2">

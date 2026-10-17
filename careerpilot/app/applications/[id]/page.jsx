@@ -10,9 +10,8 @@ const NEXT = ['submitted', 'confirmed', 'assessment', 'interview', 'offer', 'rej
 export default async function ApplicationPage({ params }) {
   const data = await getApplication((await params).id);
   if (!data) notFound();
-  const { app, emails, outreach, events } = data;
+  const { app, emails, outreach, events, pack } = data;
   const evidence = JSON.parse(app.evidence ?? '[]');
-  const answers = JSON.parse(app.answers ?? '{}');
   return (
     <>
       <PageHeader title={`${app.title}`} sub={<><A to={`/companies/${encodeURIComponent(app.company)}`}>{app.company}</A> · <A to={`/jobs/${app.job_id}`}>job details</A></>}>
@@ -82,9 +81,10 @@ export default async function ApplicationPage({ params }) {
               ['Submitted', fmtDateTime(app.submitted_at)], ['Confirmed', fmtDateTime(app.confirmed_at)], ['Updated', fmtDateTime(app.updated_at)],
             ]} />
           </Card>
-          {Object.keys(answers).length > 0 && (
+          {pack && (
             <Card title="Answer pack (verified facts only)">
-              <KV items={Object.entries(answers).map(([k, v]) => [k.replace(/_/g, ' '), String(v)])} />
+              {pack.missing.length > 0 && <p className="mb-2 text-sm text-warn">Not provided yet: {pack.missing.join(', ')}</p>}
+              <KV items={Object.entries(pack.fields).filter(([, v]) => v != null).map(([k, v]) => [k.replace(/_/g, ' '), String(v)])} />
             </Card>
           )}
           <Card title="Audit trail"><Timeline events={events} /></Card>

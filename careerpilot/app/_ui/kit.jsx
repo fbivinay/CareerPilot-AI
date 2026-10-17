@@ -15,7 +15,7 @@ export const fmtNum = (n) => Number(n ?? 0).toLocaleString('en-IN');
 export const pct = (a, b) => (b ? `${Math.round((100 * a) / b)}%` : '—');
 
 export function fmtComp(j) {
-  if (j.comp_source !== 'disclosed' || j.comp_max == null) return null;
+  if (!j.comp_source || j.comp_max == null) return null;
   if (j.comp_currency && j.comp_currency !== 'INR') return `${j.comp_currency} ${fmtNum(j.comp_min)}–${fmtNum(j.comp_max)}`;
   if (j.comp_period === 'month') return `₹${fmtNum(j.comp_min)}${j.comp_max !== j.comp_min ? '–' + fmtNum(j.comp_max) : ''}/mo`;
   const l = (v) => (v / 1e5).toFixed(v % 1e5 ? 1 : 0);

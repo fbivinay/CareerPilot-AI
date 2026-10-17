@@ -79,18 +79,34 @@ export async function upsertJob(db, job, { source, ats = null, boardId = null, s
 }
 
 // After a board scan that succeeded, anything from that board not seen in it has closed.
-// boardId null = board-less aggregator rows after a complete aggregator sweep.
+// boardId null = aggregator rows after a complete aggregator sweep, for postings whose employer board
+// cannot vouch for them (no board, or a board that has never been scanned successfully).
+// Applications still waiting on the candidate move to 'expired' with the posting.
 export async function expireMissing(db, boardId, scanStartedAt) {
   const gone = boardId == null
-    ? await all(db, `SELECT id, status FROM jobs WHERE board_id IS NULL AND source = 'aggregator' AND last_seen < ?
-        AND status NOT IN ('expired', 'duplicate')`, [scanStartedAt])
+    ? await all(db, `SELECT id, status FROM jobs WHERE source = 'aggregator' AND last_seen < ? AND status NOT IN ('expired', 'duplicate')
+        AND (board_id IS NULL OR board_id IN (SELECT id FROM boards WHERE last_ok IS NULL))`, [scanStartedAt])
     : await all(db, `SELECT id, status FROM jobs WHERE board_id = ? AND last_seen < ? AND status NOT IN ('expired', 'duplicate')`,
       [boardId, scanStartedAt]);
+  if (!gone.length) return 0;
   const ts = now();
-  await batchChunks(db, gone.flatMap((j) => [
-    { sql: `UPDATE jobs SET status = 'expired', expired_at = ? WHERE id = ?`, args: [ts, j.id] },
-    auditStmt('job', j.id, 'expired', { from: j.status, to: 'expired', detail: { boardId } }),
-  ]));
+  const apps = [];
+  for (let i = 0; i < gone.length; i += 300) {
+    const ids = gone.slice(i, i + 300).map((j) => j.id);
+    apps.push(...await all(db, `SELECT id, status FROM applications WHERE status IN ('ready', 'blocked', 'failed')
+      AND job_id IN (${ids.map(() => '?').join(',')})`, ids));
+  }
+  await batchChunks(db, [
+    ...gone.flatMap((j) => [
+      { sql: `UPDATE jobs SET status = 'expired', expired_at = ? WHERE id = ?`, args: [ts, j.id] },
+      auditStmt('job', j.id, 'expired', { from: j.status, to: 'expired', detail: { boardId } }),
+    ]),
+    ...apps.flatMap((a) => [
+      { sql: `UPDATE applications SET status = 'expired', blocked_reason = 'Posting closed before submission', updated_at = ? WHERE id = ? AND status = ?`,
+        args: [ts, a.id, a.status] },
+      auditStmt('application', a.id, 'status', { from: a.status, to: 'expired', detail: { reason: 'posting closed' } }),
+    ]),
+  ]);
   return gone.length;
 }
 
