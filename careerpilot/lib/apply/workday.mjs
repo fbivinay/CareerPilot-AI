@@ -1,0 +1,816 @@
+// Workday candidate portals (<tenant>.wdN.myworkdayjobs.com): signs in to, or creates, the candidate's
+// account for that employer, fills the application from the verified profile and submits it.
+// Never fills a field it does not recognise (Workday forms carry honeypot inputs), never solves a
+// CAPTCHA, never invents an answer: anything it cannot answer stops the application as 'blocked'.
+import { randomBytes } from 'node:crypto';
+import { now } from '../db.mjs';
+import { vaultGet, vaultPut } from '../vault.mjs';
+
+const A = (id) => `[data-automation-id="${id}"]`;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const debug = process.env.CP_DEBUG ? (...a) => console.log('[workday]', ...a) : () => {};
+
+// Only genuine Workday candidate portals: job URLs come from scraped and emailed data, and a tenant's
+// saved password must never be typed into a look-alike host.
+export function portalHost(url) {
+  const u = new URL(url);
+  const host = u.hostname.toLowerCase().replace(/\.$/, '');
+  if (u.protocol !== 'https:' || !/^[a-z0-9-]+\.wd\d+\.myworkdayjobs\.com$/.test(host)) throw new Error(`not a Workday candidate portal: ${host}`);
+  return host;
+}
+const onPortal = (page, host) => new URL(page.url()).hostname.toLowerCase() === host;
+
+// One account per employer portal, encrypted in the vault. Saved before the account is created, so a
+// crash after Workday accepted it never loses the password.
+const accountKey = (host) => `workday:${host}`;
+async function loadAccount(db, host) {
+  const blob = await vaultGet(db, accountKey(host));
+  return blob ? JSON.parse(blob.toString('utf8')) : null;
+}
+const saveAccount = (db, host, account) => vaultPut(db, accountKey(host), JSON.stringify(account));
+
+// Workday's usual rules: upper, lower, digit, special, 8+ characters.
+const newPassword = () => `Aa1!${randomBytes(12).toString('base64url')}`;
+
+export async function captchaPresent(page) {
+  return (await page.locator('iframe[src*="captcha" i], iframe[title*="captcha" i], [data-automation-id="captcha"], [data-automation-id*="Captcha" i]:not([data-automation-id="noCaptchaWrapper"])').count()) > 0;
+}
+
+async function activeStep(page) {
+  const t = await page.locator(A('progressBarActiveStep')).first().innerText().catch(() => '');
+  return t.replace(/^current step \d+ of \d+\s*/i, '').trim();
+}
+
+// Every visible form control on the current step: what it asks, how, and whether it is required.
+// ($$eval is Playwright's in-page query: it runs this function in the page, it is not a string eval.)
+export async function formFields(page) {
+  return page.$$eval('input, textarea, button[aria-haspopup="listbox"], [role="combobox"], [data-automation-id="multiSelectContainer"]', (nodes) => nodes
+    .filter((n) => n.offsetParent !== null && n.getAttribute('type') !== 'hidden' && n.getAttribute('data-automation-id') !== 'beecatcher')
+    .map((n) => {
+      const group = n.closest('[data-automation-id^="formField-"], fieldset, [role="group"]');
+      const label = (group?.querySelector('label, legend')?.innerText || n.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim();
+      return { id: n.getAttribute('data-automation-id'), tag: n.tagName.toLowerCase(), type: n.getAttribute('type'),
+        label: label.slice(0, 120), required: /\*$/.test(label) || n.getAttribute('aria-required') === 'true', value: n.value ?? null,
+        group: group?.getAttribute('data-automation-id') ?? null };
+    }));
+}
+
+async function pageErrors(page) {
+  const errors = await page.locator(`${A('errorMessage')}, ${A('inputAlert')}`).allInnerTexts().catch(() => []);
+  // role="alert" also carries screen-reader announcements ("AI Intern page is loaded", "… successfully
+  // uploaded"): from there only messages that read as errors count.
+  const alerts = (await page.locator('[role="alert"]').allInnerTexts().catch(() => []))
+    .filter((t) => /error|invalid|required|must|incorrect|wrong|failed|unable|not valid|please (enter|select|provide|complete)/i.test(t));
+  return [...new Set([...errors, ...alerts].map((t) => t.replace(/\s+/g, ' ').trim()).filter(Boolean))];
+}
+
+// Workday's primary buttons are inert (aria-hidden): the clickable element is the transparent
+// role="button" div (click_filter) laid over them in the same container.
+async function clickPrimary(page, buttonId) {
+  const button = page.locator(A(buttonId)).first();
+  const overlay = button.locator('xpath=..').locator(A('click_filter'));
+  if (await overlay.count()) await overlay.first().click();
+  else await button.click();
+}
+
+// The posting, with its Apply button ready.
+async function openPosting(page, url) {
+  await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
+  await page.waitForSelector(A('adventureButton'), { timeout: 30000 });
+}
+
+// Apply → Apply Manually. Resolves 'signed-out' when the account form shows, 'in-form' when the first
+// application step's fields do. (The step bar renders before either, so it is not a signal.)
+async function startApplication(page) {
+  await page.click(A('adventureButton'));
+  const manual = page.locator(A('applyManually'));
+  await manual.first().waitFor({ timeout: 20000 }).catch(() => {});
+  if (await manual.count()) await manual.first().click();
+  for (let i = 0; i < 45; i++) {
+    await page.waitForTimeout(1000);
+    if (await page.locator(`input${A('email')}`).count()) return 'signed-out';
+    if (!/sign in|create account/i.test(await activeStep(page)) && (await page.locator('[data-automation-id^="formField-"]').count())) return 'in-form';
+  }
+  throw new Error('the application did not open');
+}
+
+// A Workday domain, checked on the parsed hostname (never a substring of the URL).
+const workdayLink = (u) => { try { const h = new URL(u).hostname.toLowerCase(); return new URL(u).protocol === 'https:' && /(^|\.)(myworkdayjobs|myworkday)\.com$/.test(h); } catch { return false; } };
+
+// Only mail whose sender Gmail authenticated (SPF/DKIM), and only links that point at Workday itself:
+// anyone can send a message that merely claims to come from Workday.
+async function verificationLink(gmail, sinceMs) {
+  for (let i = 0; i < 18; i++) { // up to ~3 minutes
+    const ids = await gmail.listIds(`from:(myworkday.com OR workday.com OR myworkdayjobs.com) newer_than:1d`, 10);
+    for (const id of ids) {
+      const msg = await gmail.get(id);
+      if (!msg.authenticated || new Date(msg.date).getTime() < sinceMs - 60_000) continue;
+      const link = (msg.html.match(/https:\/\/[^"'\s<>]+/g) ?? []).concat(msg.text.match(/https:\/\/\S+/g) ?? [])
+        .map((u) => u.replace(/&amp;/g, '&')).find((u) => /verif|activat|confirm/i.test(u) && workdayLink(u));
+      if (link) return link;
+    }
+    await sleep(10_000);
+  }
+  return null;
+}
+
+// Waits for an account form to go away (signed in, or account created), or returns why it did not.
+// Signing in takes a few seconds; a click that landed before the form was ready does nothing, so it is
+// repeated once.
+async function formGone(page, buttonId) {
+  for (let i = 0; i < 30; i++) {
+    await page.waitForTimeout(1000);
+    if (!(await page.locator(A(buttonId)).count())) return null;
+    const errors = await pageErrors(page);
+    if (errors.length) return { stop: 'blocked', reason: `Workday account: ${errors.join('; ')}` };
+    if (i === 10) await clickPrimary(page, buttonId);
+  }
+  return { stop: 'blocked', reason: 'Workday sign-in did not complete within 30 s' };
+}
+
+// Signs in from the page header, before applying: starting the application signed out and signing in
+// inside it collides with a draft already saved for this posting (Workday answers 400, then errors).
+async function signIn(page, account, host) {
+  if (!onPortal(page, host)) return { stop: 'blocked', reason: `Sign-in page is not on ${host}` };
+  if (!(await page.locator(A('signInSubmitButton')).count())) {
+    await page.click(A('utilityButtonSignIn'));
+    await page.waitForSelector(A('signInSubmitButton'), { timeout: 30000 });
+  }
+  if (await captchaPresent(page)) return { stop: 'needs_you', reason: 'Workday shows a CAPTCHA on sign-in' };
+  await page.fill(A('email'), account.email);
+  await page.fill(A('password'), account.password);
+  await page.locator(A('password')).press('Tab'); // Workday reads the field on blur
+  await page.waitForTimeout(700);
+  await clickPrimary(page, 'signInSubmitButton');
+  return formGone(page, 'signInSubmitButton');
+}
+
+// Creates the candidate's account from the application's first step. Returns null when the application
+// continues, {reopen: true} after an email verification, or {stop, reason}.
+async function createAccount(page, { db, gmail, host, email, log }) {
+  if (await captchaPresent(page)) return { stop: 'needs_you', reason: 'Workday shows a CAPTCHA on account creation' };
+  if (!onPortal(page, host)) return { stop: 'blocked', reason: `Account page is not on ${host}` };
+  if (!(await page.locator(A('verifyPassword')).count())) { // sign-in form first: switch to Create Account
+    const link = page.locator(A('createAccountLink'));
+    if (!(await link.count())) return { stop: 'blocked', reason: 'Workday shows no Create Account option' };
+    await link.first().click();
+    await page.waitForSelector(A('verifyPassword'), { timeout: 20000 });
+  }
+  const account = { email, password: newPassword(), host, state: 'creating', createdAt: now() };
+  await saveAccount(db, host, account);
+  await page.fill(A('email'), account.email);
+  await page.fill(A('password'), account.password);
+  await page.fill(A('verifyPassword'), account.password);
+  const consent = page.locator(A('createAccountCheckbox'));
+  if (await consent.count()) await consent.check();
+  const createdAt = Date.now();
+  await clickPrimary(page, 'createAccountSubmitButton');
+  await page.waitForTimeout(5000);
+  const body = await page.locator('body').innerText();
+  if (/already (exists|in use|registered)|account with this email/i.test(body)) {
+    await saveAccount(db, host, { ...account, state: 'exists-unknown-password' });
+    return { stop: 'blocked', reason: `A Workday account for ${email} already exists at ${host}; its password is not known to CareerPilot` };
+  }
+  if (/verify|verification|activate/i.test(body) && !(await page.locator(A('progressBar')).count())) {
+    log('workday: email verification requested');
+    const link = gmail && await verificationLink(gmail, createdAt);
+    if (!link) { await saveAccount(db, host, { ...account, state: 'unverified' }); return { stop: 'blocked', reason: 'Workday verification email did not arrive' }; }
+    await page.goto(link, { waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(4000);
+    await saveAccount(db, host, { ...account, state: 'active' });
+    return { reopen: true };
+  }
+  await saveAccount(db, host, { ...account, state: 'active' });
+  return formGone(page, 'createAccountSubmitButton');
+}
+
+// ---- Form widgets. Fields are found by Workday's own formField-<name> groups, never by position.
+
+const F = (name) => `[data-automation-id="formField-${name}"]`;
+
+// The question's text box: its textarea when it has one (a block can also hold other inputs, and
+// Playwright's first() means first in the page, not first in the selector).
+async function setText(page, field, value, scope = page) {
+  const group = scope.locator(F(field)).first();
+  const area = group.locator('textarea');
+  const isArea = (await area.count()) > 0;
+  const input = isArea ? area.first() : group.locator('input:not([type="checkbox"]):not([type="radio"]):not([type="file"])').first();
+  if (value == null || value === '' || !(await input.count())) return false;
+  if (isArea) {
+    // Workday's text areas only register real typing: fill() changes the box but not the form's state.
+    await input.click();
+    await input.press('Control+A');
+    await input.press('Delete');
+    await input.pressSequentially(String(value), { delay: 5 });
+    await input.press('Tab');
+  } else if ((await input.inputValue()) !== String(value)) {
+    await input.fill(String(value));
+    await input.press('Tab');
+  }
+  return true;
+}
+
+// `wants`: one pattern, or patterns in order of preference. The first pattern with any matching option
+// wins, so a precise answer is never displaced by a looser one that happens to come earlier in the list.
+function best(texts, wants) {
+  for (const re of [wants].flat()) {
+    const i = texts.findIndex((t) => re.test(t));
+    if (i >= 0) return i;
+  }
+  return -1;
+}
+
+// Single-choice dropdown: opens it and picks the best option. It always reports what was on offer, so
+// the trail shows the choice in context and a stop reason can say what the form wanted.
+async function choose(page, field, wants, scope = page) {
+  const button = scope.locator(`${F(field)} button[aria-haspopup="listbox"]`).first();
+  if (!(await button.count())) return { missing: true };
+  const current = (await button.innerText()).trim();
+  await button.click();
+  // Only the list this button opened: closed lists stay in the page with their old options.
+  const list = await button.getAttribute('aria-controls');
+  const options = page.locator(list ? `[id="${list}"] [role="option"]` : '[role="listbox"]:visible [role="option"]');
+  // Options load after the list opens; until then it holds only the "Select One" placeholder.
+  for (let i = 0; i < 20 && (await options.count()) < 2; i++) await page.waitForTimeout(500);
+  const texts = (await options.allInnerTexts()).map((t) => t.replace(/\s+/g, ' ').trim());
+  const i = best(texts, wants);
+  debug('choose', field, { current, offered: texts.length, pick: texts[i] ?? null });
+  if (i < 0 || texts[i] === current) { await page.keyboard.press('Escape'); return i < 0 ? { options: texts } : { chosen: current, options: texts }; }
+  await options.nth(i).scrollIntoViewIfNeeded();
+  await options.nth(i).click();
+  await page.waitForTimeout(400);
+  const now = (await button.innerText()).trim();
+  debug('choose', field, 'now shows', now);
+  return now === texts[i] ? { chosen: texts[i], options: texts } : { options: texts, note: `clicked "${texts[i]}" but the field shows "${now}"` };
+}
+
+// Removes a selected value from a search box (its chip's delete control).
+async function unselect(group) {
+  const chip = group.locator(A('selectedItem')).first();
+  if (!(await chip.count())) return;
+  const del = chip.locator(`${A('DELETE_charm')}, [role="button"], button`).first();
+  if (await del.count()) await del.click();
+  else { await chip.click(); await chip.press('Delete'); }
+  await group.page().waitForTimeout(500);
+}
+
+// Search box ("prompt"): types `search`, presses Enter (Workday's search key), then picks the best
+// option. When the search finds a single result Workday selects it by itself on Enter: that value is
+// kept only if it is acceptable, otherwise removed again.
+async function pick(page, field, search, wants, scope = page) {
+  const group = scope.locator(F(field)).first();
+  if (!(await group.count())) return { missing: true };
+  const chips = async () => (await group.locator(A('selectedItem')).allInnerTexts()).map((t) => t.replace(/\s+/g, ' ').trim());
+  let selected = await chips();
+  if (best(selected, wants) >= 0) return { chosen: selected[best(selected, wants)] };
+  if (selected.length) { debug('pick', field, 'removing', selected); await unselect(group); }
+  const box = group.locator('input').first();
+  await box.click();
+  await box.fill(search);
+  await box.press('Enter');
+  // Results live in the open popup; selected values elsewhere carry the same promptOption tag.
+  const options = page.locator(`${A('activeListContainer')} ${A('promptOption')}`);
+  await options.first().waitFor({ timeout: 10000 }).catch(() => {});
+  await page.waitForTimeout(800);
+  selected = await chips();
+  if (selected.length) { // auto-selected on Enter
+    debug('pick', field, `"${search}" auto-selected`, selected);
+    if (best(selected, wants) >= 0) return { chosen: selected[best(selected, wants)] };
+    await unselect(group);
+    return { options: selected };
+  }
+  const texts = (await options.allInnerTexts()).map((t) => t.replace(/\s+/g, ' ').trim());
+  const i = best(texts, wants);
+  debug('pick', field, `"${search}"`, { offered: texts.slice(0, 8), pick: texts[i] ?? null });
+  if (i < 0) { await page.keyboard.press('Escape'); return { options: texts.slice(0, 15) }; }
+  await options.nth(i).click();
+  await page.waitForTimeout(500);
+  return (await chips()).includes(texts[i]) ? { chosen: texts[i] } : { options: texts.slice(0, 15), note: `"${texts[i]}" did not stick` };
+}
+
+// "How did you hear about us": the employer's own site is where CareerPilot finds postings ("Marvell
+// Website", "Company Website"). Job-board names that merely contain "career" (Career Builder) never match.
+const escapeRe = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const sourceWants = (employerNames) => [
+  new RegExp(`^(${employerNames.filter(Boolean).map(escapeRe).join('|')})\\b.*\\b(web ?site|careers?( site| page)?)$`, 'i'),
+  /^(the )?(company|corporate|employer|organi[sz]ation)('s)?( careers?)? (web)?site$/i,
+  /\b(company|corporate|employer|official)\b[^,]*\b(web)?site\b/i, /^careers? (web)?site$|careers? page|careers? portal/i];
+
+// A required choice that could not be made: what the form offered instead (for the stop reason).
+// A field that is not on this employer's form at all ({missing}) is not a problem.
+const unmet = (label, r) => (r.chosen || r.missing ? null
+  : `${label} (offered: ${(r.options ?? []).filter((o) => !/^select one$/i.test(o)).slice(0, 12).join(', ')})`);
+
+// Workday renders a step's sections one after another (later ones show grey placeholders first) and some
+// only when scrolled to: scroll through, then wait until the number of fields stops changing.
+async function settle(page) {
+  await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+  let last = -1;
+  let stable = 0;
+  for (let i = 0; i < 40 && stable < 4; i++) {
+    await page.waitForTimeout(500);
+    const n = await page.locator('[data-automation-id^="formField-"]').count();
+    stable = n === last && n > 0 ? stable + 1 : 0;
+    last = n;
+  }
+  await page.evaluate(() => window.scrollTo(0, 0));
+}
+
+// Labels of required questions on this step that are still unanswered.
+// ($$eval is Playwright's in-page query: it runs this function in the page, it is not a string eval.)
+async function emptyRequired(page) {
+  return page.$$eval('[data-automation-id^="formField-"]', (groups) => groups
+    .filter((g) => g.offsetParent !== null)
+    .map((g) => {
+      const label = (g.querySelector('label, legend')?.innerText ?? '').replace(/\s+/g, ' ').trim();
+      if (!/\*$/.test(label)) return null;
+      const radios = [...g.querySelectorAll('input[type=radio]')];
+      const checks = [...g.querySelectorAll('input[type=checkbox]')];
+      const button = g.querySelector('button[aria-haspopup="listbox"]');
+      const text = g.querySelector('textarea') ?? g.querySelector('input:not([type=checkbox]):not([type=radio]):not([type=file])');
+      // A file box never shows a value; an upload shows as a file card with the file's name.
+      const filled = g.querySelector('input[type=file]') ? /\.(pdf|docx?|rtf|odt|txt)\b/i.test(document.querySelector('main')?.innerText ?? '')
+        : radios.length ? radios.some((r) => r.checked)
+        : g.querySelector('[data-automation-id="multiSelectContainer"]') ? g.querySelectorAll('[data-automation-id="selectedItem"]').length > 0
+        : button ? !/^select one$/i.test(button.innerText.trim())
+        : checks.length ? checks.some((c) => c.checked)
+        : text ? text.value.trim() !== '' : true;
+      return filled ? null : label.replace(/\*$/, '');
+    }).filter(Boolean));
+}
+
+// Workday's transient "Something went wrong. Please refresh the page" screen: refresh, as it asks, up to
+// twice. Returns false when the error stays.
+async function recover(page) {
+  for (let i = 0; i < 3; i++) {
+    const body = await page.locator('body').innerText().catch(() => '');
+    if (!/something went wrong|please refresh the page/i.test(body)) return true;
+    if (i === 2) return false;
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForSelector(A('progressBar'), { timeout: 30000 }).catch(() => {});
+    await page.waitForTimeout(4000);
+  }
+  return false;
+}
+
+// Save and Continue; resolves to null once the next step shows, or to the reasons it did not advance.
+async function saveAndContinue(page) {
+  const before = await activeStep(page);
+  await page.locator(`${A('pageFooterNextButton')}, ${A('bottom-navigation-next-button')}`).first().click({ force: true });
+  for (let i = 0; i < 30; i++) {
+    await page.waitForTimeout(1000);
+    if ((await activeStep(page)) !== before) return null;
+    const errors = await pageErrors(page);
+    if (errors.length) return errors;
+  }
+  return ['the page did not advance'];
+}
+
+// ---- Steps
+
+const digits = (phone) => String(phone ?? '').replace(/^\s*\+91[\s-]*/, '').replace(/\D/g, '');
+
+async function myInformation(page, { profile, answers, job, host }) {
+  const [city, state] = String(profile.location ?? '').split(',').map((s) => s.trim());
+  const filled = {
+    source: await choose(page, 'source', sourceWants([job.company, host.split('.')[0]])),
+    country: await choose(page, 'country', /^india$/i),
+  };
+  await settle(page); // the address block re-renders for the chosen country
+  filled.givenName = await setText(page, 'legalName--firstName', answers.legal_given_name);
+  filled.familyName = await setText(page, 'legalName--lastName', answers.legal_family_name);
+  filled.city = await setText(page, 'city', city);
+  if (state) filled.state = await choose(page, 'countryRegion', new RegExp(`^${escapeRe(state)}$`, 'i'));
+  filled.phoneType = await choose(page, 'phoneType', /mobile|cell/i);
+  filled.phoneCode = await pick(page, 'countryPhoneCode', 'India', /^india\b/i);
+  filled.phone = await setText(page, 'phoneNumber', digits(profile.phone));
+  const problems = [unmet('How did you hear about us', filled.source), unmet('Country', filled.country),
+    unmet('State', filled.state ?? { missing: true }), unmet('Phone device type', filled.phoneType), unmet('Country phone code', filled.phoneCode)].filter(Boolean);
+  return problems.length ? { filled, stop: 'blocked', reason: `No matching option for: ${problems.join('; ')}` } : { filled };
+}
+
+const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+// "May 2026 - Jun 2026" -> [{month: 5, year: 2026}, {month: 6, year: 2026}]; an end of "Present" is null.
+export function dateRange(text) {
+  const [a, b] = String(text ?? '').split(/\s+[-–]\s+/);
+  const one = (s) => { const m = /\b([a-z]{3})[a-z]*\.?\s+(\d{4})\b/i.exec(s ?? ''); return m && MONTHS.includes(m[1].toLowerCase()) ? { month: MONTHS.indexOf(m[1].toLowerCase()) + 1, year: Number(m[2]) } : null; };
+  return [one(a), /present|current|now/i.test(b ?? '') ? null : one(b)];
+}
+// "ComedKares, Bengaluru" -> ['ComedKares', 'Bengaluru']
+const splitPlace = (s) => { const t = String(s ?? ''); const i = t.lastIndexOf(','); return i > 0 ? [t.slice(0, i).trim(), t.slice(i + 1).trim()] : [t.trim(), '']; };
+
+// Degree names as Workday lists them, most specific first.
+const DEGREES = [
+  [/^m\.?\s?sc\b|master of science/i, [/^master of science \(m\.?sc\)$/i, /^master of science\b/i]],
+  [/^b\.?\s?sc\b|bachelor of science/i, [/^bachelor of science \(b\.?sc\)$/i, /^bachelor of science\b/i]],
+  [/^m\.?\s?tech\b|master of technology/i, [/^master of technology\b/i, /^m\.?\s?tech$/i]],
+  [/^b\.?\s?tech\b|bachelor of technology/i, [/^bachelor of technology\b/i, /^b\.?\s?tech$/i]],
+  [/^b\.?\s?e\b|bachelor of engineering/i, [/^bachelor of engineering\b/i]],
+  [/^mba\b|master of business administration/i, [/^master of business administration\b/i, /^mba$/i]],
+  [/^mca\b|master of computer application/i, [/^master of computer application/i, /^mca$/i]],
+  [/^bca\b|bachelor of computer application/i, [/^bachelor of computer application/i, /^bca$/i]],
+  [/^b\.?\s?com\b|bachelor of commerce/i, [/^bachelor of commerce\b/i]],
+  [/^m\.?\s?com\b|master of commerce/i, [/^master of commerce\b/i]],
+];
+export const degreeWants = (degree) => DEGREES.find(([re]) => re.test(degree))?.[1] ?? [new RegExp(`^${escapeRe(degree)}$`, 'i')];
+export const studyField = (degree) => (/\bin\s+(.+)$/i.exec(degree)?.[1] ?? '').trim();
+
+// A Workday field-of-study option is acceptable only when all its words appear in the real field name:
+// "Data Analytics" or "Analytics" for "Big Data Analytics", "Statistics" for "Statistics & Economics",
+// never "Data Science". Searches go from the full name to its tail words.
+const words = (s) => String(s).toLowerCase().split(/[^a-z]+/).filter((w) => w && w !== 'and');
+export function fieldWants(field) {
+  const have = new Set(words(field));
+  return { test: (option) => { const w = words(option); return w.length > 0 && w.every((x) => have.has(x)); } };
+}
+const fieldSearches = (field) => { const w = String(field).split(/\s*(?:&|,|\band\b)\s*|\s+/).filter(Boolean); return [...new Set([field, ...w.map((_, i) => w.slice(i).join(' ')), ...w])].filter((s) => s.length > 2); };
+
+// Entry panels of a repeatable section ("Education-2-panel"). Workday re-sorts saved entries, so a panel
+// is matched to a profile entry by what it holds (`same`), then an empty one (`empty`) is reused, and
+// only then is a new one added.
+const groupLabelled = (label) => `[role="group"][aria-labelledby="${label}"], [role="group"][aria-label="${label}"]`;
+async function entryPanel(page, section, used, same, empty) {
+  const all = [];
+  for (let n = 1; n <= 12; n++) {
+    const p = page.locator(groupLabelled(`${section}-${n}-panel`));
+    if (!(await p.count())) break;
+    all.push({ n, panel: p.first() });
+  }
+  const free = all.filter(({ n }) => !used.has(n));
+  for (const test of [same, empty]) {
+    for (const { n, panel } of free) if (await test(panel)) { used.add(n); return panel; }
+  }
+  const add = page.locator(groupLabelled(`${section}-section`)).locator(A('add-button')).first();
+  if (!(await add.count())) return null;
+  await add.click();
+  const panel = page.locator(groupLabelled(`${section}-${all.length + 1}-panel`));
+  await panel.first().waitFor({ timeout: 10000 }).catch(() => {});
+  if (!(await panel.count())) return null;
+  used.add(all.length + 1);
+  return panel.first();
+}
+const inputValue = async (panel, field) => (await panel.locator(`${F(field)} input`).first().inputValue().catch(() => '')).trim();
+const buttonText = async (panel, field) => (await panel.locator(`${F(field)} button[aria-haspopup="listbox"]`).first().innerText().catch(() => '')).trim();
+
+// Workday's MM/YYYY or MM/DD/YYYY box: the inputs are hidden behind the "MM" / "DD" / "YYYY" text, which
+// is what takes the click; typing then moves from part to part by itself. Returns whether the box now
+// shows the date. d: {month, year, day?}; a box that asks for a day needs d.day.
+async function setDate(page, scope, field, d) {
+  const group = scope.locator(F(field)).first();
+  if (!d || !(await group.count())) return false;
+  const parts = (await group.locator(A('dateSectionDay-input')).count()) ? ['Month', 'Day', 'Year'] : ['Month', 'Year'];
+  if (parts.includes('Day') && !d.day) return false;
+  const want = { Month: String(d.month).padStart(2, '0'), Day: String(d.day ?? '').padStart(2, '0'), Year: String(d.year) };
+  const ok = async () => {
+    for (const p of parts) {
+      const shown = (await group.locator(A(`dateSection${p}-display`)).innerText().catch(() => '')).trim();
+      if (p === 'Year' ? shown !== want.Year : Number(shown) !== Number(want[p])) return false;
+    }
+    return true;
+  };
+  if (await ok()) return true;
+  await group.locator(A('dateSectionMonth-display')).first().click();
+  await page.keyboard.type(parts.map((p) => want[p]).join(''));
+  await page.keyboard.press('Tab');
+  if (await ok()) return true;
+  // No auto-advance on this tenant: type each part into its own box.
+  for (const p of parts) {
+    await group.locator(A(`dateSection${p}-display`)).first().click();
+    await page.keyboard.type(want[p]);
+  }
+  await page.keyboard.press('Tab');
+  return ok();
+}
+
+// The institution exactly as the profile names it, otherwise Workday's own "School not in list": a
+// similarly named school (St. Joseph's College for St. Joseph's University) would be a different claim.
+async function chooseSchool(page, scope, institution) {
+  const name = splitPlace(institution)[0];
+  const norm = (s) => s.toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/\bst\b/g, 'saint').replace(/\s+/g, ' ').trim();
+  const same = { test: (option) => norm(option.split(',')[0].replace(/\(.*?\)/g, '')) === norm(name) };
+  const exact = await pick(page, 'school', name, same, scope);
+  if (exact.chosen) return exact;
+  const notListed = await pick(page, 'school', 'School not in list', /not (in|on) (the )?list|not listed/i, scope);
+  return notListed.chosen ? { ...notListed, note: `"${name}" is not in Workday's list` } : { options: notListed.options ?? exact.options };
+}
+
+async function myExperience(page, { profile, answers, resumePath }) {
+  const filled = { experience: [], education: [] };
+  const problems = [];
+  const usedJobs = new Set();
+  for (const e of profile.experience ?? []) {
+    const panel = await entryPanel(page, 'Professional-Experience', usedJobs,
+      async (p) => (await inputValue(p, 'jobTitle')).toLowerCase() === e.title.toLowerCase(),
+      async (p) => (await inputValue(p, 'jobTitle')) === '');
+    if (!panel) break; // this employer's form has no experience section
+    const [company, location] = splitPlace(e.company);
+    const [from, to] = dateRange(e.dates);
+    if (!from) { problems.push(`dates of "${e.title}" (${e.dates})`); continue; }
+    await setText(page, 'jobTitle', e.title, panel);
+    await setText(page, 'companyName', company, panel);
+    await setText(page, 'location', location, panel);
+    if (!(await setDate(page, panel, 'startDate', from))) problems.push(`start date of "${e.title}"`);
+    if (to) { if (!(await setDate(page, panel, 'endDate', to))) problems.push(`end date of "${e.title}"`); }
+    else await panel.locator(`${F('currentlyWorkHere')} input[type=checkbox]`).check().catch(() => {});
+    await setText(page, 'roleDescription', (e.points ?? []).join('\n'), panel);
+    filled.experience.push(`${e.title} at ${company}`);
+  }
+  const usedSchools = new Set();
+  for (const ed of profile.education ?? []) {
+    const panel = await entryPanel(page, 'Education', usedSchools,
+      async (p) => best([await buttonText(p, 'degree')], degreeWants(ed.degree)) === 0,
+      async (p) => /^(select one)?$/i.test(await buttonText(p, 'degree')));
+    if (!panel) { problems.push('education section'); break; }
+    const school = await chooseSchool(page, panel, ed.institution);
+    const degree = await choose(page, 'degree', degreeWants(ed.degree), panel);
+    const field = studyField(ed.degree);
+    let study = { missing: true };
+    if (field && (await panel.locator(F('fieldOfStudy')).count())) {
+      // Options the candidate approved for a field Workday does not list (answers.field_of_study_choices).
+      const approved = (answers.field_of_study_choices ?? {})[field] ?? [];
+      const wants = [fieldWants(field), ...approved.map((name) => new RegExp(`^${escapeRe(name)}$`, 'i'))];
+      for (const q of [...fieldSearches(field), ...approved]) { study = await pick(page, 'fieldOfStudy', q, wants, panel); if (study.chosen) break; }
+    }
+    const gpa = /(\d+(?:\.\d+)?)/.exec(ed.grade ?? '')?.[1];
+    if (gpa) await setText(page, 'gradeAverage', gpa, panel);
+    for (const [label, r] of [['School', school], ['Degree', degree], ['Field of study', study]]) {
+      const u = unmet(`${label} for ${ed.degree}`, r);
+      if (u) problems.push(u);
+    }
+    filled.education.push({ degree: ed.degree, school: school.chosen, as: degree.chosen, field: study.chosen });
+  }
+  const upload = page.locator(`input${A('file-upload-input-ref')}`).first();
+  if (resumePath && (await upload.count())) {
+    const file = resumePath.split(/[\\/]/).pop();
+    const shown = await page.getByText(file, { exact: true }).count();
+    debug('resume', { file, alreadyShown: shown });
+    if (!shown) {
+      await upload.setInputFiles(resumePath);
+      // The file card shows at once; the upload is done when Workday announces it.
+      const done = await page.getByText(/successfully uploaded/i).first().waitFor({ timeout: 60000 }).then(() => true, () => false);
+      debug('resume upload confirmed', done);
+      if (!done) problems.push('resume upload did not finish');
+    }
+    filled.resume = file;
+  }
+  return problems.length ? { filled, stop: 'blocked', reason: `No verified match for: ${problems.join('; ')}` } : { filled };
+}
+
+// ---- Employer questions. Each is a formField-<id> block with the question as its label or legend and
+// one control. Answers come only from the profile: rules for the questions every employer asks, the
+// candidate's own answers to earlier unknown questions (answers.custom), or nothing, which blocks.
+
+const isoDate = (v) => { const m = /^(\d{4})-(\d{2})(?:-(\d{2}))?/.exec(String(v ?? '')); return m ? { year: Number(m[1]), month: Number(m[2]), day: m[3] ? Number(m[3]) : null } : null; };
+const yes = (v) => (v == null ? undefined : { yes: v === true || /^(yes|true)$/i.test(String(v)) });
+const norm = (s) => String(s ?? '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+// Whether the candidate's own experience includes this employer: the profile lists their full history.
+const workedAt = (profile, company) => (profile.experience ?? []).some((e) => norm(splitPlace(e.company)[0]).includes(norm(company)) && norm(company).length > 2);
+const lpa = (inr) => Math.round((inr / 1e5) * 100) / 100;
+
+// [pattern on the question, answer(ctx)]: the first matching pattern decides; undefined = not known.
+const QUESTION_RULES = [
+  [/\b(at least|over|above|older than)\b.{0,15}\b18\b|\b18 years\b|age of 18|legal age/i, (c) => yes(c.answers.age_18_or_older)],
+  [/\bsponsor/i, (c) => (c.inIndia ? yes(c.answers.needs_visa_sponsorship) : undefined)],
+  [/(legal|lawful)\w* (right|authori[sz]\w*|eligib\w*|permi\w*) to work|authori[sz]ed to work|work authori[sz]ation|eligible to work|right to work/i,
+    (c) => (c.inIndia ? yes(c.answers.indian_work_authorization) : undefined)],
+  [/relocat/i, (c) => yes(c.answers.willing_to_relocate)],
+  [/\b(friend|relative|family member|related to)\b/i, (c) => yes(c.answers.relatives_at_employer)],
+  [/\binterviewed\b/i, (c) => yes(c.answers.previously_interviewed)],
+  [/\b(ever|previously|formerly|currently)\b.{0,20}\b(worked|employed|work)\b|\bformer (employee|intern|contractor)\b/i, (c) => ({ yes: workedAt(c.profile, c.job.company) })],
+  [/citizen of any of the following countries|citizen of (cuba|iran|north korea|syria)/i,
+    (c) => (c.answers.citizenship ? { yes: new RegExp(`\\b${escapeRe(c.answers.citizenship)}\\b`, 'i').test(c.label) } : undefined)],
+  [/countries in which you (currently )?hold citizenship|select (all )?(the )?countr(y|ies) of (your )?citizenship/i,
+    (c) => (c.answers.citizenship ? { option: [new RegExp(`^${escapeRe(c.answers.citizenship)}$`, 'i')], search: c.answers.citizenship } : undefined)],
+  [/citizen or national of the united states|permanent resident|export control/i, (c) => yes(c.answers.us_person)],
+  [/^(country of )?(citizenship|nationality)\b/i, (c) => (c.answers.citizenship ? { option: [new RegExp(`^${escapeRe(c.answers.citizenship)}`, 'i'), /^indian?$/i] } : undefined)],
+  [/\b(start|joining|join)\b.{0,15}\bdate\b|\bavailab\w* to (start|join)\b|\bearliest\b.{0,15}\b(start|join)|\bwhen\b.{0,30}\b(start|join)\b/i, (c) => {
+    if (c.kind !== 'date') return undefined;
+    const when = isoDate(/full.?time/i.test(c.label) ? c.answers.earliest_full_time_start
+      : c.job.employment_type === 'internship' ? c.answers.internship_available_from : c.answers.earliest_joining_date);
+    return when?.day ? { date: when } : undefined;
+  }],
+  [/\bgraduat\w*\b.{0,15}\b(date|year|month)\b|\b(date|year|month)\b.{0,10}\bgraduat|\bwhen\b.{0,25}\bgraduat/i, (c) => {
+    const d = isoDate(c.answers.graduation_date ?? c.answers.graduation_month);
+    if (!d) return undefined;
+    if (c.kind === 'date') return d.day ? { date: d } : undefined; // a full date needs the exact day
+    if (/\byear\b/i.test(c.label)) return { text: String(d.year), option: [new RegExp(`^${d.year}$`)] };
+    return undefined;
+  }],
+  [/notice period/i, (c) => (c.answers.notice_period == null ? undefined
+    : { text: String(c.answers.notice_period), option: [new RegExp(`^${c.answers.notice_period}\\b`), /immediate|^0\b|no notice|not applicable/i] })],
+  [/\b(current|present)\b.{0,10}\b(ctc|salary|compensation|pay)\b/i, (c) => (c.answers.current_ctc == null ? undefined
+    : { text: String(c.answers.current_ctc), option: [/^0\b|not applicable|n\/a|student|fresher/i] })],
+  // The candidate's own figures (₹7 LPA full-time, ₹40,000 a month for internships), converted to the
+  // unit the question names; with no unit named, the unit is written out.
+  [/\bexpected\b.{0,10}\b(ctc|salary|compensation|pay|stipend)\b/i, (c) => {
+    const internship = c.job.employment_type === 'internship';
+    const stipend = c.answers.expected_internship_stipend_monthly;
+    const yearly = internship ? (stipend == null ? null : stipend * 12) : c.answers.expected_ctc;
+    if (yearly == null) return undefined;
+    const monthly = internship ? stipend : Math.round(yearly / 12);
+    if (/lpa|lakh/i.test(c.label)) return { text: String(lpa(yearly)) };
+    if (/month/i.test(c.label)) return { text: String(monthly) };
+    if (/annum|annual|year/i.test(c.label)) return { text: String(yearly) };
+    return { text: internship ? `${monthly} per month` : `${lpa(yearly)} LPA` };
+  }],
+  [/^gender$|\bgender\b/i, (c) => (c.answers.gender ? { option: [new RegExp(`^${escapeRe(c.answers.gender)}$`, 'i')] } : undefined)],
+  // Marketing opt-ins are never ticked; a required consent to the employer's terms or privacy notice is
+  // (the candidate authorized this on 2026-10-17).
+  [/job alert|newsletter|marketing|talent (community|network|pool)|future (opportunit|role|position)|contact me about|keep me (informed|updated)/i, () => undefined],
+  [/\b(consent|agree|acknowledge|accept)\b.*\b(terms|conditions|privacy|policy|notice)\b|\b(terms|privacy)\b.*\b(consent|agree|accept)/i,
+    (c) => (c.kind === 'checkbox' && c.required ? { yes: true } : undefined)],
+  // Voluntary self-identification: declining is a true answer and the only one CareerPilot gives.
+  [/\b(ethnic|race|racial|veteran|disabilit|hispanic|latino|sexual orientation|pronoun)/i,
+    (c) => (c.required ? { option: [/decline|not wish|prefer not|do not want|choose not|rather not|not to (self.)?identify|not disclos/i] } : undefined)],
+  [/\bsignature\b/i, (c) => (c.answers.may_e_sign
+    ? { text: `${c.profile.name}, ${new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Asia/Kolkata' })}` }
+    : undefined)],
+];
+
+export function answerFor(question, ctx) {
+  const custom = (ctx.answers.custom ?? {})[norm(question.label)];
+  if (custom != null) return typeof custom === 'object' ? custom : { text: String(custom), ...yes(custom) && /^(yes|no|true|false)$/i.test(String(custom)) ? yes(custom) : {} };
+  const rule = QUESTION_RULES.find(([re]) => re.test(question.label));
+  return rule ? rule[1]({ ...ctx, label: question.label, kind: question.kind, required: question.required }) : undefined;
+}
+
+// ($$eval is Playwright's in-page query: it runs this function in the page, it is not a string eval.)
+const readQuestions = (page) => page.$$eval('[data-automation-id^="formField-"]', (gs) => gs.filter((g) => g.offsetParent).map((g) => {
+  const label = (g.querySelector('legend, label')?.innerText ?? '').replace(/\s+/g, ' ').trim();
+  const kind = g.querySelector('[data-automation-id="dateInputWrapper"]') ? 'date'
+    : g.querySelector('button[aria-haspopup="listbox"]') ? 'dropdown'
+    : g.querySelector('input[type=radio]') ? 'radio'
+    : g.querySelector('[data-automation-id="multiSelectContainer"]') ? 'prompt'
+    : g.querySelector('textarea') ? 'textarea'
+    : g.querySelector('input[type=checkbox]') ? 'checkbox'
+    : g.querySelector('input') ? 'text' : 'other';
+  return { field: g.getAttribute('data-automation-id').replace(/^formField-/, ''), label: label.replace(/\s*\*$/, ''), required: /\*$/.test(label), kind };
+}));
+
+// Ticks a checkbox the way a person does: a normal click, else a click on its label text. Returns
+// whether it ended up ticked.
+async function tick(box) {
+  if (await box.isChecked().catch(() => false)) return true;
+  await box.check({ timeout: 5000 }).catch(() => {});
+  if (await box.isChecked().catch(() => false)) return true;
+  const id = await box.getAttribute('id');
+  const label = id ? box.page().locator(`label[for="${id}"]`) : box.locator('xpath=ancestor::label[1]');
+  if (await label.count()) await label.first().click().catch(() => {});
+  return box.isChecked().catch(() => false);
+}
+
+async function applyAnswer(page, q, a) {
+  const wantsYesNo = a.yes !== undefined ? [a.yes ? /^yes\b/i : /^no\b/i] : null;
+  switch (q.kind) {
+    case 'dropdown': return choose(page, q.field, wantsYesNo ?? a.option ?? [new RegExp(`^${escapeRe(a.text ?? '')}$`, 'i')]);
+    case 'date': return { chosen: (await setDate(page, page, q.field, a.date)) ? 'date set' : undefined };
+    case 'text': case 'textarea':
+      if (a.text == null) return {};
+      return { chosen: (await setText(page, q.field, a.text)) ? a.text : undefined };
+    case 'radio': {
+      const radios = page.locator(`${F(q.field)} input[type=radio]`);
+      const labels = await radios.evaluateAll((rs) => rs.map((r) => (r.closest('label')?.innerText || document.querySelector(`label[for="${r.id}"]`)?.innerText || r.value || '').trim()));
+      const i = best(labels, wantsYesNo ?? a.option ?? []);
+      if (i < 0) return { options: labels };
+      await radios.nth(i).check({ force: true });
+      return { chosen: labels[i] };
+    }
+    case 'prompt':
+      return a.option ? pick(page, q.field, a.search ?? a.text ?? '', a.option) : {};
+    case 'checkbox': {
+      const boxes = page.locator(`${F(q.field)} input[type=checkbox]`);
+      if (a.option) { // a list of checkboxes: tick the ones named
+        const labels = await boxes.evaluateAll((bs) => bs.map((b) => (b.closest('label')?.innerText || document.querySelector(`label[for="${b.id}"]`)?.innerText || b.getAttribute('aria-label') || '').trim()));
+        const picked = labels.map((l, i) => (a.option.some((re) => re.test(l)) ? i : -1)).filter((i) => i >= 0);
+        const ticked = [];
+        for (const i of picked) if (await tick(boxes.nth(i))) ticked.push(labels[i]);
+        return ticked.length ? { chosen: ticked.join(', ') } : { options: labels };
+      }
+      if (a.yes === undefined) return {};
+      if (!a.yes) return { chosen: 'false' };
+      return (await tick(boxes.first())) ? { chosen: 'true' } : { note: 'checkbox did not tick' };
+    }
+    default: return {};
+  }
+}
+
+// Answers every question it can. Some answers reveal follow-up questions, so the page is read again
+// until nothing new appears.
+async function applicationQuestions(page, ctx) {
+  const filled = [];
+  const unknown = new Map();
+  const seen = new Set();
+  for (let pass = 0; pass < 4; pass++) {
+    const fresh = (await readQuestions(page)).filter((q) => !seen.has(q.field));
+    if (!fresh.length) break;
+    for (const q of fresh) {
+      seen.add(q.field);
+      const a = answerFor(q, ctx);
+      if (a === undefined) {
+        if (q.required) unknown.set(q.field, q.label);
+        continue;
+      }
+      const r = await applyAnswer(page, q, a);
+      filled.push({ question: q.label.slice(0, 120), answer: r.chosen ?? null });
+      if (q.required && !r.chosen) unknown.set(q.field, `${q.label}${r.options ? ` (offered: ${r.options.filter((o) => !/^select one$/i.test(o)).slice(0, 8).join(', ')})` : ''}`);
+    }
+    await page.waitForTimeout(1500);
+  }
+  // Follow-up questions re-draw the form and can clear answers given before them: answer emptied ones
+  // again, and type text answers last, once the form has settled.
+  const emptied = new Set((await emptyRequired(page)).map((l) => l.trim()));
+  for (const q of await readQuestions(page)) {
+    if (unknown.has(q.field) || !(emptied.has(q.label.trim()) || q.kind === 'textarea')) continue;
+    const a = answerFor(q, ctx);
+    if (a !== undefined) { debug('re-answering', q.label.slice(0, 60)); await applyAnswer(page, q, a); }
+  }
+  return unknown.size ? { filled, stop: 'blocked', reason: `Needs your answer: ${[...unknown.values()].map((u) => `"${u.slice(0, 200)}"`).join('; ')}` } : { filled };
+}
+
+const STEPS = [
+  [/my information/i, myInformation],
+  [/my experience/i, myExperience],
+  [/application questions|questionnaire/i, applicationQuestions],
+  [/voluntary disclosures|self.?identif/i, applicationQuestions],
+];
+
+// Runs the application up to Review; submits only when dryRun is false. Returns
+// {stop: 'submitted'|'review'|'blocked'|'needs_you'|'explored', step, reason?, fields?, trail}.
+// explore: on a step with no filler yet, return its fields instead of a 'blocked' stop (development aid).
+export async function applyWorkday({ page, job, profile, resumePath, db, gmail, dryRun = true, explore = false, shot = async () => {}, log = () => {} }) {
+  const host = portalHost(job.url);
+  const answers = profile.answers ?? {};
+  const trail = [];
+  const usable = (a) => a && (a.state === 'active' || a.state === 'unverified');
+  // Signs in (when an account exists), then opens the application. Returns where it landed, or a stop.
+  const begin = async () => {
+    await openPosting(page, job.url);
+    const saved = await loadAccount(db, host);
+    if (usable(saved)) {
+      const stopped = await signIn(page, saved, host);
+      if (stopped) return stopped;
+      if (!(await page.locator(A('adventureButton')).count())) await openPosting(page, job.url);
+    }
+    const where = await startApplication(page);
+    if (where === 'signed-out' && usable(saved)) return { stop: 'blocked', reason: 'Still signed out after signing in' };
+    return where;
+  };
+  let where = await begin();
+  await shot('start');
+  if (where === 'signed-out') {
+    const created = await createAccount(page, { db, gmail, host, email: profile.email, log });
+    if (created?.reopen) where = await begin();
+    else if (created) { await shot('account-stopped'); return created; }
+  }
+  if (where?.stop) { await shot('signin-stopped'); return where; }
+  await page.waitForSelector(A('progressBar'), { timeout: 30000 });
+  for (let guard = 0; guard < 10; guard++) {
+    if (!(await recover(page))) { await shot('workday-error'); return { stop: 'blocked', reason: 'Workday keeps showing "Something went wrong"', trail }; }
+    const step = await activeStep(page);
+    if (!onPortal(page, host)) return { stop: 'blocked', step, reason: `Left ${host}`, trail };
+    if (await captchaPresent(page)) return { stop: 'needs_you', step, reason: 'Workday shows a CAPTCHA', trail };
+    if (/review/i.test(step)) {
+      await settle(page);
+      await shot('review');
+      if (dryRun) return { stop: 'review', step, trail };
+      const submit = page.locator(`${A('pageFooterNextButton')}, ${A('bottom-navigation-next-button')}`).first();
+      if (!/submit/i.test(await submit.innerText().catch(() => ''))) return { stop: 'blocked', step, reason: 'The Review page shows no Submit button', trail };
+      await submit.click({ force: true });
+      // Workday confirms on the page ("Application Submitted", "Thank you for applying").
+      const CONFIRMED = /application (has been |was )?submitted|thank(s| you) for (applying|your application)|successfully submitted|you('ve| have) (successfully )?applied/i;
+      for (let i = 0; i < 60; i++) {
+        await page.waitForTimeout(1000);
+        const body = await page.locator('body').innerText().catch(() => '');
+        const hit = CONFIRMED.exec(body);
+        if (hit) {
+          await shot('submitted');
+          return { stop: 'submitted', step, evidence: { confirmation: body.slice(Math.max(0, hit.index - 60), hit.index + 140).replace(/\s+/g, ' ').trim(), url: page.url(), at: new Date().toISOString() }, trail };
+        }
+        const errors = await pageErrors(page);
+        if (errors.length) { await shot('submit-errors'); return { stop: 'blocked', step, reason: `Submit: ${errors.join('; ')}`, trail }; }
+      }
+      await shot('submit-unconfirmed');
+      return { stop: 'unconfirmed', step, reason: 'Submit was clicked but Workday showed no confirmation within 60 s', trail };
+    }
+    // The step title shows before its fields do.
+    await page.waitForSelector('[data-automation-id^="formField-"]', { timeout: 30000 }).catch(() => {});
+    await settle(page);
+    const fill = STEPS.find(([re]) => re.test(step))?.[1];
+    if (!fill) {
+      await shot(`step-${step}`);
+      return explore ? { stop: 'explored', step, fields: await formFields(page), errors: await pageErrors(page), trail }
+        : { stop: 'blocked', step, reason: `The "${step}" step is not automated yet`, trail };
+    }
+    const inIndia = /india|bengaluru|bangalore|hyderabad|pune|chennai|mumbai|delhi|gurgaon|gurugram|noida|kolkata/i.test(`${job.location ?? ''} ${job.url}`);
+    const result = await fill(page, { profile, answers, job, host, resumePath, inIndia });
+    trail.push({ step, ...result });
+    await shot(`filled-${step}`);
+    if (result.stop) return { ...result, step, trail };
+    const missing = await emptyRequired(page);
+    if (missing.length) return { stop: 'blocked', step, reason: `No verified answer for: ${missing.join('; ')}`, trail };
+    const errors = await saveAndContinue(page);
+    if (errors) { await shot(`errors-${step}`); return { stop: 'blocked', step, reason: errors.join('; '), trail }; }
+  }
+  return { stop: 'blocked', reason: 'too many steps', trail };
+}
+
