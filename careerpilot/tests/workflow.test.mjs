@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { all, one, openDb } from '../lib/db.mjs';
 import { canTransition, createApplication, transition } from '../lib/applications.mjs';
-import { classifyEmail, parseJobAlert } from '../lib/email-intel.mjs';
+import { classifyEmail, parseJobAlert, stripQuoted } from '../lib/email-intel.mjs';
 import { companyFromSubject, processMessage } from '../lib/gmail-sync.mjs';
 import { applicationEmail, domainMatchesCompany, emailsInText } from '../lib/contacts.mjs';
 import { blockReason, inSendWindow, runOutreach } from '../lib/outreach.mjs';
@@ -218,7 +218,7 @@ test('a bounce marks the email application failed and blocks the address', async
   assert.equal((await one(db, 'SELECT status FROM applications WHERE job_id = ?', [id])).status, 'submitted');
   const r = await processMessage(db, { id: 'b1', threadId: 'thr1', fromAddr: 'mailer-daemon@googlemail.com', fromName: 'Mail Delivery Subsystem',
     subject: 'Delivery Status Notification (Failure)', text: "Address not found. Your message wasn't delivered to careers@acme.in", snippet: '',
-    date: '2026-10-20T10:00:00.000Z', html: '' }, settings, { ourThreadIds: new Set(['thr1']) });
+    date: '2026-10-20T10:00:00.000Z', html: '', authenticated: true }, settings, { ourThreadIds: new Set(['thr1']) });
   assert.equal(r.category, 'bounce');
   assert.equal((await one(db, 'SELECT status FROM applications WHERE job_id = ?', [id])).status, 'failed');
   assert.equal((await one(db, `SELECT status FROM outreach WHERE gmail_thread_id = 'thr1'`)).status, 'bounced');
@@ -244,4 +244,27 @@ test('dashboard password hashes survive .env loading (no $ expansion) and verify
   assert.ok(!verifyPassword('wrong password here', hash));
   assert.ok(!verifyPassword('correct horse battery', 'scrypt$old$format'));
   assert.ok(!verifyPassword('x', undefined));
+});
+
+test('a forged bounce (not Google, or unauthenticated) changes nothing and goes to review', async () => {
+  const db = await openDb({ url: ':memory:' });
+  const gmail = { send: async () => ({ id: 'g1', threadId: 'thr9' }) };
+  const { id } = await upsertJob(db, { url: 'https://jobs.lever.co/acme/11', title: 'Junior Data Scientist', company: 'Acme', location: 'Bengaluru',
+    description: 'Freshers welcome. Send your resume to careers@acme.in' }, { source: 'lever', settings });
+  await runWithProfile(db, gmail);
+  const fake = { threadId: 'thr9', fromName: 'Mail Delivery', subject: 'Delivery Status Notification (Failure)', text: 'Address not found', snippet: '',
+    date: '2026-10-20T10:00:00.000Z', html: '' };
+  const r1 = await processMessage(db, { ...fake, id: 'f1', fromAddr: 'mailer-daemon@evil.example', authenticated: true }, settings, { ourThreadIds: new Set(['thr9']) });
+  const r2 = await processMessage(db, { ...fake, id: 'f2', fromAddr: 'mailer-daemon@googlemail.com', authenticated: false }, settings, { ourThreadIds: new Set(['thr9']) });
+  assert.equal(r1.review, true);
+  assert.equal(r2.review, true);
+  assert.equal((await one(db, 'SELECT status FROM applications WHERE job_id = ?', [id])).status, 'submitted');
+  assert.equal((await one(db, "SELECT opted_out FROM contacts WHERE email = 'careers@acme.in'")).opted_out, 0);
+});
+
+test('quote stripping stays fast on hostile input', () => {
+  const hostile = `${'on '}${'x'.repeat(300)}\n`.repeat(5000);
+  const t0 = Date.now();
+  stripQuoted(hostile);
+  assert.ok(Date.now() - t0 < 500);
 });

@@ -185,11 +185,10 @@ export async function runOutreach(db, gmail, settings, { deadline = Infinity, en
 
 // A delivery failure notice for one of our messages: mark it bounced, never email that address
 // again, and (for an email application) record that the application did not arrive.
-export async function recordBounce(db, { threadId, text, emailId }) {
+// Matched by Gmail thread only (Gmail files the notice in the original thread); never by body text.
+export async function recordBounce(db, { threadId, emailId }) {
   const sent = await one(db, `SELECT o.*, c.email FROM outreach o JOIN contacts c ON c.id = o.contact_id WHERE o.gmail_thread_id = ? AND o.status = 'sent'
-    ORDER BY o.sent_at DESC LIMIT 1`, [threadId])
-    ?? (await all(db, `SELECT o.*, c.email FROM outreach o JOIN contacts c ON c.id = o.contact_id WHERE o.status = 'sent' AND o.sent_at >= ?`,
-      [new Date(Date.now() - 3 * 864e5).toISOString()])).find((o) => String(text ?? '').toLowerCase().includes(o.email));
+    ORDER BY o.sent_at DESC LIMIT 1`, [threadId]);
   if (!sent) return null;
   await run(db, `UPDATE outreach SET status = 'bounced', error = 'delivery failed (bounce notice)' WHERE id = ?`, [sent.id]);
   await run(db, 'UPDATE contacts SET opted_out = 1 WHERE id = ?', [sent.contact_id]);

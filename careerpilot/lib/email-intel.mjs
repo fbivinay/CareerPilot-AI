@@ -78,8 +78,9 @@ export function alertPlatform(fromAddr) {
 // Drop quoted earlier messages ("On … wrote:", "> …", forwarded headers) so a reply is judged on what
 // the sender actually wrote, not on our own email quoted underneath it.
 export function stripQuoted(text) {
-  const t = String(text ?? '');
-  const cut = t.search(/^\s*(on [\s\S]{5,200}? wrote:|-{2,} ?(original|forwarded) message ?-{2,}|from: [^\n]+\n(sent|date): )/im);
+  // Bounded input and line-local patterns: the body is attacker-controlled.
+  const t = String(text ?? '').slice(0, 20000);
+  const cut = t.search(/^[ \t]*(on [^\n]{5,200}?(\n[^\n]{0,120}?)? wrote:|-{2,} ?(original|forwarded) message ?-{2,}|from: [^\n]{1,200}\n(sent|date): )/im);
   return (cut > 0 ? t.slice(0, cut) : t).split('\n').filter((l) => !/^\s*>/.test(l)).join('\n');
 }
 

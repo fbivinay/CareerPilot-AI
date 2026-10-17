@@ -2,14 +2,14 @@
 # email applications/outreach within policy, and the daily digest.
 #
 # Free-tier budget (private repo on GitHub Free: 2,000 Linux minutes/month):
-#   12 runs/day x ~3 min (billed per started minute) ~= 1,100 min/month, leaving headroom for CI.
+#   8 runs/day x ~3-4 min (billed per started minute) ~= 700-1,000 min/month, leaving headroom for CI.
 # GitHub may start scheduled runs late (often 5-30 min) or skip them under load; every stage is
 # idempotent and incremental, so a late or skipped run just catches up on the next one.
 name: careerpilot-pipeline
 
 on:
   schedule:
-    - cron: '23 */2 * * *'   # every 2 hours, off the top of the hour to avoid peak queueing
+    - cron: '23 */3 * * *'   # every 3 hours, off the top of the hour to avoid peak queueing
   workflow_dispatch:
     inputs:
       stages:
@@ -26,7 +26,7 @@ concurrency:
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -50,7 +50,7 @@ jobs:
       - name: Run pipeline
         working-directory: careerpilot
         env:
-          RUN_BUDGET_MINUTES: '11'
+          RUN_BUDGET_MINUTES: '7'
           TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
           TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
           APP_ENCRYPTION_KEY: ${{ secrets.APP_ENCRYPTION_KEY }}

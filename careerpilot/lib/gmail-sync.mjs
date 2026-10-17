@@ -89,7 +89,10 @@ export async function processMessage(db, msg, settings, { ourThreadIds }) {
     }
     if (!parsed.length) log.warn('job alert had no parseable job links', { platform: cls.platform });
   } else if (cls.category === 'bounce') {
-    const sent = await recordBounce(db, { threadId: msg.threadId, text: msg.text, emailId: msg.id });
+    // Only Google's own, authenticated delivery-failure notice in the thread of a message we sent counts;
+    // a look-alike "bounce" from anyone else could otherwise block contacts or fail applications.
+    const genuine = msg.authenticated && /@(googlemail|google)\.com$/i.test(msg.fromAddr ?? '');
+    const sent = genuine ? await recordBounce(db, { threadId: msg.threadId, emailId: msg.id }) : null;
     if (sent?.job_id) {
       const app = await one(db, 'SELECT id FROM applications WHERE job_id = ?', [sent.job_id]);
       link = { app_id: app?.id ?? null, job_id: sent.job_id, how: 'bounce' };

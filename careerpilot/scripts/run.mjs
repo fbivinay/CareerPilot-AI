@@ -20,7 +20,7 @@ import { log } from '../lib/log.mjs';
 const envFile = path.resolve(import.meta.dirname, '..', '.env');
 if (existsSync(envFile)) process.loadEnvFile(envFile);
 
-const BUDGET_MS = Number(process.env.RUN_BUDGET_MINUTES ?? 12) * 60_000;
+const BUDGET_MS = Number(process.env.RUN_BUDGET_MINUTES ?? 7) * 60_000;
 const deadline = Date.now() + BUDGET_MS;
 const gmail = gmailConfigured() ? createGmail() : null;
 const needsGmail = (fn) => async (db, settings) => (gmail ? fn(db, settings) : { skipped: 'Gmail not authorized (npm run gmail:auth)' });
@@ -32,11 +32,12 @@ const STAGES = {
     const rescored = rulesKey !== (await kvGet(db, 'rules:key')) ? await reevaluateAll(db, settings) : 0;
     await kvSet(db, 'rules:key', rulesKey);
     const aggregator = await sweepAggregator(db, settings);
-    const boards = await scanBoards(db, settings, { deadline: deadline - 5 * 60_000 });
+    // Board scans get what is left after leaving ~2.5 min for Gmail, AI scoring and outreach.
+    const boards = await scanBoards(db, settings, { deadline: deadline - 150_000 });
     return { rescored, aggregator, boards };
   },
   ai: (db, settings) => aiScoreJobs(db, settings),
-  gmail: needsGmail((db, settings) => syncGmail(db, gmail, settings, { deadline: deadline - 3 * 60_000 })),
+  gmail: needsGmail((db, settings) => syncGmail(db, gmail, settings, { deadline: deadline - 90_000 })),
   prepare: (db, settings) => prepareApplications(db, settings),
   outreach: needsGmail((db, settings) => runOutreach(db, gmail, settings, { deadline: deadline - 60_000 })),
   digest: needsGmail((db, settings) => sendDigest(db, gmail, settings)),

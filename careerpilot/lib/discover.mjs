@@ -9,7 +9,7 @@ import { load as loadYaml } from 'js-yaml';
 import { loadProviders, resolveProvider } from '../../providers/_registry.mjs';
 import { makeHttpCtx } from '../../providers/_http.mjs';
 import { all, kvGet, kvSet, now, run } from './db.mjs';
-import { expireMissing, touchKnown, upsertJob } from './jobs.mjs';
+import { canonicalUrl, expireMissing, jobId, touchKnown, upsertJob } from './jobs.mjs';
 import { locationTier, roleFamily } from './match.mjs';
 import { log } from './log.mjs';
 
@@ -44,13 +44,16 @@ async function pool(items, size, fn) {
   }));
 }
 
-export async function scanBoards(db, settings, { limit = 400, staleHours = 1.5, deadline = Infinity } = {}) {
+export async function scanBoards(db, settings, { limit = 400, staleHours = 5, deadline = Infinity } = {}) {
   const ps = await providers();
   const ctx = makeHttpCtx();
   const cutoff = new Date(Date.now() - staleHours * 36e5).toISOString();
-  // Least-recently scanned first, so a time-boxed run rotates through every board.
-  const boards = await all(db, `SELECT * FROM boards WHERE enabled = 1 AND (last_scan IS NULL OR last_scan < ?)
-    ORDER BY last_scan IS NOT NULL, last_scan LIMIT ?`, [cutoff, limit]);
+  // Least-recently scanned first, so a time-boxed run rotates through every board. A failing board backs
+  // off (retried after fail_count x staleHours, at most 6x), so outages do not eat every run's time.
+  const boards = (await all(db, `SELECT * FROM boards WHERE enabled = 1 AND (last_scan IS NULL OR last_scan < ?)
+    ORDER BY last_scan IS NOT NULL, last_scan`, [cutoff]))
+    .filter((b) => !b.fail_count || Date.now() - Date.parse(b.last_scan) > Math.min(b.fail_count, 6) * staleHours * 36e5)
+    .slice(0, limit);
   const stats = { boards: boards.length, ok: 0, failed: 0, created: 0, qualified: 0, expired: 0 };
 
   await pool(boards, 6, async (b) => {
@@ -62,13 +65,18 @@ export async function scanBoards(db, settings, { limit = 400, staleHours = 1.5, 
       if (!r?.provider) throw new Error(r?.error ?? 'no provider for this careers URL');
       const jobs = await r.provider.fetch(entry, ctx);
       const relevant = jobs.filter((j) => maybeIndia(j.location, settings)).map((j) => ({ ...j, company: b.name }));
-      const { rest } = await touchKnown(db, relevant);
+      const { rest, seen } = await touchKnown(db, relevant);
       for (const j of rest) {
         const res = await upsertJob(db, j, { source: r.provider.id, ats: r.provider.id, boardId: b.id, settings });
-        if (res?.created) stats.created++;
-        if (res?.changed && res.status === 'qualified') stats.qualified++;
+        if (!res) continue;
+        seen.add(res.id);
+        if (res.duplicateOf) seen.add(res.duplicateOf);
+        if (res.created) stats.created++;
+        if (res.changed && res.status === 'qualified') stats.qualified++;
       }
-      stats.expired += await expireMissing(db, b.id, started);
+      // Closed means "the employer no longer lists it", independent of our relevance filter.
+      for (const j of jobs) if (j.url) seen.add(jobId(canonicalUrl(j.url)));
+      stats.expired += await expireMissing(db, b.id, seen);
       await run(db, `UPDATE boards SET last_scan = ?, last_ok = ?, fail_count = 0, last_error = NULL, jobs_seen = ? WHERE id = ?`,
         [started, started, jobs.length, b.id]);
       stats.ok++;
@@ -113,7 +121,7 @@ export async function sweepAggregator(db, settings, { fetchImpl = fetch, minHour
     return { skipped: true, reason: 'dataset unchanged' };
   }
   const stats = { chunks: 0, india: 0, matched: 0, created: 0, boardsAdded: 0 };
-  const sweepStarted = now();
+  const seenAll = new Set();
   const knownBoards = new Set((await all(db, 'SELECT id FROM boards')).map((b) => b.id));
   for (let i = 0; ; i++) {
     const res = await fetchImpl(`${AGGREGATOR}/chunks/jobs_chunk_${i}.json.gz`);
@@ -141,14 +149,18 @@ export async function sweepAggregator(db, settings, { fetchImpl = fetch, minHour
         stats.boardsAdded++;
       }
     }
-    const { rest } = await touchKnown(db, matched);
+    const { rest, seen } = await touchKnown(db, matched);
+    for (const id of seen) seenAll.add(id);
     for (const m of rest) {
       const out = await upsertJob(db, m, { source: 'aggregator', ats: m.ats, boardId: m.boardUrl ? boardIdFor(m.boardUrl) : null, settings });
-      if (out?.created) stats.created++;
+      if (!out) continue;
+      seenAll.add(out.id);
+      if (out.duplicateOf) seenAll.add(out.duplicateOf);
+      if (out.created) stats.created++;
     }
   }
-  // Board-less aggregator rows (e.g. iCIMS) expire when a complete sweep no longer lists them.
-  stats.expired = await expireMissing(db, null, sweepStarted);
+  // Aggregator rows no employer board vouches for expire when a complete sweep no longer lists them.
+  stats.expired = await expireMissing(db, null, seenAll);
   await kvSet(db, 'aggregator:last_sweep', now());
   await kvSet(db, 'aggregator:dataset_version', meta.last_updated ?? null);
   return stats;
