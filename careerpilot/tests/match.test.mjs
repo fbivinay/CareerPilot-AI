@@ -80,7 +80,7 @@ test('locations: India only, with aliases and no false friends', () => {
 });
 
 test('qualifies a Bengaluru fresher role with disclosed pay', () => {
-  const r = evaluateJob(job({ description: 'Freshers. CTC 8-10 LPA.' }), S);
+  const r = evaluateJob(job({ description: 'Freshers from the 2027 batch. CTC 8-10 LPA.' }), S);
   assert.equal(r.status, 'qualified');
   assert.equal(r.confidence, 'high');
   assert.ok(r.score >= 80);

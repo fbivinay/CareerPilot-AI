@@ -73,7 +73,7 @@ const commands = {
     await vaultPut(db, 'resume.pdf', pdf);
     const unknown = Object.entries(profile.answers ?? {}).filter(([, v]) => v == null).map(([k]) => k);
     console.log(`Encrypted profile and resume (${Math.round(pdf.length / 1024)} KB) stored in ${process.env.TURSO_DATABASE_URL ? 'Turso' : 'the local database'}.`);
-    if (unknown.length) console.log(`Unanswered (applications needing them stay Blocked): ${unknown.join(', ')}`);
+    if (unknown.length) console.log(`Not provided (left blank; forms asking for them are filled by you): ${unknown.join(', ')}`);
   },
   github() {
     const repo = repoSlug();

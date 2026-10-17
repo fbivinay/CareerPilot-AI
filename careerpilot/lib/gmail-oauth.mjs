@@ -65,14 +65,28 @@ const sameString = (a, b) => {
   return x.length === y.length && x.length > 0 && timingSafeEqual(x, y);
 };
 
-// Handles Google's redirect back. Returns {ok, error?, email?, scopes?}.
+// Failures are reported as fixed codes; only these built-in messages are ever shown, so nothing from
+// a URL is reflected into the page.
+export const CONNECT_ERRORS = {
+  declined: 'You declined the permission request.',
+  google_error: 'Google returned an error. Please try again.',
+  expired: 'The sign-in session expired. Click Connect again.',
+  state_mismatch: 'Security check failed. Click Connect again.',
+  no_code: 'Google did not return an authorization code. Please try again.',
+  exchange_failed: 'Google rejected the authorization. Try again; if it repeats, check the OAuth client settings in SETUP.md.',
+  no_read_scope: 'Read access was not granted. Tick the "read your email" box on the consent screen.',
+  no_refresh_token: 'Google did not issue a long-lived token. Remove CareerPilot at myaccount.google.com/permissions and connect again.',
+};
+const fail = (code) => ({ ok: false, code, error: CONNECT_ERRORS[code] });
+
+// Handles Google's redirect back. Returns {ok, code?, error?, email?, scopes?}.
 export async function completeAuthorization(db, { query, cookie, env = process.env, fetchImpl = fetch }) {
-  if (query.error) return { ok: false, error: query.error === 'access_denied' ? 'You declined the permission request.' : `Google returned: ${query.error}` };
+  if (query.error) return fail(query.error === 'access_denied' ? 'declined' : 'google_error');
   let saved;
-  try { saved = JSON.parse(decrypt(cookie, env).toString('utf8')); } catch { return { ok: false, error: 'The sign-in session expired. Click Connect again.' }; }
-  if (!saved || saved.exp < Date.now()) return { ok: false, error: 'The sign-in session expired. Click Connect again.' };
-  if (!sameString(saved.state, query.state)) return { ok: false, error: 'Security check failed (state mismatch). Click Connect again.' };
-  if (!query.code) return { ok: false, error: 'Google did not return an authorization code.' };
+  try { saved = JSON.parse(decrypt(cookie, env).toString('utf8')); } catch { return fail('expired'); }
+  if (!saved || saved.exp < Date.now()) return fail('expired');
+  if (!sameString(saved.state, query.state)) return fail('state_mismatch');
+  if (!query.code) return fail('no_code');
   const client = oauthClient(env);
   const res = await fetchImpl('https://oauth2.googleapis.com/token', {
     method: 'POST',
@@ -81,10 +95,10 @@ export async function completeAuthorization(db, { query, cookie, env = process.e
       redirect_uri: saved.redirectUri, grant_type: 'authorization_code', code_verifier: saved.verifier }),
   });
   const tokens = await res.json();
-  if (!res.ok) return { ok: false, error: `Google rejected the authorization (${tokens.error ?? res.status}).` };
+  if (!res.ok) return fail('exchange_failed');
   const scopes = String(tokens.scope ?? '').split(' ').filter(Boolean);
-  if (!scopes.includes(READ_SCOPE)) return { ok: false, error: 'Read access was not granted. Tick the "read your email" box on the consent screen.' };
-  if (!tokens.refresh_token) return { ok: false, error: 'Google did not issue a long-lived token. Remove CareerPilot at myaccount.google.com/permissions and connect again.' };
+  if (!scopes.includes(READ_SCOPE)) return fail('no_read_scope');
+  if (!tokens.refresh_token) return fail('no_refresh_token');
   const profile = await (await fetchImpl('https://gmail.googleapis.com/gmail/v1/users/me/profile', {
     headers: { authorization: `Bearer ${tokens.access_token}` },
   })).json();

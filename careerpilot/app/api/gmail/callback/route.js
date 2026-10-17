@@ -14,11 +14,11 @@ export async function GET(request) {
     cookie: request.cookies.get(OAUTH_COOKIE)?.value ?? '',
   });
   await audit(db, 'gmail', 'connection', result.ok ? 'connected' : 'connect_failed', {
-    detail: result.ok ? { scopes: result.scopes } : { error: result.error },
+    detail: result.ok ? { scopes: result.scopes } : { code: result.code },
   });
   const target = new URL(`${origin}/settings#gmail`);
   if (result.ok) target.searchParams.set('gmail', result.sendRequested ? (result.sendGranted ? 'send-enabled' : 'send-declined') : 'connected');
-  else target.searchParams.set('gmail_error', result.error);
+  else target.searchParams.set('gmail_error', result.code);
   const res = NextResponse.redirect(target);
   res.cookies.set(OAUTH_COOKIE, '', { httpOnly: true, path: '/api/gmail', maxAge: 0 });
   return res;

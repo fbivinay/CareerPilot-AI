@@ -2,7 +2,7 @@
 // compensation. Every decision carries a human-readable reason.
 
 // Bump when rules change so stored jobs are re-evaluated on the next run.
-export const RULES_VERSION = 4;
+export const RULES_VERSION = 5;
 
 // An AI fit score below this excludes a rule-qualified job (shown with its reason, reversible in the dashboard).
 export const AI_EXCLUDE_BELOW = 25;
@@ -48,7 +48,8 @@ const MID_TITLE = /\b(ii|2|mid[\s-]?level)\b/;
 // Strong entry-level signals override seniority words; 'associate' alone does not ("Senior Associate" is 2-5 years).
 const JUNIOR_TITLE = /\b(junior|jr\.?|intern(ship)?|trainee|graduate|new grad|fresher|entry[\s-]?level|apprentice|campus|early career|0-1|0 ?- ?2)\b/;
 const ASSOCIATE_TITLE = /\b(associate|analyst i|engineer i|scientist i)\b/;
-const INTERN_TITLE = /\b(intern(ship)?|trainee|apprentice|co-?op)\b/;
+// "Trainee" roles in India are usually full-time entry jobs, so they are judged on CTC, not stipend.
+const INTERN_TITLE = /\b(intern(ship)?|apprentice(ship)?|co-?op)\b/;
 
 const lower = (s) => String(s ?? '').toLowerCase();
 
@@ -185,6 +186,35 @@ export function fingerprint({ company, title, location }) {
   return [lower(company).replace(/[^a-z0-9]+/g, ''), normalizeTitle(title), city].join('|');
 }
 
+// Timeline fit for a candidate who is studying until graduation (settings.timeline):
+// internships are available now; full-time roles fit only if they hire the graduating batch or
+// final-year students. Joining full-time before graduation is never assumed.
+const CONVERSION_RE = /\b(ppo|pre-?placement offer|full[- ]time conversion|convert(ed)? (in)?to (a )?full[- ]time|conversion to (a )?full[- ]time|return offer)\b/;
+const FLEXIBLE_RE = /\b(part[- ]time|remote|work from home|wfh|flexible (hours|schedule|timings?))\b/;
+const IMMEDIATE_RE = /\b(immediate joiners?|immediate joining|join(ing)? immediately|immediately available|available to join immediately|(must|should|able to) join (immediately|within \d+ (days|weeks)))\b/;
+
+export function timelineFit(job, type, tl) {
+  if (!tl) return { points: 0, reasons: [] };
+  const d = lower(`${job.title}\n${job.description ?? ''}`).replace(/[–—]/g, '-');
+  const y = tl.graduationYear;
+  const when = `${['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][tl.graduationMonth] ?? ''} ${y}`.trim();
+  if (type === 'internship') {
+    const out = { points: 5, reasons: ['Internship: available now, before graduation (+5)'] };
+    if (CONVERSION_RE.test(d)) { out.points += 5; out.reasons.push('Mentions full-time conversion / PPO (+5)'); }
+    if (FLEXIBLE_RE.test(d)) { out.points += 3; out.reasons.push('Part-time, remote or flexible: easier alongside the MSc (+3)'); }
+    return out;
+  }
+  if (type !== 'full_time') return { points: 0, reasons: [] };
+  const compatible = new RegExp(`\\b(${y} (batch|graduates?|pass[- ]?outs?|grads?)|batch (of )?${y}|class of ${y}|graduating (in )?${y}|(expected|anticipated|due) to graduate[^.]{0,30}${y}|final[- ]year students?|pre-?final[- ]year|students (graduating|in their final year)|(start|join)(ing)? (date )?(in |from )?(\\w+ )?${y})\\b`);
+  if (compatible.test(d)) return { points: 10, reasons: [`Open to ${y} graduates / final-year students (+10)`] };
+  if (IMMEDIATE_RE.test(d)) return { excluded: true, reason: `Requires immediate joining; you can join full-time after your MSc (${when})` };
+  const earlier = d.match(/\b(20[12]\d) (batch|graduates?|pass[- ]?outs?)|batch (?:of )?(20[12]\d)|(?:graduated|passed out) in (20[12]\d)\b/);
+  const earlierYear = earlier && Number(earlier[1] ?? earlier[3] ?? earlier[4]);
+  if (earlierYear && earlierYear < y) return { excluded: true, reason: `For ${earlierYear}-or-earlier graduates; you graduate in ${when}` };
+  return { points: -5, uncertain: true,
+    reasons: [`Start date not stated: you can join full-time after your MSc (${when}) unless the employer allows earlier (-5)`] };
+}
+
 // Full evaluation. Returns fields to persist on the job row.
 export function evaluateJob(job, settings) {
   const reasons = [];
@@ -211,6 +241,12 @@ export function evaluateJob(job, settings) {
 
   if (type === 'internship' && !settings.matching.includeInternships) return result('excluded', 'Internships disabled in settings');
   if (type === 'contract') { score -= 10; reasons.push('Contract role (-10)'); }
+
+  const timeline = timelineFit(job, type, settings.timeline);
+  if (timeline.excluded) return result('excluded', timeline.reason);
+  score += timeline.points;
+  if (timeline.uncertain) confidence = 'low';
+  reasons.push(...timeline.reasons);
 
   const t = lower(job.title);
   if (SENIOR_TITLE.test(t) && !JUNIOR_TITLE.test(t)) return result('excluded', 'Senior-level title');

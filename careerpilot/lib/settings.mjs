@@ -12,6 +12,9 @@ export const DEFAULT_SETTINGS = {
     maxExperienceYears: 1,        // exclude when the JD's minimum exceeds this
     includeInternships: true,
   },
+  // Studying until graduation: internships now; full-time only for roles that hire the graduating
+  // batch or final-year students. Joining full-time earlier is never assumed.
+  timeline: { graduationYear: 2027, graduationMonth: 6 },
   locations: {
     // Ordered by preference; anything outside India is excluded.
     primary: ['bengaluru', 'bangalore'],

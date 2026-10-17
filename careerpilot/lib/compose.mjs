@@ -30,6 +30,25 @@ export function signature(profile) {
   return [profile.name, profile.phone, profile.links?.linkedin, profile.links?.github, profile.links?.portfolio].filter(Boolean).join('\n');
 }
 
+const longDate = (v) => {
+  const d = new Date(v instanceof Date ? v : String(v));
+  return Number.isNaN(d.getTime()) || !/\d{4}-\d{2}-\d{2}/.test(v instanceof Date ? d.toISOString() : String(v)) ? String(v)
+    : d.toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
+};
+
+// Availability exactly as the candidate stated it in their profile answers; nothing is assumed.
+export function availabilityLine(profile, job) {
+  const a = profile.answers ?? {};
+  if (job.employment_type === 'internship' && a.internship_available_from) {
+    return `I am available for an internship from ${longDate(a.internship_available_from)}.`;
+  }
+  if (job.employment_type !== 'internship' && a.earliest_full_time_start) {
+    const s = String(a.earliest_full_time_start);
+    return /^after\b/i.test(s) ? `I can join full-time ${s[0].toLowerCase()}${s.slice(1)}.` : `I can join full-time from ${longDate(s)}.`;
+  }
+  return '';
+}
+
 export function templateEmail({ profile, job, kind, contactName }) {
   const hello = contactName ? `Hi ${contactName.split(' ')[0]},` : 'Hello,';
   const subject = kind === 'application' ? `Application: ${job.title} – ${profile.name}` : `${job.title} at ${job.company} – ${profile.name}`;
@@ -38,7 +57,7 @@ export function templateEmail({ profile, job, kind, contactName }) {
     : `I came across the ${job.title} role at ${job.company} and wanted to reach out directly to express my interest.`;
   const body = [
     hello, '',
-    `${intro} I am currently pursuing an ${graduation(profile)}, focused on data, machine learning and AI.`, '',
+    `${intro} I am currently pursuing an ${graduation(profile)}, focused on data, machine learning and AI. ${availabilityLine(profile, job)}`.trim(), '',
     'A few things relevant to this role:',
     ...relevantHighlights(profile, `${job.title} ${job.description ?? ''}`).map((h) => `- ${h}`), '',
     'My resume is attached. I would be glad to share more or speak at a time that suits you.', '',
@@ -72,7 +91,7 @@ export async function composeEmail(db, { profile, job, kind, contactName }, sett
       ].join(' '),
       user: `KIND: ${kind === 'application' ? 'application sent to the employer-published application address' : 'introduction to a recruiter'}\n` +
         `RECIPIENT NAME: ${contactName ?? 'unknown (use a neutral greeting)'}\n\nJOB: ${job.title} at ${job.company}, ${job.location}\n${(job.description ?? '').slice(0, 3500)}\n\n` +
-        `CANDIDATE FACTS:\nName: ${profile.name}\n${profileFacts(profile)}`,
+        `CANDIDATE FACTS:\nName: ${profile.name}\n${profileFacts(profile)}\nAvailability (state exactly this, nothing else): ${availabilityLine(profile, job) || 'not stated'}`,
       shape: { subject: 'string', body: 'string' },
       maxTokens: 600,
     }, { settings });

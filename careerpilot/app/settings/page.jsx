@@ -3,7 +3,7 @@ import { getSettings } from '@/lib/settings.mjs';
 import { systemStatus } from '@/lib/queries.mjs';
 import { Card, KV, PageHeader, fmtDateTime } from '../_ui/kit.jsx';
 import { updateSettings } from '../actions.js';
-import { connectionStatus } from '@/lib/gmail-oauth.mjs';
+import { CONNECT_ERRORS, connectionStatus } from '@/lib/gmail-oauth.mjs';
 import { GmailPanel } from './gmail-panel.jsx';
 
 export const dynamic = 'force-dynamic';
@@ -37,7 +37,7 @@ export default async function Settings({ searchParams }) {
       <PageHeader title="Settings" sub="Changes apply on the next scheduled run; stored jobs are re-scored automatically when rules change." />
       <div id="gmail" className="mb-4 scroll-mt-20">
         <Card title="Gmail">
-          <GmailPanel status={await connectionStatus(await getDb())} notice={gmailNotice} error={gmailError} />
+          <GmailPanel status={await connectionStatus(await getDb())} notice={gmailNotice} error={Object.hasOwn(CONNECT_ERRORS, gmailError ?? '') ? CONNECT_ERRORS[gmailError] : null} />
         </Card>
       </div>
       {saved && <p className="mb-4 rounded-md bg-good-soft px-3 py-2 text-sm text-good">Saved.</p>}

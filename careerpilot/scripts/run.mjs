@@ -34,7 +34,7 @@ const needsSending = (fn) => async (db, settings) => (gmail && gmailStatus.canSe
 const STAGES = {
   async discover(db, settings) {
     await seedCuratedBoards(db);
-    const rulesKey = JSON.stringify([RULES_VERSION, settings.compensation, settings.matching, settings.locations]);
+    const rulesKey = JSON.stringify([RULES_VERSION, settings.compensation, settings.matching, settings.locations, settings.timeline]);
     const rescored = rulesKey !== (await kvGet(db, 'rules:key')) ? await reevaluateAll(db, settings) : 0;
     await kvSet(db, 'rules:key', rulesKey);
     const aggregator = await sweepAggregator(db, settings);

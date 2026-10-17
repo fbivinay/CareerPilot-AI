@@ -14,8 +14,12 @@ const REQUIRED = {
   contract: ['indian_work_authorization'],
 };
 
+// YAML dates arrive as Date objects (or ISO strings after the encrypted round trip); forms want YYYY-MM-DD.
+const plain = (v) => (v instanceof Date ? v.toISOString().slice(0, 10)
+  : typeof v === 'string' && /^\d{4}-\d{2}-\d{2}T00:00:00(\.000)?Z$/.test(v) ? v.slice(0, 10) : v);
+
 export function answerPack(profile, job) {
-  const a = profile.answers ?? {};
+  const a = Object.fromEntries(Object.entries(profile.answers ?? {}).map(([k, v]) => [k, plain(v)]));
   const missing = (REQUIRED[job.employment_type] ?? []).filter((k) => a[k] == null || a[k] === '');
   return {
     missing,
@@ -49,7 +53,7 @@ export function nextStep(job, pack) {
 export async function prepareApplications(db, settings, { env = process.env } = {}) {
   const profile = await loadProfile(db, env);
   if (!profile) return { skipped: 'profile not imported' };
-  const stats = { ready: 0, blocked: 0, email: 0, unblocked: 0, reopened: 0 };
+  const stats = { ready: 0, blocked: 0, email: 0, unblocked: 0, reopened: 0, withdrawn: 0 };
 
   const jobs = await all(db, `SELECT j.* FROM jobs j LEFT JOIN applications a ON a.job_id = j.id
     WHERE j.status = 'qualified' AND a.id IS NULL AND j.score >= ? ORDER BY j.score DESC LIMIT 200`, [settings.matching.autoActionScore]);
@@ -61,6 +65,14 @@ export async function prepareApplications(db, settings, { env = process.env } = 
     await createApplication(db, job.id, { status: step.status, method: platform ? `platform:${platform}` : 'portal',
       resumeVersion: profile.resume?.version, blockedReason: step.reason });
     stats[step.status]++;
+  }
+
+  // Not-yet-submitted applications this stage prepared, for jobs that no longer qualify (rules or settings
+  // changed), are withdrawn with the reason. Applications you track yourself or that came from email stay.
+  const stale = await all(db, `SELECT a.*, j.exclusion_reason FROM applications a JOIN jobs j ON j.id = a.job_id
+    WHERE a.status IN ('ready', 'blocked', 'failed') AND j.status = 'excluded' AND a.method != 'manual' AND j.source NOT LIKE 'email%'`);
+  for (const app of stale) {
+    if (await transition(db, app, 'withdrawn', { reason: `No longer matches your criteria: ${app.exclusion_reason}`, by: 'system' })) stats.withdrawn++;
   }
 
   // Applications blocked on answers you have since provided, and ones whose posting reopened.

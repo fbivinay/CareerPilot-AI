@@ -107,7 +107,7 @@ test('callback rejects forged state, expired sessions, declined consent, missing
   const db = await openDb({ url: ':memory:' });
   const google = fakeGoogle();
   const { cookie } = startAuthorization({ mode: 'read', redirectUri, env });
-  assert.match((await completeAuthorization(db, { query: { code: 'c', state: 'forged' }, cookie, env, fetchImpl: google.fetchImpl })).error, /state mismatch/);
+  assert.equal((await completeAuthorization(db, { query: { code: 'c', state: 'forged' }, cookie, env, fetchImpl: google.fetchImpl })).code, 'state_mismatch');
   assert.match((await completeAuthorization(db, { query: { code: 'c', state: 'x' }, cookie: 'garbage', env, fetchImpl: google.fetchImpl })).error, /expired/);
   assert.match((await completeAuthorization(db, { query: { error: 'access_denied' }, cookie, env })).error, /declined/);
   assert.match((await connect(db, fakeGoogle({ grantedScope: 'openid' }))).error, /Read access was not granted/);
