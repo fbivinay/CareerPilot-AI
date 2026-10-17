@@ -7,7 +7,7 @@ import { loadProfile, profileFacts } from './profile.mjs';
 export { AI_EXCLUDE_BELOW } from './match.mjs';
 import { AI_EXCLUDE_BELOW } from './match.mjs';
 
-export async function aiScoreJobs(db, settings, { limit = 15, env = process.env } = {}) {
+export async function aiScoreJobs(db, settings, { limit = 15, env = process.env, deadline = Infinity } = {}) {
   const profile = await loadProfile(db, env);
   if (!profile) return { skipped: 'profile not imported' };
   const jobs = await all(db, `SELECT * FROM jobs WHERE status = 'qualified' AND ai_score IS NULL AND length(coalesce(description, '')) > 300
@@ -15,6 +15,7 @@ export async function aiScoreJobs(db, settings, { limit = 15, env = process.env 
   const stats = { scored: 0, excluded: 0, deferred: 0 };
   const facts = profileFacts(profile);
   for (const job of jobs) {
+    if (Date.now() > deadline) { stats.deferred = jobs.length - stats.scored; break; }
     let r;
     try {
       r = await aiJson(db, {
