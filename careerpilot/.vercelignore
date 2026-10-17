@@ -1,13 +1,7 @@
-# Upload only what the dashboard build needs. .env, private/ (profile, resume) and .data/ (local
-# database) must never leave this PC, so everything is excluded unless listed here.
-/*
-!/app
-!/lib
-!/config
-!/package.json
-!/package-lock.json
-!/next.config.mjs
-!/postcss.config.mjs
-!/jsconfig.json
-!/proxy.js
-!/vercel.json
+# Never upload secrets or personal data. Git deploys only see committed files anyway; these rules are for
+# a CLI deploy from this folder. Patterns without a leading slash match at any depth, so they behave the
+# same whether Vercel reads them from the repository root or from careerpilot/.
+.env
+.env.*
+private
+.data
