@@ -9,6 +9,7 @@ import { applyEvaluation } from '@/lib/evaluate.mjs';
 import { DEFAULT_SETTINGS, getSettings, saveSettings } from '@/lib/settings.mjs';
 import { addManualContact } from '@/lib/outreach.mjs';
 import { verifyPassword } from '@/lib/password.mjs';
+import { connectionStatus, disconnect, gmailClient, runReadTest } from '@/lib/gmail-oauth.mjs';
 
 const readOnly = () => process.env.DASHBOARD_READONLY === '1';
 
@@ -134,4 +135,36 @@ export async function updateSettings(formData) {
   await audit(db, 'settings', 'settings', 'updated', { detail: { at: now() } });
   revalidatePath('/', 'layout');
   redirect('/settings?saved=1');
+}
+
+// ── Gmail connection (connecting is account linking, so it works on the read-only deployment too) ──
+
+export async function runGmailReadTest() {
+  await requireSession({ write: false });
+  const db = await getDb();
+  const result = await runReadTest(db);
+  await audit(db, 'gmail', 'connection', result.ok ? 'read_test_passed' : 'read_test_failed', { detail: result.ok ? { fetched: result.fetched } : { error: result.error } });
+  revalidatePath('/settings');
+  return result;
+}
+
+export async function sendGmailSelfTest() {
+  await requireSession({ write: false });
+  const db = await getDb();
+  const status = await connectionStatus(db);
+  if (!status.canSend) return { ok: false, error: 'Sending is not enabled yet.' };
+  const gmail = await gmailClient(db);
+  const res = await gmail.send({ to: status.email, subject: 'CareerPilot: sending works',
+    text: `This is a test from your CareerPilot dashboard (${now()}). Sending is enabled for ${status.email}. No one else received this message.` });
+  await audit(db, 'gmail', 'connection', 'self_test_sent', { detail: { gmailId: res.id } });
+  return { ok: true, sentTo: status.email };
+}
+
+export async function disconnectGmail() {
+  await requireSession({ write: false });
+  const db = await getDb();
+  await disconnect(db);
+  await audit(db, 'gmail', 'connection', 'disconnected');
+  revalidatePath('/', 'layout');
+  redirect('/settings?gmail=disconnected#gmail');
 }

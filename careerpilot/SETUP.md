@@ -42,20 +42,45 @@ that need a missing answer stay *Blocked* rather than guessing. Then:
 npm run setup -- profile     # encrypts profile + private/master-resume.pdf into Turso
 ```
 
-## 4. Gmail (official API, OAuth)
+## 4. Gmail: one-time Google setup, then the Connect Gmail button
 
-1. https://console.cloud.google.com, signed in as **rvinaykumar6924@gmail.com** → create project `careerpilot` (no billing).
-2. APIs & Services → Library → **Gmail API** → Enable.
-3. Google Auth Platform → Branding: app name `CareerPilot`, support email = your Gmail.
-4. Audience: **External**; add yourself as a test user.
-5. Data access → Add scopes: `https://www.googleapis.com/auth/gmail.readonly` and `https://www.googleapis.com/auth/gmail.send`.
-6. Clients → Create client → **Desktop app** → copy Client ID / Client secret into `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`.
-7. Audience → **Publish app** (to "In production") and leave it unverified. While an app is in *Testing*,
-   Google expires its refresh tokens after 7 days, which would stop the cloud pipeline weekly.
-   A personal, unverified production app works for your own account; you will click through
-   "Google hasn't verified this app" once. If that is refused, stay in Testing and re-run step 8 weekly.
-8. `npm run gmail:auth -- --github` → consent in the browser. The refresh token is written to `.env`
-   and stored as the GitHub secret `GMAIL_REFRESH_TOKEN`, never printed.
+Google requires every app that reads Gmail to have its own OAuth client. For a personal app that
+means registering one in your own Google Cloud project, once (about 10 minutes). A shared
+"CareerPilot" client would need Google's paid security assessment for Gmail scopes, so it is not an
+option at ₹0.
+
+**A. Register the client (once)**, at https://console.cloud.google.com signed in as **rvinaykumar6924@gmail.com**:
+1. Create project `careerpilot` (no billing).
+2. https://console.cloud.google.com/apis/library/gmail.googleapis.com → **Enable**.
+3. https://console.cloud.google.com/auth/overview → **Get started**: app name `CareerPilot`, your email, Audience **External**.
+4. **Data Access** → Add scopes `.../auth/gmail.readonly` and `.../auth/gmail.send` → Save.
+5. **Audience** → Test users → add your Gmail. Then **Publish app** (see limitations below).
+6. **Clients** → Create client → **Web application**. Under *Authorized redirect URIs* add:
+   - `http://localhost:3000/api/gmail/callback`
+   - `http://127.0.0.1:3000/api/gmail/callback`
+   - later, your Vercel address: `https://<your-app>.vercel.app/api/gmail/callback`
+7. Copy the **Client ID** and **Client secret** shown into `careerpilot/.env` (Notepad), as
+   `GOOGLE_CLIENT_ID=...` and `GOOGLE_CLIENT_SECRET=...`. Never paste them into a chat.
+
+**B. Connect (any time, from the dashboard)**: `npm run dev`, open http://localhost:3000/settings:
+1. **Connect Gmail** → Google sign-in → "Google hasn't verified this app" → *Advanced* → *Go to CareerPilot* → allow reading email.
+2. **Run read-only test**: reads the last 14 days in memory and shows how mail was sorted; nothing is sent or stored except counts.
+3. **Enable sending** (only offered after step 2 passes) → allow "send email on your behalf".
+4. **Send a test email to myself** to confirm.
+
+The refresh token is encrypted with `APP_ENCRYPTION_KEY` and stored in the database (Turso), so the
+GitHub Actions pipeline reads mail and sends while your PC is off. `npm run setup -- github` copies
+`GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` and `APP_ENCRYPTION_KEY` to Actions; no token is ever a secret there.
+
+**Google's limits for a personal app (checked against Google's documentation):**
+- `gmail.readonly` is a *restricted* scope and `gmail.send` a *sensitive* one. Personal use (under 100 users)
+  is exempt from verification; you click through the unverified-app warning once.
+- Leave the app in **Testing** and refresh tokens expire after **7 days** (you would reconnect weekly).
+  **Publishing** it (In production, unverified) removes that expiry.
+- Access ends if you change your Google password, revoke it at myaccount.google.com/permissions, or the
+  token goes unused for 6 months. The dashboard then shows **Reconnect Gmail**; the pipeline pauses
+  Gmail stages until you do.
+- Consumer Gmail sends to about 500 recipients/day; CareerPilot's limits are far below that.
 
 ## 5. AI providers (optional, free)
 

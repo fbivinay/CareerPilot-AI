@@ -11,7 +11,8 @@ import { scanBoards, seedCuratedBoards, sweepAggregator } from '../lib/discover.
 import { reevaluateAll } from '../lib/jobs.mjs';
 import { RULES_VERSION } from '../lib/match.mjs';
 import { aiScoreJobs } from '../lib/ai-match.mjs';
-import { createGmail, gmailConfigured, GmailAuthError } from '../lib/gmail.mjs';
+import { GmailAuthError } from '../lib/gmail.mjs';
+import { connectionStatus, gmailClient, markAuthFailure } from '../lib/gmail-oauth.mjs';
 import { syncGmail } from '../lib/gmail-sync.mjs';
 import { prepareApplications, sendDigest } from '../lib/prepare.mjs';
 import { runOutreach } from '../lib/outreach.mjs';
@@ -22,8 +23,13 @@ if (existsSync(envFile)) process.loadEnvFile(envFile);
 
 const BUDGET_MS = Number(process.env.RUN_BUDGET_MINUTES ?? 7) * 60_000;
 const deadline = Date.now() + BUDGET_MS;
-const gmail = gmailConfigured() ? createGmail() : null;
-const needsGmail = (fn) => async (db, settings) => (gmail ? fn(db, settings) : { skipped: 'Gmail not authorized (npm run gmail:auth)' });
+let gmail = null;
+let gmailStatus = null;
+// Reading needs a connected mailbox; sending also needs the send permission and a passed read-only test.
+const needsGmail = (fn) => async (db, settings) => (gmail && gmailStatus.canRead ? fn(db, settings)
+  : { skipped: 'Gmail not connected (Settings → Gmail → Connect Gmail)' });
+const needsSending = (fn) => async (db, settings) => (gmail && gmailStatus.canSend ? fn(db, settings)
+  : { skipped: gmailStatus?.canRead ? 'Sending not enabled (Settings → Gmail: read-only test, then Enable sending)' : 'Gmail not connected' });
 
 const STAGES = {
   async discover(db, settings) {
@@ -37,10 +43,10 @@ const STAGES = {
     return { rescored, aggregator, boards };
   },
   ai: (db, settings) => aiScoreJobs(db, settings),
-  gmail: needsGmail((db, settings) => syncGmail(db, gmail, settings, { deadline: deadline - 90_000 })),
+  gmail: needsGmail((db, settings) => syncGmail(db, gmail, settings, { deadline: deadline - 90_000, selfAddress: gmailStatus.email })),
   prepare: (db, settings) => prepareApplications(db, settings),
-  outreach: needsGmail((db, settings) => runOutreach(db, gmail, settings, { deadline: deadline - 60_000 })),
-  digest: needsGmail((db, settings) => sendDigest(db, gmail, settings)),
+  outreach: needsSending((db, settings) => runOutreach(db, gmail, settings, { deadline: deadline - 60_000 })),
+  digest: needsSending((db, settings) => sendDigest(db, gmail, settings, { to: gmailStatus.email })),
 };
 
 async function main() {
@@ -48,6 +54,8 @@ async function main() {
   const names = which === 'all' ? Object.keys(STAGES) : which.split(',');
   const db = await getDb();
   const settings = await getSettings(db);
+  gmailStatus = await connectionStatus(db);
+  gmail = gmailStatus.canRead ? await gmailClient(db) : null;
   let failed = false;
   for (const name of names) {
     if (!STAGES[name]) throw new Error(`unknown stage: ${name}`);
@@ -59,7 +67,7 @@ async function main() {
       await kvSet(db, `run:${name}`, { ok: true, at: now(), ms: Date.now() - t0, result });
     } catch (err) {
       failed = true;
-      if (err instanceof GmailAuthError) await kvSet(db, 'gmail:status', { ok: false, at: now(), error: err.message });
+      if (err instanceof GmailAuthError) await markAuthFailure(db, err.message);
       log.error('stage failed', { stage: name, error: err.message, stack: err.stack?.split('\n').slice(0, 4).join(' | ') });
       await kvSet(db, `run:${name}`, { ok: false, at: now(), error: String(err.message).slice(0, 500) });
     }

@@ -19,7 +19,7 @@ if (existsSync(ENV_FILE)) process.loadEnvFile(ENV_FILE);
 
 // Secrets GitHub Actions needs. Dashboard-only values (password hash, session secret) go to Vercel instead.
 const ACTIONS_SECRETS = ['TURSO_DATABASE_URL', 'TURSO_AUTH_TOKEN', 'APP_ENCRYPTION_KEY', 'GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET',
-  'GMAIL_REFRESH_TOKEN', 'GMAIL_ADDRESS', 'GROQ_API_KEY', 'GEMINI_API_KEY', 'OPENROUTER_API_KEY'];
+  'GROQ_API_KEY', 'GEMINI_API_KEY', 'OPENROUTER_API_KEY'];
 const ALL = [...ACTIONS_SECRETS, 'SESSION_SECRET', 'DASHBOARD_PASSWORD_HASH'];
 
 // Line-based so values are written verbatim (no regex replacement patterns).

@@ -1,22 +1,27 @@
-// Gmail REST API client (official API, OAuth 2.0). Scopes requested by scripts/gmail-auth.mjs:
-//   gmail.readonly – read and classify messages and threads
-//   gmail.send     – send applications, outreach and replies (threaded via threadId)
+// Gmail REST API client (official API, OAuth 2.0). Authorization comes from the dashboard's
+// Connect Gmail button (lib/gmail-oauth.mjs), which grants, in two separate steps:
+//   gmail.readonly – read and classify messages and threads (restricted scope)
+//   gmail.send     – send applications, outreach and replies (sensitive scope), only after the
+//                    read-only test has passed
 // No modify/compose/full-mail scope is used.
-import { decodeEntities } from '../../providers/_html-entities.mjs';
 
-export const GMAIL_SCOPES = [
-  'https://www.googleapis.com/auth/gmail.readonly',
-  'https://www.googleapis.com/auth/gmail.send',
-];
+export const READ_SCOPE = 'https://www.googleapis.com/auth/gmail.readonly';
+export const SEND_SCOPE = 'https://www.googleapis.com/auth/gmail.send';
 const API = 'https://gmail.googleapis.com/gmail/v1/users/me';
 
 export class GmailAuthError extends Error {}
 
-export function gmailConfigured(env = process.env) {
-  return Boolean(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET && env.GMAIL_REFRESH_TOKEN);
+const NAMED = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', '#39': "'" };
+export function decodeEntities(s) {
+  return String(s ?? '').replace(/&(#x[0-9a-f]+|#\d+|[a-z]+\d*);/gi, (m, e) => {
+    if (NAMED[e.toLowerCase()]) return NAMED[e.toLowerCase()];
+    const code = e[0] === '#' ? (e[1].toLowerCase() === 'x' ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10)) : NaN;
+    return Number.isFinite(code) && code > 0 && code < 0x110000 ? String.fromCodePoint(code) : m;
+  });
 }
 
-export function createGmail({ env = process.env, fetchImpl = fetch } = {}) {
+// creds: {clientId, clientSecret, refreshToken}. onRefreshToken is called if Google ever rotates the token.
+export function createGmail({ clientId, clientSecret, refreshToken, fetchImpl = fetch, onRefreshToken = null }) {
   let token = null;
   let expires = 0;
 
@@ -25,16 +30,12 @@ export function createGmail({ env = process.env, fetchImpl = fetch } = {}) {
     const res = await fetchImpl('https://oauth2.googleapis.com/token', {
       method: 'POST',
       headers: { 'content-type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        client_id: env.GOOGLE_CLIENT_ID,
-        client_secret: env.GOOGLE_CLIENT_SECRET,
-        refresh_token: env.GMAIL_REFRESH_TOKEN,
-        grant_type: 'refresh_token',
-      }),
+      body: new URLSearchParams({ client_id: clientId, client_secret: clientSecret, refresh_token: refreshToken, grant_type: 'refresh_token' }),
     });
     const data = await res.json();
-    // invalid_grant = token revoked or expired (e.g. 7-day expiry while the OAuth app is in Testing mode).
-    if (!res.ok) throw new GmailAuthError(`Gmail authorization failed (${data.error ?? res.status}). Re-run: npm run gmail:auth`);
+    // invalid_grant = access revoked, Google password changed, or the 7-day expiry of an app left in Testing mode.
+    if (!res.ok) throw new GmailAuthError(`Gmail authorization failed (${data.error ?? res.status}). Reconnect Gmail in Settings.`);
+    if (data.refresh_token && data.refresh_token !== refreshToken && onRefreshToken) await onRefreshToken(data.refresh_token);
     token = data.access_token;
     expires = Date.now() + data.expires_in * 1000;
     return token;
@@ -51,7 +52,7 @@ export function createGmail({ env = process.env, fetchImpl = fetch } = {}) {
         await new Promise((r) => setTimeout(r, 1000 * 2 ** attempt));
         continue;
       }
-      if (res.status === 401) throw new GmailAuthError('Gmail rejected the access token. Re-run: npm run gmail:auth');
+      if (res.status === 401) throw new GmailAuthError('Gmail rejected the access token. Reconnect Gmail in Settings.');
       throw new Error(`Gmail API ${res.status}: ${(await res.text()).slice(0, 200)}`);
     }
   }

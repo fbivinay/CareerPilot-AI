@@ -3,6 +3,8 @@ import { getSettings } from '@/lib/settings.mjs';
 import { systemStatus } from '@/lib/queries.mjs';
 import { Card, KV, PageHeader, fmtDateTime } from '../_ui/kit.jsx';
 import { updateSettings } from '../actions.js';
+import { connectionStatus } from '@/lib/gmail-oauth.mjs';
+import { GmailPanel } from './gmail-panel.jsx';
 
 export const dynamic = 'force-dynamic';
 
@@ -26,13 +28,18 @@ function Toggle({ name, label, checked, hint }) {
 }
 
 export default async function Settings({ searchParams }) {
-  const { saved } = await searchParams;
+  const { saved, gmail: gmailNotice, gmail_error: gmailError } = await searchParams;
   const s = await getSettings(await getDb());
   const status = await systemStatus();
   const readOnly = process.env.DASHBOARD_READONLY === '1';
   return (
     <>
       <PageHeader title="Settings" sub="Changes apply on the next scheduled run; stored jobs are re-scored automatically when rules change." />
+      <div id="gmail" className="mb-4 scroll-mt-20">
+        <Card title="Gmail">
+          <GmailPanel status={await connectionStatus(await getDb())} notice={gmailNotice} error={gmailError} />
+        </Card>
+      </div>
       {saved && <p className="mb-4 rounded-md bg-good-soft px-3 py-2 text-sm text-good">Saved.</p>}
       {readOnly && <p className="mb-4 rounded-md bg-warn-soft px-3 py-2 text-sm text-warn">This deployment is read-only. Change settings from your local dashboard.</p>}
       <form action={updateSettings} className="grid gap-4 lg:grid-cols-2">

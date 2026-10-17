@@ -25,7 +25,7 @@ Your PC: setup, npm run apply:assist (portal prefill), local dashboard
 |---|---|---|
 | GitHub Actions (private repo, Free plan: 2,000 min/month) | All six stages every 2 h (~3 min each ≈ 1,100 min/month) | Minutes run out (resets monthly), GitHub delays/skips a scheduled run (catches up next run), secrets missing |
 | Turso free tier | Database for jobs, applications, emails metadata, outreach, audit log | Free quota exceeded (writes refused; nothing is billed without a paid plan) |
-| Gmail API | Read + send | Refresh token revoked/expired → dashboard shows the error; re-run `npm run gmail:auth` |
+| Gmail API | Read + send (send only after the read-only test) | Access revoked, Google password changed, or 6 months unused → dashboard shows **Reconnect Gmail** |
 | Groq / Gemini / OpenRouter free tiers | Fit scoring, ambiguous email classification, email drafting | Quota hit → provider paused until reset; drafting falls back to a fact-only template, scoring is queued |
 | Your PC | `apply:assist`, setup, local dashboard | Only when you use them |
 | Vercel Hobby | Read-only dashboard | Not deployed yet |
@@ -55,10 +55,9 @@ npm run setup -- keys                    # encryption key + session secret into 
 npm run setup -- password                # dashboard password (hidden prompt)
 # edit private/profile.yml (fill the null answers), then:
 npm run setup -- profile                 # encrypt profile + resume into the database
-npm run gmail:auth -- --github           # Google consent; token saved to .env and GitHub secrets
 npm run setup -- github                  # copy the remaining secrets to GitHub Actions
 npm run run -- all                       # one local run
-npm run dev                              # dashboard at http://127.0.0.1:3000
+npm run dev                              # dashboard at http://localhost:3000 → Settings → Connect Gmail
 npm test
 ```
 

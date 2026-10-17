@@ -79,11 +79,10 @@ export async function prepareApplications(db, settings, { env = process.env } = 
 }
 
 // Once a day, email the candidate a summary of what needs them. Uses the same gmail.send scope.
-export async function sendDigest(db, gmail, settings, { env = process.env } = {}) {
+export async function sendDigest(db, gmail, settings, { to, env = process.env } = {}) {
   const today = now().slice(0, 10);
   if ((await kvGet(db, 'digest:last')) === today) return { skipped: 'already sent today' };
-  const to = env.GMAIL_ADDRESS;
-  if (!to) return { skipped: 'GMAIL_ADDRESS not set' };
+  if (!to) return { skipped: 'connected mailbox unknown' };
   const ready = await all(db, `SELECT j.title, j.company, j.url, a.status, a.blocked_reason FROM applications a JOIN jobs j ON j.id = a.job_id
     WHERE a.status IN ('ready', 'blocked', 'failed') ORDER BY j.score DESC LIMIT 25`);
   const review = await all(db, `SELECT subject, from_addr, category FROM emails WHERE needs_review = 1 AND reviewed = 0 ORDER BY received_at DESC LIMIT 15`);
