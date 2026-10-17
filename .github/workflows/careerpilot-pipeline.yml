@@ -64,7 +64,7 @@ jobs:
           STAGES: ${{ inputs.stages || 'all' }}
         run: |
           if [ -z "$TURSO_DATABASE_URL" ]; then
-            echo "::error::TURSO_DATABASE_URL secret is not set; refusing to run against a throwaway database."
-            exit 1
+            echo "::notice::TURSO_DATABASE_URL secret is not set yet; skipping (see careerpilot/SETUP.md)."
+            exit 0
           fi
           node scripts/run.mjs "$STAGES"
