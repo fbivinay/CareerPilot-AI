@@ -54,7 +54,8 @@ option at ₹0.
 2. https://console.cloud.google.com/apis/library/gmail.googleapis.com → **Enable**.
 3. https://console.cloud.google.com/auth/overview → **Get started**: app name `CareerPilot`, your email, Audience **External**.
 4. **Data Access** → Add scopes `.../auth/gmail.readonly` and `.../auth/gmail.send` → Save.
-5. **Audience** → Test users → add your Gmail. Then **Publish app** (see limitations below).
+5. **Audience** → Test users → add your Gmail. Leave the app in **Testing** for now (see limitations below).
+   Do not upload a logo on the Branding page: that makes Google require verification.
 6. **Clients** → Create client → **Web application**. Under *Authorized redirect URIs* add:
    - `http://localhost:3000/api/gmail/callback`
    - `http://127.0.0.1:3000/api/gmail/callback`
@@ -63,7 +64,7 @@ option at ₹0.
    `GOOGLE_CLIENT_ID=...` and `GOOGLE_CLIENT_SECRET=...`. Never paste them into a chat.
 
 **B. Connect (any time, from the dashboard)**: `npm run dev`, open http://localhost:3000/settings:
-1. **Connect Gmail** → Google sign-in → "Google hasn't verified this app" → *Advanced* → *Go to CareerPilot* → allow reading email.
+1. **Connect Gmail** → Google sign-in → "Google hasn't verified this app" → *Continue* (or *Advanced* → *Go to CareerPilot*) → allow reading email.
 2. **Run read-only test**: reads the last 14 days in memory and shows how mail was sorted; nothing is sent or stored except counts.
 3. **Enable sending** (only offered after step 2 passes) → allow "send email on your behalf".
 4. **Send a test email to myself** to confirm.
@@ -75,8 +76,10 @@ GitHub Actions pipeline reads mail and sends while your PC is off. `npm run setu
 **Google's limits for a personal app (checked against Google's documentation):**
 - `gmail.readonly` is a *restricted* scope and `gmail.send` a *sensitive* one. Personal use (under 100 users)
   is exempt from verification; you click through the unverified-app warning once.
-- Leave the app in **Testing** and refresh tokens expire after **7 days** (you would reconnect weekly).
-  **Publishing** it (In production, unverified) removes that expiry.
+- In **Testing**, refresh tokens expire after **7 days**: the dashboard shows **Reconnect Gmail** and you
+  click it again. **Publishing** (In production, unverified) removes that expiry, but Google first requires a
+  public home page and privacy policy link on an authorized domain (Branding page). Add those when the
+  dashboard is deployed (its `*.vercel.app` domain is the authorized domain), then publish and reconnect once.
 - Access ends if you change your Google password, revoke it at myaccount.google.com/permissions, or the
   token goes unused for 6 months. The dashboard then shows **Reconnect Gmail**; the pipeline pauses
   Gmail stages until you do.
