@@ -14,30 +14,11 @@ import { getDb, all, one } from '../lib/db.mjs';
 import { transition } from '../lib/applications.mjs';
 import { loadProfile, loadResumePdf } from '../lib/profile.mjs';
 import { answerPack } from '../lib/prepare.mjs';
+import { CONFIRMATION, applyUrl, prefillPage } from '../lib/prefill.mjs';
 
 const envFile = path.resolve(import.meta.dirname, '..', '.env');
 if (existsSync(envFile)) process.loadEnvFile(envFile);
 const limit = Number(process.argv[process.argv.indexOf('--limit') + 1]) || 5;
-
-const CONFIRMATION = /thank(s| you) for (applying|your application)|application (has been |was )?(submitted|received)|we('ve| have) received your application|successfully (applied|submitted)/i;
-
-function applyUrl(url) {
-  const u = new URL(url);
-  if (u.hostname === 'jobs.lever.co' && !u.pathname.endsWith('/apply')) u.pathname = u.pathname.replace(/\/$/, '') + '/apply';
-  if (u.hostname === 'jobs.ashbyhq.com' && !u.pathname.endsWith('/application')) u.pathname = u.pathname.replace(/\/$/, '') + '/application';
-  return u.toString();
-}
-
-async function fill(page, labels, value) {
-  if (value == null || value === '') return false;
-  for (const re of labels) {
-    const field = page.getByLabel(re).first();
-    try {
-      if (await field.isVisible({ timeout: 500 }) && !(await field.inputValue())) { await field.fill(String(value)); return true; }
-    } catch { /* not on this form */ }
-  }
-  return false;
-}
 
 const db = await getDb();
 const profile = await loadProfile(db);
@@ -56,24 +37,12 @@ const context = await browser.newContext();
 
 try {
   for (const app of apps) {
-    const f = answerPack(profile, app).fields;
     const page = await context.newPage();
     console.log(`\n${app.title} at ${app.company}\n  ${app.url}`);
     await page.goto(applyUrl(app.url), { waitUntil: 'domcontentloaded' });
-    const filled = [
-      await fill(page, [/^first name/i, /first\s*name/i], f.first_name),
-      await fill(page, [/^last name/i, /last\s*name|surname/i], f.last_name),
-      await fill(page, [/^full name/i, /^name\b/i], profile.name),
-      await fill(page, [/^email/i, /e-?mail/i], f.email),
-      await fill(page, [/^phone/i, /phone|mobile/i], f.phone),
-      await fill(page, [/linkedin/i], f.linkedin),
-      await fill(page, [/github/i], f.github),
-      await fill(page, [/portfolio|website|personal site/i], f.portfolio),
-      await fill(page, [/current location|^location|city/i], f.location),
-    ].filter(Boolean).length;
-    const upload = page.locator('input[type=file]').first();
-    if (await upload.count()) await upload.setInputFiles(resumePath).catch(() => {});
-    console.log(`  Prefilled ${filled} fields and attached the resume. Review every answer, complete the rest, then press Submit yourself.`);
+    const { filled, resume: attached } = await prefillPage(page, answerPack(profile, app).fields, resumePath);
+    console.log(`  Prefilled: ${filled.join(', ') || 'nothing recognised'}${attached ? '; resume attached' : '; attach the resume yourself'}.`);
+    console.log('  Review every answer, complete the rest, then press Submit yourself. Close the tab to skip.');
 
     // Wait until the confirmation page appears or the tab is closed (skip).
     const outcome = await Promise.race([
