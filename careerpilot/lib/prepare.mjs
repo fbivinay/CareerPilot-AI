@@ -3,7 +3,7 @@
 //   'blocked' when an answer the form needs is unknown. Candidate-side submission on these portals
 //   needs the candidate (consent declarations, CAPTCHA, account login), so they are never auto-submitted.
 //   job-board alerts (LinkedIn, Naukri, ...) -> 'ready' for applying on that platform.
-import { all, kvGet, kvSet, now, run } from './db.mjs';
+import { all, audit, kvGet, kvSet, now, run } from './db.mjs';
 import { createApplication, transition } from './applications.mjs';
 import { applicationEmail } from './contacts.mjs';
 import { loadProfile } from './profile.mjs';
@@ -53,7 +53,7 @@ export function nextStep(job, pack) {
 export async function prepareApplications(db, settings, { env = process.env } = {}) {
   const profile = await loadProfile(db, env);
   if (!profile) return { skipped: 'profile not imported' };
-  const stats = { ready: 0, blocked: 0, email: 0, unblocked: 0, reopened: 0, withdrawn: 0 };
+  const stats = { ready: 0, blocked: 0, email: 0, unblocked: 0, reopened: 0, withdrawn: 0, reinstated: 0 };
 
   const jobs = await all(db, `SELECT j.* FROM jobs j LEFT JOIN applications a ON a.job_id = j.id
     WHERE j.status = 'qualified' AND a.id IS NULL AND j.score >= ? ORDER BY j.score DESC LIMIT 200`, [settings.matching.autoActionScore]);
@@ -73,6 +73,20 @@ export async function prepareApplications(db, settings, { env = process.env } = 
     WHERE a.status IN ('ready', 'blocked', 'failed') AND j.status = 'excluded' AND a.method != 'manual' AND j.source NOT LIKE 'email%'`);
   for (const app of stale) {
     if (await transition(db, app, 'withdrawn', { reason: `No longer matches your criteria: ${app.exclusion_reason}`, by: 'system' })) stats.withdrawn++;
+  }
+
+  // Applications this stage withdrew come back when their job qualifies again (rules or profile changed).
+  // Ones the candidate withdrew themselves stay withdrawn.
+  const back = await all(db, `SELECT a.*, j.employment_type, j.source FROM applications a JOIN jobs j ON j.id = a.job_id
+    WHERE a.status = 'withdrawn' AND j.status = 'qualified'
+      AND a.id IN (SELECT entity_id FROM events WHERE entity = 'application' AND to_status = 'withdrawn' AND detail LIKE '%"by":"system"%')
+      AND a.id NOT IN (SELECT entity_id FROM events WHERE entity = 'application' AND to_status = 'withdrawn' AND detail LIKE '%"by":"candidate"%')`);
+  for (const app of back) {
+    const step = nextStep(app, answerPack(profile, app));
+    await run(db, `UPDATE applications SET status = ?, blocked_reason = ?, updated_at = ? WHERE id = ? AND status = 'withdrawn'`,
+      [step.status, step.reason, now(), app.id]);
+    await audit(db, 'application', app.id, 'status', { from: 'withdrawn', to: step.status, detail: { reason: 'matches your criteria again', by: 'system' } });
+    stats.reinstated++;
   }
 
   // Applications blocked on answers you have since provided, and ones whose posting reopened.

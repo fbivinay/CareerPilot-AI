@@ -1,5 +1,7 @@
 // Defaults live in code; the dashboard Settings page stores overrides in kv('settings').
+// The candidate's timeline is derived from their (encrypted) profile, not stored here.
 import { kvGet, kvSet } from './db.mjs';
+import { loadProfile } from './profile.mjs';
 
 export const DEFAULT_SETTINGS = {
   compensation: {
@@ -12,9 +14,7 @@ export const DEFAULT_SETTINGS = {
     maxExperienceYears: 1,        // exclude when the JD's minimum exceeds this
     includeInternships: true,
   },
-  // Studying until graduation: internships now; full-time only for roles that hire the graduating
-  // batch or final-year students. Joining full-time earlier is never assumed.
-  timeline: { graduationYear: 2027, graduationMonth: 6 },
+  timeline: null, // filled from the profile by getSettings()
   locations: {
     // Ordered by preference; anything outside India is excluded.
     primary: ['bengaluru', 'bangalore'],
@@ -53,8 +53,33 @@ function merge(base, over) {
   return out;
 }
 
-export async function getSettings(db) {
-  return merge(DEFAULT_SETTINGS, await kvGet(db, 'settings', {}));
+export async function getSettings(db, env = process.env) {
+  const s = merge(DEFAULT_SETTINGS, await kvGet(db, 'settings', {}));
+  const profile = await loadProfile(db, env).catch(() => null);
+  s.timeline = profile ? timelineFromProfile(profile) : null;
+  return s;
+}
+
+const isoDate = (v) => {
+  if (v == null || v === '') return null;
+  const t = v instanceof Date ? v.toISOString() : String(v);
+  return /^\d{4}-\d{2}-\d{2}/.test(t) ? t.slice(0, 10) : null;
+};
+
+// When the candidate can start, and the graduating batches they belong to, exactly as the profile states.
+export function timelineFromProfile(profile, now = new Date()) {
+  const a = profile.answers ?? {};
+  const degrees = (profile.education ?? []).map((e) => {
+    const year = Number(String(e.dates ?? '').match(/(20\d\d)\s*$/)?.[1]);
+    return year ? { name: String(e.degree ?? '').split(/ in /i)[0], year, expected: year > now.getUTCFullYear() } : null;
+  }).filter(Boolean);
+  return {
+    // A written answer such as "after my MSc" is not a date, so no start date is assumed from it.
+    fullTimeFrom: a.earliest_full_time_start != null ? isoDate(a.earliest_full_time_start) : isoDate(a.earliest_joining_date),
+    internshipFrom: isoDate(a.internship_available_from) ?? isoDate(a.earliest_joining_date),
+    batchYears: degrees.map((d) => d.year),
+    degrees: degrees.map((d) => `${d.name} ${d.year}${d.expected ? ' (expected)' : ''}`).join(', '),
+  };
 }
 
 export async function saveSettings(db, overrides) {

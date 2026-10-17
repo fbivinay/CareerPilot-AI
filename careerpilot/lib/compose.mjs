@@ -43,8 +43,10 @@ export function availabilityLine(profile, job) {
     return `I am available for an internship from ${longDate(a.internship_available_from)}.`;
   }
   if (job.employment_type !== 'internship' && a.earliest_full_time_start) {
-    const s = String(a.earliest_full_time_start);
-    return /^after\b/i.test(s) ? `I can join full-time ${s[0].toLowerCase()}${s.slice(1)}.` : `I can join full-time from ${longDate(s)}.`;
+    const v = a.earliest_full_time_start;
+    if (v instanceof Date || /^\d{4}-\d{2}-\d{2}/.test(String(v))) return `I can join full-time from ${longDate(v)}.`;
+    const s = String(v);
+    return /^after\b/i.test(s) ? `I can join full-time ${s[0].toLowerCase()}${s.slice(1)}.` : `I can join full-time from ${s}.`;
   }
   return '';
 }

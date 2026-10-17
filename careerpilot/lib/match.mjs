@@ -2,7 +2,7 @@
 // compensation. Every decision carries a human-readable reason.
 
 // Bump when rules change so stored jobs are re-evaluated on the next run.
-export const RULES_VERSION = 5;
+export const RULES_VERSION = 6;
 
 // An AI fit score below this excludes a rule-qualified job (shown with its reason, reversible in the dashboard).
 export const AI_EXCLUDE_BELOW = 25;
@@ -186,33 +186,53 @@ export function fingerprint({ company, title, location }) {
   return [lower(company).replace(/[^a-z0-9]+/g, ''), normalizeTitle(title), city].join('|');
 }
 
-// Timeline fit for a candidate who is studying until graduation (settings.timeline):
-// internships are available now; full-time roles fit only if they hire the graduating batch or
-// final-year students. Joining full-time before graduation is never assumed.
+// Timeline fit (settings.timeline, derived from the candidate's profile answers and education):
+// when they can start, and which graduating batches they belong to (completed and expected degrees).
+// Nothing beyond what the profile states is assumed.
 const CONVERSION_RE = /\b(ppo|pre-?placement offer|full[- ]time conversion|convert(ed)? (in)?to (a )?full[- ]time|conversion to (a )?full[- ]time|return offer)\b/;
 const FLEXIBLE_RE = /\b(part[- ]time|remote|work from home|wfh|flexible (hours|schedule|timings?))\b/;
 const IMMEDIATE_RE = /\b(immediate joiners?|immediate joining|join(ing)? immediately|immediately available|available to join immediately|(must|should|able to) join (immediately|within \d+ (days|weeks)))\b/;
+const YEAR_LIST = String.raw`(?:20\d\d\s*(?:[/,&]|\band\b|\bor\b|-)\s*)*20\d\d`;
+const BATCH_RE = new RegExp(String.raw`\b(${YEAR_LIST})\s*(?:batch(?:es)?|pass[- ]?outs?|passing out|graduates?|grads?)\b|\bbatch(?:es)?\s*(?:of\s*)?(${YEAR_LIST})\b|\b(?:graduated|passed out|graduating)\s*(?:in\s*)?(20\d\d)\b`, 'g');
+const FINAL_YEAR_RE = /\b(final[- ]year students?|pre-?final[- ]year|students (graduating|in their final year))\b/;
 
-export function timelineFit(job, type, tl) {
+export function batchYears(text) {
+  const years = new Set();
+  for (const m of String(text).matchAll(BATCH_RE)) for (const y of (m[1] ?? m[2] ?? m[3] ?? '').match(/20\d\d/g) ?? []) years.add(Number(y));
+  return [...years];
+}
+
+const shortDate = (iso) => new Date(iso).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
+
+export function timelineFit(job, type, tl, now = Date.now()) {
   if (!tl) return { points: 0, reasons: [] };
   const d = lower(`${job.title}\n${job.description ?? ''}`).replace(/[–—]/g, '-');
-  const y = tl.graduationYear;
-  const when = `${['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][tl.graduationMonth] ?? ''} ${y}`.trim();
+  const out = { points: 0, reasons: [] };
+
+  // Batch restrictions: the candidate belongs to every batch in which they completed or will complete a degree.
+  const years = batchYears(d);
+  if (years.length) {
+    const mine = years.filter((y) => tl.batchYears.includes(y));
+    if (!mine.length) return { excluded: true, reason: `For ${years.join('/')} graduates; your degrees: ${tl.degrees}` };
+    out.points += 5;
+    out.reasons.push(`Open to the ${mine.join('/')} batch, which includes you (+5)`);
+  } else if (FINAL_YEAR_RE.test(d)) {
+    out.points += 5;
+    out.reasons.push('Open to final-year students (+5)');
+  }
+
+  // Start date: immediate joiners only fit when the candidate is free within about a month.
+  const from = type === 'internship' ? tl.internshipFrom : tl.fullTimeFrom;
+  if (IMMEDIATE_RE.test(d) && from) {
+    if ((Date.parse(from) - now) / 864e5 > 30) return { excluded: true, reason: `Requires immediate joining; you are available from ${shortDate(from)}` };
+    out.reasons.push(`Asks for immediate joiners; you can start ${shortDate(from)}`);
+  }
+
   if (type === 'internship') {
-    const out = { points: 5, reasons: ['Internship: available now, before graduation (+5)'] };
     if (CONVERSION_RE.test(d)) { out.points += 5; out.reasons.push('Mentions full-time conversion / PPO (+5)'); }
     if (FLEXIBLE_RE.test(d)) { out.points += 3; out.reasons.push('Part-time, remote or flexible: easier alongside the MSc (+3)'); }
-    return out;
   }
-  if (type !== 'full_time') return { points: 0, reasons: [] };
-  const compatible = new RegExp(`\\b(${y} (batch|graduates?|pass[- ]?outs?|grads?)|batch (of )?${y}|class of ${y}|graduating (in )?${y}|(expected|anticipated|due) to graduate[^.]{0,30}${y}|final[- ]year students?|pre-?final[- ]year|students (graduating|in their final year)|(start|join)(ing)? (date )?(in |from )?(\\w+ )?${y})\\b`);
-  if (compatible.test(d)) return { points: 10, reasons: [`Open to ${y} graduates / final-year students (+10)`] };
-  if (IMMEDIATE_RE.test(d)) return { excluded: true, reason: `Requires immediate joining; you can join full-time after your MSc (${when})` };
-  const earlier = d.match(/\b(20[12]\d) (batch|graduates?|pass[- ]?outs?)|batch (?:of )?(20[12]\d)|(?:graduated|passed out) in (20[12]\d)\b/);
-  const earlierYear = earlier && Number(earlier[1] ?? earlier[3] ?? earlier[4]);
-  if (earlierYear && earlierYear < y) return { excluded: true, reason: `For ${earlierYear}-or-earlier graduates; you graduate in ${when}` };
-  return { points: -5, uncertain: true,
-    reasons: [`Start date not stated: you can join full-time after your MSc (${when}) unless the employer allows earlier (-5)`] };
+  return out;
 }
 
 // Full evaluation. Returns fields to persist on the job row.
