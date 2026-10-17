@@ -317,6 +317,48 @@ export function chooseSplitFacet(facets, { exclude = [], locationHints } = {}) {
 }
 
 /**
+ * Filters that narrow a board to the places a caller wants (`ctx.locationFilter`,
+ * a RegExp), read from page 0's facets.
+ *
+ * Returns `{ appliedFacets }` for the best matching location facet — a country
+ * facet first, since one id covers every city, otherwise every matching location
+ * value — `{ none: true }` when a location facet covers the whole board and
+ * nothing in it matches (the board has no such postings), or null when the board
+ * cannot be narrowed and has to be crawled whole.
+ *
+ * Unlike chooseSplitFacet(), this descends into id-less group headers
+ * (`locationMainGroup`): a narrowing filter is applied, never summed, so the
+ * double counting that keeps the split out of them does not arise.
+ */
+export function locationNarrowing(facets, filter, total) {
+  const leaves = [];
+  const walk = (list) => {
+    for (const facet of Array.isArray(list) ? list : []) {
+      const values = Array.isArray(facet?.values) ? facet.values : [];
+      if (values.some((v) => Array.isArray(v?.values))) walk(values);
+      else if (typeof facet?.facetParameter === 'string' && facet.facetParameter && facetLooksLikeLocation(facet)) leaves.push(facet);
+    }
+  };
+  walk(facets);
+  let best = null;
+  for (const facet of leaves) {
+    // search() rather than test(): a /g filter would carry lastIndex from one value to the next.
+    const values = facet.values.filter((v) => typeof v?.id === 'string' && v.id && String(v.descriptor ?? '').search(filter) !== -1);
+    if (values.length === 0) continue;
+    const candidate = {
+      facetParameter: facet.facetParameter,
+      ids: values.map((v) => v.id),
+      count: values.reduce((n, v) => n + (Number.isInteger(v.count) ? v.count : 0), 0),
+      country: /country/i.test(`${facet.facetParameter} ${facet.descriptor ?? ''}`),
+    };
+    if (!best || (candidate.country && !best.country) || (candidate.country === best.country && candidate.count > best.count)) best = candidate;
+  }
+  if (best) return { appliedFacets: { [best.facetParameter]: best.ids } };
+  const complete = typeof total === 'number' && leaves.some((facet) => (facetCoverage(facet) ?? -1) >= total);
+  return complete ? { none: true } : null;
+}
+
+/**
  * True once a page's oldest unambiguously-dated posting is past the --since window.
  *
  * Undated postings are invisible here. A page of nothing but undated postings
@@ -946,9 +988,24 @@ export default {
       return { jobs, total, facets, stopReason, clamped };
     };
 
+    // ctx.locationFilter (a RegExp) narrows the crawl to the board's matching
+    // places through its own location facet, so a 12,000-posting tenant costs a
+    // few pages. A board whose location facet covers every posting without a
+    // match has none of them and is not crawled at all.
+    let narrowing = null;
     let root;
     try {
-      root = await runQuery({});
+      if (ctx?.locationFilter instanceof RegExp && ctxCap === Infinity) {
+        pagesSpent++;
+        const probe = await fetchJsonWithRetry(ctx, ep.api, { ...postOpts, body: makeBody(0, {}) }, RETRY_POLICY);
+        narrowing = locationNarrowing(probe?.facets, ctx.locationFilter, typeof probe?.total === 'number' ? probe.total : null);
+        if (narrowing?.none) {
+          const none = [];
+          none.workdayNarrowed = {};
+          return none;
+        }
+      }
+      root = await runQuery(narrowing?.appliedFacets ?? {});
     } catch (err) {
       if (CONFIRMED_DEAD_API_STATUSES.has(err.status) && await confirmDeadViaCareersPage(ep, ctx)) {
         const notFound = new Error(`workday: ${entry.name} confirmed dead (maintenance page)`);
@@ -1085,7 +1142,8 @@ export default {
         }
       };
 
-      await split(root, {}, 0, []);
+      const narrowed = narrowing?.appliedFacets ?? {};
+      await split(root, narrowed, 0, Object.keys(narrowed));
       jobs = out;
 
       // Distinct from the cap warning below: nothing about this tenant's entry
@@ -1243,6 +1301,9 @@ export default {
     // times, so tag the array instead; scan-ats-full.mjs aggregates it into
     // one summary line.
     if (stopReason === STOP_REASON.NO_DATE_SKIP) jobs.workdayNoDateSkip = true;
+    // Which facet filter limited the crawl, so a caller expiring postings that
+    // went missing only judges the places this crawl could have returned.
+    if (narrowing?.appliedFacets) jobs.workdayNarrowed = narrowing.appliedFacets;
     // 'fetch-error' means retries were exhausted mid-pagination while 19
     // other tenants were hammering the same uplink. scan-ats-full.mjs
     // collects tenants tagged 'transient' and retries them sequentially after

@@ -44,9 +44,26 @@ async function pool(items, size, fn) {
   }));
 }
 
+// The places the candidate looks in, for providers that can filter by location (Workday's location facet).
+export const placesFilter = (settings) => new RegExp(`\\b(${['india', ...settings.locations.primary, ...settings.locations.india]
+  .map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})\\b`, 'i');
+
+// A request refused because the run's time is up. The 499 status makes the providers' retry layer give up at once.
+class ScanDeadline extends Error { status = 499; }
+// This many transport failures in a row from one provider means the vendor itself is down (Workday redirects
+// every tenant to a maintenance page on weekends); its remaining boards wait for the next run.
+const OUTAGE_AFTER = 5;
+
 export async function scanBoards(db, settings, { limit = 400, staleHours = 5, deadline = Infinity } = {}) {
   const ps = await providers();
   const ctx = makeHttpCtx();
+  ctx.locationFilter = placesFilter(settings);
+  // Requests stop at the deadline even inside a board, so one large board cannot overrun the run.
+  for (const m of ['fetchJson', 'fetchText', 'fetchResponse']) {
+    const original = ctx[m];
+    ctx[m] = (url, opts) => (Date.now() > deadline ? Promise.reject(new ScanDeadline('scan time budget reached')) : original(url, opts));
+  }
+  const outage = new Map(); // provider id -> transport failures in a row this run
   const cutoff = new Date(Date.now() - staleHours * 36e5).toISOString();
   // Least-recently scanned first, so a time-boxed run rotates through every board. A failing board backs
   // off (retried after fail_count x staleHours, at most 6x), so outages do not eat every run's time.
@@ -60,11 +77,18 @@ export async function scanBoards(db, settings, { limit = 400, staleHours = 5, de
     if (Date.now() > deadline) return;
     const entry = { name: b.name, careers_url: b.careers_url };
     const started = now();
+    const r = resolveProvider(entry, ps);
+    const vendor = r?.provider?.id;
+    if ((outage.get(vendor) ?? 0) >= OUTAGE_AFTER) { stats.deferred = (stats.deferred ?? 0) + 1; return; }
     try {
-      const r = resolveProvider(entry, ps);
       if (!r?.provider) throw new Error(r?.error ?? 'no provider for this careers URL');
       const jobs = await r.provider.fetch(entry, ctx);
-      const relevant = jobs.filter((j) => maybeIndia(j.location, settings)).map((j) => ({ ...j, company: b.name }));
+      outage.set(vendor, 0);
+      // A location-filtered crawl returns only postings the employer files under an Indian place; say so
+      // where the posting's own label does not ("Ind – Blr Sez 1", "2 Locations").
+      const inIndia = (j) => (jobs.workdayNarrowed && String(j.location ?? '').search(ctx.locationFilter) === -1
+        ? { ...j, location: j.location ? `${j.location}, India` : 'India' } : j);
+      const relevant = jobs.map(inIndia).filter((j) => maybeIndia(j.location, settings)).map((j) => ({ ...j, company: b.name }));
       const { rest, seen } = await touchKnown(db, relevant);
       for (const j of rest) {
         const res = await upsertJob(db, j, { source: r.provider.id, ats: r.provider.id, boardId: b.id, settings });
@@ -74,21 +98,34 @@ export async function scanBoards(db, settings, { limit = 400, staleHours = 5, de
         if (res.created) stats.created++;
         if (res.changed && res.status === 'qualified') stats.qualified++;
       }
-      // Closed means "the employer no longer lists it", independent of our relevance filter.
+      // Closed means "the employer no longer lists it", independent of our relevance filter. A partial
+      // list (pagination cut short, or the run's time ran out) proves nothing about what is missing.
       for (const j of jobs) if (j.url) seen.add(jobId(canonicalUrl(j.url)));
-      stats.expired += await expireMissing(db, b.id, seen);
-      await run(db, `UPDATE boards SET last_scan = ?, last_ok = ?, fail_count = 0, last_error = NULL, jobs_seen = ? WHERE id = ?`,
-        [started, started, jobs.length, b.id]);
+      const cut = Date.now() > deadline;
+      if (!jobs.workdayTruncated && !cut) {
+        stats.expired += await expireMissing(db, b.id, seen, jobs.workdayNarrowed ? { places: ctx.locationFilter } : {});
+      }
+      // A board the deadline cut keeps its old last_scan, so it is first in line next run.
+      if (cut) await run(db, 'UPDATE boards SET jobs_seen = ? WHERE id = ?', [jobs.length, b.id]);
+      else {
+        await run(db, `UPDATE boards SET last_scan = ?, last_ok = ?, fail_count = 0, last_error = NULL, jobs_seen = ? WHERE id = ?`,
+          [started, started, jobs.length, b.id]);
+      }
       stats.ok++;
     } catch (err) {
+      if (err instanceof ScanDeadline) return; // not the board's fault; it is first in line next run
+      if (err.status === undefined) outage.set(vendor, (outage.get(vendor) ?? 0) + 1);
       const fails = b.fail_count + 1;
-      // Only a board that is repeatedly gone (404/410) is disabled. Network errors and vendor
-      // maintenance pages (Workday redirects to an outage page on weekends) are transient.
-      const gone = /HTTP (404|410)/.test(err.message);
+      // "fetch failed" alone hides the reason; the cause says it ("unexpected redirect" = maintenance page).
+      const error = err.cause?.message ? `${err.message}: ${err.cause.message}` : err.message;
+      // Only a board that is repeatedly gone is disabled: 404/410 three times, or redirected away for days
+      // (scans back off, so the sixth redirect comes ~3 days after the first, past any weekend maintenance).
+      // Other network errors and vendor maintenance pages are transient.
+      const gone = (/HTTP (404|410)/.test(error) && fails >= 3) || (/unexpected redirect/.test(error) && fails >= 6);
       await run(db, `UPDATE boards SET last_scan = ?, fail_count = ?, last_error = ?, enabled = ? WHERE id = ?`,
-        [started, fails, String(err.message).slice(0, 300), gone && fails >= 3 ? 0 : 1, b.id]);
+        [started, fails, error.slice(0, 300), gone ? 0 : 1, b.id]);
       stats.failed++;
-      log.warn('board scan failed', { board: b.id, error: err.message });
+      log.warn('board scan failed', { board: b.id, error });
     }
   });
   return stats;

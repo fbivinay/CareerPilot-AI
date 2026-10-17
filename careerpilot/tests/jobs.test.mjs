@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { all, one, openDb, run } from '../lib/db.mjs';
 import { expireMissing, touchKnown, upsertJob } from '../lib/jobs.mjs';
-import { boardFromPostingUrl } from '../lib/discover.mjs';
+import { boardFromPostingUrl, placesFilter } from '../lib/discover.mjs';
+import { locationNarrowing } from '../../providers/workday.mjs';
 import { createApplication } from '../lib/applications.mjs';
 import { DEFAULT_SETTINGS as settings } from '../lib/settings.mjs';
 
@@ -84,4 +85,33 @@ test('aggregator posting URLs map to scannable boards', () => {
   assert.equal(boardFromPostingUrl('https://jobs.lever.co/meesho/abc'), 'https://jobs.lever.co/meesho');
   assert.equal(boardFromPostingUrl('https://acme.wd3.myworkdayjobs.com/en-US/careers/job/x'), 'https://acme.wd3.myworkdayjobs.com/careers');
   assert.equal(boardFromPostingUrl('https://example.com/x'), null);
+});
+
+test('Workday boards are narrowed to Indian places through their own location facet', () => {
+  const india = placesFilter(settings);
+  const v = (descriptor, id, count) => ({ descriptor, id, count });
+  // A country facet nested under an id-less group header wins over city values.
+  const nested = [{ facetParameter: 'locationMainGroup', values: [
+    { facetParameter: 'locationCountry', descriptor: 'Country', values: [v('United States of America', 'us', 900), v('India', 'in', 40)] },
+    { facetParameter: 'locations', descriptor: 'Locations', values: [v('Bengaluru, Karnataka', 'blr', 30), v('Pune', 'pnq', 10), v('Austin, TX', 'aus', 900)] }] },
+  { facetParameter: 'jobFamilyGroup', descriptor: 'Job Family', values: [v('Engineering', 'eng', 940)] }];
+  assert.deepEqual(locationNarrowing(nested, india, 940), { appliedFacets: { locationCountry: ['in'] } });
+  // Only a city list: every Indian city is applied.
+  const cities = [{ facetParameter: 'locations', descriptor: 'Locations', values: [v('IND KA Bangalore - Campus', 'b', 5), v('Hyderabad, India', 'h', 3), v('London', 'l', 50)] }];
+  assert.deepEqual(locationNarrowing(cities, india, 58), { appliedFacets: { locations: ['b', 'h'] } });
+  // A location facet covering the whole board with nothing Indian: no Indian postings, no crawl.
+  const usOnly = [{ facetParameter: 'Location_Country', descriptor: 'Country', values: [v('United States of America', 'us', 81)] }];
+  assert.deepEqual(locationNarrowing(usOnly, india, 81), { none: true });
+  // A facet that misses part of the board, or no location facet at all: crawl the whole board.
+  assert.equal(locationNarrowing(usOnly, india, 120), null);
+  assert.equal(locationNarrowing([{ facetParameter: 'jobFamilyGroup', values: [v('Sales', 's', 10)] }], india, 10), null);
+});
+
+test('a location-filtered scan only expires jobs located in the filtered places', async () => {
+  const db = await openDb({ url: ':memory:' });
+  const blr = await upsertJob(db, posting({ url: 'https://acme.wd5.myworkdayjobs.com/ext/job/1' }), { source: 'workday', boardId: 'b1', settings });
+  const remote = await upsertJob(db, posting({ url: 'https://acme.wd5.myworkdayjobs.com/ext/job/2', title: 'Data Analyst', location: 'Remote' }), { source: 'workday', boardId: 'b1', settings });
+  assert.equal(await expireMissing(db, 'b1', new Set(), { places: placesFilter(settings) }), 1);
+  assert.equal((await one(db, 'SELECT status FROM jobs WHERE id = ?', [blr.id])).status, 'expired');
+  assert.notEqual((await one(db, 'SELECT status FROM jobs WHERE id = ?', [remote.id])).status, 'expired');
 });

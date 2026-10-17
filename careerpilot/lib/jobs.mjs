@@ -117,12 +117,14 @@ export async function touchKnown(db, postings) {
 // boardId null = aggregator rows after a complete aggregator sweep, for postings whose employer board
 // cannot vouch for them (no board, or a board that has never been scanned successfully).
 // Applications still waiting on the candidate move to 'expired' with the posting.
-export async function expireMissing(db, boardId, seen) {
+// `places`: the scan only covered postings in these places (a location-filtered crawl), so only jobs
+// located there can be judged missing.
+export async function expireMissing(db, boardId, seen, { places = null } = {}) {
   const rows = boardId == null
-    ? await all(db, `SELECT id, status FROM jobs WHERE source = 'aggregator' AND status NOT IN ('expired', 'duplicate')
+    ? await all(db, `SELECT id, status, location FROM jobs WHERE source = 'aggregator' AND status NOT IN ('expired', 'duplicate')
         AND (board_id IS NULL OR board_id IN (SELECT id FROM boards WHERE last_ok IS NULL))`)
-    : await all(db, `SELECT id, status FROM jobs WHERE board_id = ? AND status NOT IN ('expired', 'duplicate')`, [boardId]);
-  const gone = rows.filter((r) => !seen.has(r.id));
+    : await all(db, `SELECT id, status, location FROM jobs WHERE board_id = ? AND status NOT IN ('expired', 'duplicate')`, [boardId]);
+  const gone = rows.filter((r) => !seen.has(r.id) && (!places || String(r.location ?? '').search(places) !== -1));
   if (!gone.length) return 0;
   const ts = now();
   const apps = [];
