@@ -66,7 +66,9 @@ const commands = {
   },
   async profile() {
     const file = path.join(ROOT, 'private', 'profile.yml');
-    const profile = loadYaml(readFileSync(file, 'utf8'));
+    let profile;
+    // js-yaml errors carry the whole file in their message: report the position only, never the content.
+    try { profile = loadYaml(readFileSync(file, 'utf8')); } catch (err) { throw new Error(`profile.yml line ${(err.mark?.line ?? -1) + 1}: ${err.reason ?? 'invalid YAML'}`); }
     for (const f of ['name', 'email', 'education', 'skills']) if (!profile?.[f]) throw new Error(`profile.yml is missing "${f}"`);
     const pdf = readFileSync(path.join(ROOT, profile.resume?.file ?? 'private/master-resume.pdf'));
     if (!pdf.subarray(0, 5).equals(Buffer.from('%PDF-'))) throw new Error('master resume is not a PDF');
