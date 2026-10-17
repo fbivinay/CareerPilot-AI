@@ -155,6 +155,7 @@ export async function openDb({ url, authToken } = {}) {
   const db = createClient({
     url: url ?? dbUrl(),
     authToken: authToken ?? process.env.TURSO_AUTH_TOKEN,
+    timeout: 10_000, // local file: the dashboard and a pipeline run can write at the same time; wait, don't fail
   });
   await db.batch(SCHEMA, 'write');
   return db;

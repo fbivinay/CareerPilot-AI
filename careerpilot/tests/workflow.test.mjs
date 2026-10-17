@@ -7,7 +7,7 @@ import { processMessage, processSentMessage } from '../lib/gmail-sync.mjs';
 import { applicationEmail, domainMatchesCompany, emailsInText } from '../lib/contacts.mjs';
 import { blockReason, inSendWindow, runOutreach } from '../lib/outreach.mjs';
 import { buildMime } from '../lib/gmail.mjs';
-import { templateEmail } from '../lib/compose.mjs';
+import { relevantHighlights, templateEmail } from '../lib/compose.mjs';
 import { unverifiedNumbers, factCorpus } from '../lib/profile.mjs';
 import { vaultPut } from '../lib/vault.mjs';
 import { tmpdir } from 'node:os';
@@ -266,4 +266,16 @@ test('quote stripping stays fast on hostile input', () => {
   const t0 = Date.now();
   stripQuoted(hostile);
   assert.ok(Date.now() - t0 < 500);
+});
+
+test('email highlights match real skills, not filler words, and come from different roles first', () => {
+  const profile = {
+    experience: [{ title: 'Data Analyst Intern', company: 'Acme, Bengaluru', points: [
+      'Built the sales dashboard with the team for the region and the stores.',
+      'Wrote SQL queries for the weekly report.'] }],
+    projects: [{ name: 'Forecaster — demand model', stack: 'Python, Pandas', points: ['Forecasts weekly demand for the shop.'] }],
+  };
+  const picks = relevantHighlights(profile, 'Data Analyst Intern. Must know Python. SQL a plus.', 2);
+  assert.match(picks[0], /^Wrote SQL queries/); // SQL beats a bullet full of "the/for/with"
+  assert.match(picks[1], /^Forecaster/); // "Python." matches the stack, and the second pick is another source
 });

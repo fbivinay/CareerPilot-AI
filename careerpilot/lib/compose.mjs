@@ -5,20 +5,29 @@ import { factCorpus, profileFacts, unverifiedNumbers } from './profile.mjs';
 
 const OPT_OUT_LINE = 'If you would prefer not to hear from me again, just reply "unsubscribe" and I will not contact you further.';
 
-const tokens = (s) => new Set(String(s).toLowerCase().match(/[a-z][a-z0-9+#.]{1,}/g) ?? []);
+// Function words and job-ad filler say nothing about fit.
+const STOP = new Set(('an and the for with from into to on in of at by as is are be or our your you we it its this that these those '
+  + 'will can has have was were not but all any more most also who what which their they them than then there here such via per '
+  + 'over under about after before while where when how role team work working experience years using use used based across within including').split(' '));
+// "node.js" keeps its dot; a sentence-ending "Python." does not.
+const tokens = (s) => new Set((String(s).toLowerCase().match(/[a-z][a-z0-9+#.]{1,}/g) ?? [])
+  .map((t) => t.replace(/\.+$/, '')).filter((t) => t.length > 1 && !STOP.has(t)));
 
-// Pick the candidate's bullets that overlap most with the JD's vocabulary.
+// Pick the candidate's bullets that overlap most with the JD's vocabulary, one per role or project
+// before any second bullet from the same one.
 export function relevantHighlights(profile, jd, n = 3) {
   const jdTokens = tokens(jd);
   const items = [
-    ...(profile.experience ?? []).flatMap((x) => x.points.map((p) => ({ text: `${p} (${x.title}, ${x.company.split(',')[0]})`, src: p + x.title }))),
-    ...(profile.projects ?? []).map((pr) => ({ text: `${pr.name.split(' — ')[0]}: ${pr.points[0]} [${pr.stack}]`, src: pr.points.join(' ') + pr.stack })),
+    ...(profile.experience ?? []).flatMap((x, i) => x.points.map((p) => ({ group: `x${i}`, text: `${p} (${x.title}, ${x.company.split(',')[0]})`, src: `${p} ${x.title}` }))),
+    ...(profile.projects ?? []).map((pr, i) => ({ group: `p${i}`, text: `${pr.name.split(' — ')[0]}: ${pr.points[0]} [${pr.stack}]`, src: `${pr.points.join(' ')} ${pr.stack}` })),
   ];
-  return items
+  const ranked = items
     .map((it) => ({ ...it, score: [...tokens(it.src)].filter((t) => jdTokens.has(t)).length }))
-    .sort((a, b) => b.score - a.score)
-    .slice(0, n)
-    .map((it) => it.text);
+    .sort((a, b) => b.score - a.score);
+  const picked = [];
+  for (const it of ranked) if (picked.length < n && !picked.some((p) => p.group === it.group)) picked.push(it);
+  for (const it of ranked) if (picked.length < n && !picked.includes(it)) picked.push(it);
+  return picked.map((it) => it.text);
 }
 
 export function graduation(profile) {

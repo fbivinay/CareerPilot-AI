@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { classifyEmail, extractDetails, stripQuoted } from '../lib/email-intel.mjs';
-import { fromAuthenticated, parseMessage } from '../lib/gmail.mjs';
+import { createGmail, fromAuthenticated, parseMessage } from '../lib/gmail.mjs';
 
 const c = (subject, text, fromAddr = 'no-reply@us.greenhouse-mail.io', opts) => classifyEmail({ subject, text, fromAddr, threadId: 't1' }, opts);
 
@@ -94,4 +94,28 @@ test('a display name cannot smuggle in a trusted sender address', async () => {
   assert.ok(!(spoof.fromAddr.endsWith('acme.com') && spoof.authenticated));
   assert.equal(msg('HR <hr@acme.com>', 'mx.google.com; dmarc=pass (p=REJECT) header.from=evil.com').authenticated, false);
   assert.equal(msg('HR <hr@acme.com>', 'mx.google.com; dmarc=pass (p=REJECT) header.from=acme.com').authenticated, true);
+});
+
+test('Gmail calls stay under the per-user quota and rate-limit replies are retried', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  const calls = [];
+  let limited = 1;
+  const fetchImpl = async (url) => {
+    if (url.includes('oauth2')) return Response.json({ access_token: 't', expires_in: 3600 });
+    calls.push(Date.now());
+    if (limited-- > 0) return new Response(`{"error":{"code":403,"message":"Quota exceeded for quota metric 'Total Query Cost'"}}`, { status: 403 });
+    return Response.json({ id: 'm', payload: { headers: [{ name: 'From', value: 'a@b.com' }, { name: 'Subject', value: 'x' }] } });
+  };
+  const gmail = createGmail({ clientId: 'c', clientSecret: 's', refreshToken: 'r', fetchImpl, quotaPerMinute: 120 });
+  const flush = async () => { for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r)); };
+  const a = gmail.get('a');
+  await flush();
+  t.mock.timers.tick(2_000); // the 403 quota reply is retried after a pause
+  await a;
+  const b = gmail.get('b'); // two full reads (60 units each) used the 120-unit minute
+  await flush();
+  assert.equal(calls.length, 2, 'waits for the quota window instead of calling');
+  t.mock.timers.tick(58_050);
+  await b;
+  assert.deepEqual(calls, [0, 2_000, 60_050]);
 });

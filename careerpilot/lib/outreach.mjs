@@ -105,8 +105,9 @@ function writePreview(previews, env) {
 
 export async function runOutreach(db, gmail, settings, { deadline = Infinity, env = process.env } = {}) {
   const dryRun = env.CAREERPILOT_DRY_RUN === '1';
-  const stats = { dryRun, applications: 0, initial: 0, followups: 0, previews: 0, skipped: {}, failed: 0 };
-  const skip = (r) => { stats.skipped[r] = (stats.skipped[r] ?? 0) + 1; };
+  // `blocked` counts why individual emails were held back; a stage-level `skipped` is a reason string.
+  const stats = { dryRun, applications: 0, initial: 0, followups: 0, previews: 0, blocked: {}, failed: 0 };
+  const skip = (r) => { stats.blocked[r] = (stats.blocked[r] ?? 0) + 1; };
   const previews = [];
   // A send that started but never finished (crash) is not retried blindly: it needs a human check.
   if (!dryRun) {

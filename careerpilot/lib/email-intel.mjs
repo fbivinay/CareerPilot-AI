@@ -30,8 +30,10 @@ const NEWSLETTER_SENDERS = /@([\w-]+\.)*(substack\.com|beehiiv\.com|medium\.com|
 const SIGNALS = [
   ['offer', {
     strong: [/\b(pleased|delighted|happy|excited) to (extend|offer) (you )?(an? |the |this )?(formal |written )?(offer|position|role|job)\b/,
-      /\boffer letter\b/, /\boffer of employment\b/, /\bletter of (offer|intent)\b/],
-    weak: [/\bjob offer\b/],
+      /\boffer of employment\b/, /\bletter of (offer|intent)\b/,
+      // An offer letter being delivered; a mere mention ("offer letter upon batch confirmation") is only a hint.
+      /\b(attached|enclosed|released|issued)\b[^.!?]{0,40}\boffer letter\b/, /\boffer letter\b[^.!?]{0,30}\b(attached|enclosed)\b/],
+    weak: [/\bjob offer\b/, /\boffer letter\b/],
   }],
   ['rejection', {
     strong: [/\bnot (be )?(moving|move|going) forward with your (application|candidacy|profile)\b/,
@@ -60,13 +62,15 @@ const SIGNALS = [
     strong: [/\b(thank you|thanks) for (applying|your application|submitting your application)\b/, /\b(we('ve| have)|has been) received your application\b/,
       /\byour application (has been|was) (received|submitted|sent)\b/, /\byour application was sent to\b/,
       /\bapplication (received|submitted) successfully\b/, /\bsuccessfully (applied|submitted your application)\b/,
-      /\bapplication successful\b/, /\byou['’]?ve applied to\b/, /\byou have (successfully )?applied (to|for)\b/],
+      /\bapplication successful\b/, /\byou['’]?ve applied to\b/, /\byou have (successfully )?applied (to|for)\b/,
+      /\bapplication to .{2,80}? (was )?successfully submitted\b/],
     weak: [/\bapplication\b[^.!?]{0,30}\b(received|submitted)\b/],
   }],
 ];
+const CONFIRMS = SIGNALS.find(([c]) => c === 'application_confirmation')[1].strong;
 const CONDITION_BEFORE = /\b(if|should|once(?! again)|in case|whether|in the event)\b/;
 // Fraud warnings in platform footers ("beware of ... seeking money for any job offer") are boilerplate.
-const DISCLAIMER = /\b(fraud|scam|phish)\w*|\bbeware\b|\bnever (asks?|charges?|requests?)\b/;
+const DISCLAIMER = /\b(fraud|scam|phish|impersonat)\w*|\b(beware|unscrupulous)\b|\bnever (asks?|charges?|requests?)\b/;
 const hit = (sentence, re) => {
   const m = re.exec(sentence);
   return m != null && !CONDITION_BEFORE.test(sentence.slice(0, m.index));
@@ -109,9 +113,16 @@ export function classifyEmail(msg, { ourThreadIds = new Set() } = {}) {
   }
   if (inOurThread && OPT_OUT.test(own.slice(0, 1500))) return { category: 'opt_out', confidence: 0.9 };
   if (NEWSLETTER_SENDERS.test(fromAddr) && !inOurThread) return { category: 'other', confidence: 0.5 };
+  // A fraud-awareness notice ("Beware of fraudsters impersonating ...") is not about an application.
+  if (DISCLAIMER.test(subject.toLowerCase()) && !inOurThread) return { category: 'other', confidence: 0.6 };
 
+  // Platform confirmations carry upsells ("Schedule your first interview", practice tests). When the
+  // subject confirms an application, an interview or assessment also needs its meeting or test link.
+  const confirms = !/^re:/i.test(subject) && sentences(subject.toLowerCase()).some((p) => CONFIRMS.some((re) => hit(p, re)));
   for (const [category, { strong }] of SIGNALS) {
-    if (parts.some((p) => strong.some((re) => hit(p, re)))) return { category, confidence: 0.9 };
+    if (!parts.some((p) => strong.some((re) => hit(p, re)))) continue;
+    if (confirms && ((category === 'interview' && !MEETING_HOSTS.test(own)) || (category === 'assessment' && !ASSESSMENT_HOSTS.test(own)))) continue;
+    return { category, confidence: 0.9 };
   }
   if (ASSESSMENT_HOSTS.test(own) && /\b(test|assessment|challenge)\b/i.test(own)) return { category: 'assessment', confidence: 0.85 };
 
@@ -143,19 +154,23 @@ export function applicationDetails(msg) {
   const text = decode(stripQuoted(msg.text)).slice(0, 6000);
   let company = null;
   let title = null;
-  const found = text.match(/you['’]?ve applied to (.{2,120}?) job at (.{2,100}?)\.(?:\s|$)/i)               // foundit
-    ?? text.match(/your application (?:for|to) (?:the )?(.{2,100}?) (?:position|role|job|opening) at (.{2,80}?)[.!\n]/i)
-    ?? text.match(/(?:thank you|thanks) for applying (?:for|to) (?:the )?(.{2,100}?) (?:position|role|job|opening) at (.{2,80}?)[.!\n]/i);
+  // Line breaks can fall between any two words (foundit's HTML puts "applied", "to", "job" on lines of their own).
+  const found = text.match(/you['’]?ve\s+applied\s+to\s+(.{2,120}?)\s+job\s+at\s+(.{2,100}?)\.(?:\s|$)/is)               // foundit
+    ?? text.match(/your\s+application\s+(?:for|to)\s+(?:the\s+)?(.{2,100}?)\s+(?:position|role|job|opening)\s+at\s+(.{2,80}?)[.!\n]/i)
+    ?? text.match(/(?:thank\s+you|thanks)\s+for\s+applying\s+(?:for|to)\s+(?:the\s+)?(.{2,100}?)\s+(?:position|role|job|opening)\s+at\s+(.{2,80}?)[.!\n]/i);
   if (found) [title, company] = [found[1], found[2]];
   if (!company) {
-    company = text.match(/recruitment process (?:of |at |for )?(.{2,80}?) (?:invites|has invited|would like)/i)?.[1]   // SHL and similar
+    company = text.match(/recruitment\s+process\s+(?:(?:of|at|for)\s+)?(.{2,80}?)\s+(?:invites|has\s+invited|would\s+like)/i)?.[1]   // SHL and similar
       ?? subject.match(/^(.{2,80}?) application successful\b/i)?.[1]                                                // foundit subject
       ?? subject.match(/your application was sent to (.{2,80})$/i)?.[1]                                             // LinkedIn
+      ?? subject.match(/^application to (.{2,80}?) successfully submitted\b/i)?.[1]                                 // Wellfound
       ?? subject.match(/application (?:to|for) .{2,80}? at (.{2,80}?)(?:[!.|]|$)/i)?.[1]
       ?? subject.match(/(?:applying (?:to|at|with)|interest in) ([A-Z][\w&.' -]{1,60}?)(?:[!.|,]| -|$)/)?.[1]
       ?? null;
   }
-  if (!title) title = subject.match(/application (?:to|for) (.{2,80}?) at /i)?.[1] ?? null;
+  // Wellfound lists the role as the first bullet, linked to wellfound.com/jobs/<id>.
+  const wellfound = alertPlatform(msg.fromAddr) === 'wellfound' ? text.match(/\*\s+([^\n*<]{2,100}?)\s*<https:\/\/wellfound\.com\/jobs\/(\d+)/) : null;
+  if (!title) title = subject.match(/application (?:to|for) (.{2,80}?) at /i)?.[1] ?? wellfound?.[1] ?? null;
   company = company && clean(company);
   if (!company || /^\*+$/.test(company)) company = null;
   // foundit puts the posting id in its links; a token-free public URL is rebuilt from it.
@@ -163,7 +178,8 @@ export function applicationDetails(msg) {
   return {
     company,
     title: title && clean(title),
-    url: jobId && alertPlatform(msg.fromAddr) === 'foundit' ? `https://www.foundit.in/seeker/job-details?id=${jobId}` : null,
+    url: jobId && alertPlatform(msg.fromAddr) === 'foundit' ? `https://www.foundit.in/seeker/job-details?id=${jobId}`
+      : wellfound ? `https://wellfound.com/jobs/${wellfound[2]}` : null,
   };
 }
 

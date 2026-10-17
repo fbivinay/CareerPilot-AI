@@ -91,7 +91,7 @@ export default async function Settings({ searchParams }) {
         </Card>
         <Card title="Schedule">
           <KV items={[
-            ['GitHub Actions', 'Every 2 hours (may start late or be skipped under load)'],
+            ['GitHub Actions', 'Every 3 hours (may start late or be skipped under load)'],
             ['Last run', fmtDateTime(status.last?.at)],
             ['Aggregator sweep', 'Once a day'],
           ]} />

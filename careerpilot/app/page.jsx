@@ -43,7 +43,10 @@ export default async function Overview() {
         <Card title="Automation runs">
           <KV items={[
             ['Last run', s.last ? `${fmtDateTime(s.last.at)}${s.last.failed ? ' (with errors)' : ''}` : 'Never'],
-            ...Object.entries(s.runs).map(([name, r]) => [name, r ? <span key={name}><Badge value={!r.ok ? 'failed' : r.result?.skipped ? 'blocked' : 'qualified'}>{!r.ok ? 'failed' : r.result?.skipped ? 'skipped' : 'ok'}</Badge> <span className="text-ink-3">{fmtDateTime(r.at)}</span>{r.result?.skipped && <span className="text-ink-3"> · {r.result.skipped}</span>}{r.error && <span className="text-bad"> · {r.error}</span>}</span> : 'not run yet']),
+            ...Object.entries(s.runs).map(([name, r]) => {
+              const skipped = typeof r?.result?.skipped === 'string' ? r.result.skipped : null; // a stage's reason for not running
+              return [name, r ? <span key={name}><Badge value={!r.ok ? 'failed' : skipped ? 'blocked' : 'qualified'}>{!r.ok ? 'failed' : skipped ? 'skipped' : 'ok'}</Badge> <span className="text-ink-3">{fmtDateTime(r.at)}</span>{skipped && <span className="text-ink-3"> · {skipped}</span>}{r.error && <span className="text-bad"> · {r.error}</span>}</span> : 'not run yet'];
+            }),
           ]} />
         </Card>
         <Card title="Connections">

@@ -38,15 +38,43 @@ export function mentionsCompany(hay, company) {
   return new RegExp(`(^|[^a-z0-9])${k.replace(/ /g, '[^a-z0-9]?')}([^a-z0-9]|$)`).test(hay);
 }
 
-async function linkEmail(db, msg) {
+const host = (u) => { try { return new URL(u).host; } catch { return null; } };
+const sameCompany = (x, y) => {
+  const a = companyKey(x), b = companyKey(y);
+  return a.length >= 3 && b.length >= 3 && (a === b || mentionsCompany(a, y) || mentionsCompany(b, x));
+};
+// Whether a tracked job is the posting a confirmation names. Two postings on one job site are different
+// even with the same title (foundit lists "Analyst I" at Aon under two ids).
+function samePosting(job, stated) {
+  if (stated.url && job.url === stated.url) return true;
+  if (stated.url && job.url && host(job.url) === host(stated.url)) return false;
+  if (!stated.company || !sameCompany(job.company, stated.company)) return false;
+  return !stated.title || job.title.toLowerCase() === stated.title.toLowerCase();
+}
+
+async function linkEmail(db, msg, { stated = applicationDetails(msg), creates = false } = {}) {
   const byThread = await one(db, `SELECT a.id app_id, a.job_id FROM applications a WHERE a.gmail_thread_id = ?`, [msg.threadId])
     ?? await one(db, `SELECT o.job_id, a.id app_id FROM outreach o LEFT JOIN applications a ON a.job_id = o.job_id
       WHERE o.gmail_thread_id = ? AND o.job_id IS NOT NULL LIMIT 1`, [msg.threadId]);
   if (byThread) return { ...byThread, how: 'thread' };
 
-  const hay = `${msg.fromName} ${msg.fromAddr.split('@')[1] ?? ''} ${msg.subject} ${(msg.text ?? '').slice(0, 3000)}`.toLowerCase();
-  const apps = await all(db, `SELECT a.id app_id, a.job_id, j.company, j.title FROM applications a JOIN jobs j ON j.id = a.job_id
+  const apps = await all(db, `SELECT a.id app_id, a.job_id, j.company, j.title, j.url FROM applications a JOIN jobs j ON j.id = a.job_id
     WHERE a.status != 'withdrawn'`);
+  // A confirmation or invite that names its posting is matched on that, not on every company the body
+  // mentions: foundit mails also advertise other employers' jobs.
+  if (stated.company || stated.url) {
+    const named = apps.filter((a) => samePosting(a, stated));
+    if (named.length === 1) return { ...named[0], how: 'stated' };
+    if (named.length) return { ambiguous: true, company: named[0].company, how: 'several roles at company' };
+    // A confirmation for a posting we do not track yet becomes its own application (recordExternalApplication);
+    // a rejection or update naming a slightly different title still falls back to the company below.
+    if (creates) return null;
+  }
+
+  // Job-board mail is full of other employers (recommendations, company blurbs): only its sender name and
+  // subject say which company it is about.
+  const body = alertPlatform(msg.fromAddr) ? '' : (msg.text ?? '').slice(0, 3000);
+  const hay = `${msg.fromName} ${msg.fromAddr.split('@')[1] ?? ''} ${msg.subject} ${body}`.toLowerCase();
   const hits = apps.filter((a) => mentionsCompany(hay, a.company));
   const companies = new Set(hits.map((h) => companyKey(h.company)));
   if (companies.size !== 1) return companies.size > 1 ? { ambiguous: true, how: 'multiple companies' } : null;
@@ -79,13 +107,10 @@ async function recordExternalApplication(db, msg, cls, settings) {
   const platform = alertPlatform(msg.fromAddr);
   if (!msg.authenticated || !(platformSender(msg.fromAddr) || (d.company && domainMatchesCompany(msg.fromAddr, d.company)))) return null;
   if (!d.company && !d.title) return null;
-  let job = null;
-  if (d.company) {
-    const first = companyKey(d.company).split(' ')[0] ?? '';
-    const candidates = first.length >= 3
-      ? await all(db, `SELECT id, company, title FROM jobs WHERE status != 'duplicate' AND lower(company) LIKE ?`, [`%${first}%`]) : [];
-    job = candidates.find((j) => mentionsCompany(d.company.toLowerCase(), j.company) && (!d.title || j.title.toLowerCase() === d.title.toLowerCase()));
-  }
+  const first = companyKey(d.company).split(' ')[0] ?? '';
+  const candidates = await all(db, `SELECT id, company, title, url FROM jobs WHERE status != 'duplicate' AND (url = ? OR lower(company) LIKE ?)`,
+    [d.url ?? '', first.length >= 3 ? `%${first}%` : '']);
+  const job = candidates.find((j) => samePosting(j, d));
   const jobId = job?.id ?? (await upsertJob(db, {
     url: d.url ?? mailLink(msg.id),
     title: d.title ?? `${cls.category === 'assessment' ? 'Assessment' : 'Application'} (from email)`,
@@ -123,7 +148,7 @@ export async function processMessage(db, msg, settings, { ourThreadIds }) {
     }
     result.review = !sent; // a bounce we cannot match to anything we sent needs a look
   } else {
-    link = await linkEmail(db, msg);
+    link = await linkEmail(db, msg, { creates: CREATES_APPLICATION.has(cls.category) });
     if ((cls.category === 'other' || cls.category === 'ats_update') && (link?.app_id || cls.category === 'ats_update')) {
       const ai = await aiClassify(db, msg, settings);
       if (ai && ai.category !== 'other') { cls = { category: ai.category, confidence: Math.min(ai.confidence, 0.84) }; classifiedBy = `ai:${ai._provider}`; }

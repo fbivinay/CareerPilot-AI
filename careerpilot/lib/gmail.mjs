@@ -8,6 +8,11 @@
 export const READ_SCOPE = 'https://www.googleapis.com/auth/gmail.readonly';
 export const SEND_SCOPE = 'https://www.googleapis.com/auth/gmail.send';
 const API = 'https://gmail.googleapis.com/gmail/v1/users/me';
+// Google allows 6,000 quota units per user per minute (projects created since May 2026); a full
+// message read costs 60, a list 5, a send 100. Calls are paced to stay under 5,400 per rolling minute.
+export const QUOTA_PER_MINUTE = 5400;
+const RETRY_MS = [2_000, 15_000, 60_000];
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 export class GmailAuthError extends Error {}
 
@@ -21,9 +26,18 @@ export function decodeEntities(s) {
 }
 
 // creds: {clientId, clientSecret, refreshToken}. onRefreshToken is called if Google ever rotates the token.
-export function createGmail({ clientId, clientSecret, refreshToken, fetchImpl = fetch, onRefreshToken = null }) {
+export function createGmail({ clientId, clientSecret, refreshToken, fetchImpl = fetch, onRefreshToken = null, quotaPerMinute = QUOTA_PER_MINUTE }) {
   let token = null;
   let expires = 0;
+  const spent = []; // [time, units] of calls in the last minute
+
+  async function pace(units) {
+    for (;;) {
+      while (spent.length && spent[0][0] <= Date.now() - 60_000) spent.shift();
+      if (spent.reduce((n, [, u]) => n + u, 0) + units <= quotaPerMinute) { spent.push([Date.now(), units]); return; }
+      await sleep(spent[0][0] + 60_000 - Date.now() + 50);
+    }
+  }
 
   async function accessToken() {
     if (token && Date.now() < expires - 60_000) return token;
@@ -41,19 +55,23 @@ export function createGmail({ clientId, clientSecret, refreshToken, fetchImpl = 
     return token;
   }
 
-  async function api(path, init = {}) {
+  async function api(path, units, init = {}) {
     for (let attempt = 0; ; attempt++) {
+      await pace(units);
       const res = await fetchImpl(`${API}${path}`, {
         ...init,
         headers: { authorization: `Bearer ${await accessToken()}`, 'content-type': 'application/json', ...init.headers },
       });
       if (res.ok) return res.json();
-      if ((res.status === 429 || res.status >= 500) && attempt < 3) {
-        await new Promise((r) => setTimeout(r, 1000 * 2 ** attempt));
+      const body = await res.text();
+      // Gmail reports per-user rate limits as 429 or as 403 "rate limit" / "Quota exceeded".
+      const limited = res.status === 429 || (res.status === 403 && /rate ?limit|quota exceeded/i.test(body));
+      if ((limited || res.status >= 500) && attempt < RETRY_MS.length) {
+        await sleep(RETRY_MS[attempt]);
         continue;
       }
       if (res.status === 401) throw new GmailAuthError('Gmail rejected the access token. Reconnect Gmail in Settings.');
-      throw new Error(`Gmail API ${res.status}: ${(await res.text()).slice(0, 200)}`);
+      throw new Error(`Gmail API ${res.status}: ${body.slice(0, 200)}`);
     }
   }
 
@@ -63,21 +81,21 @@ export function createGmail({ clientId, clientSecret, refreshToken, fetchImpl = 
       let pageToken;
       do {
         const params = new URLSearchParams({ q, maxResults: '100', ...(pageToken ? { pageToken } : {}) });
-        const page = await api(`/messages?${params}`);
+        const page = await api(`/messages?${params}`, 5);
         ids.push(...(page.messages ?? []).map((m) => m.id));
         pageToken = page.nextPageToken;
       } while (pageToken && ids.length < max);
       return ids.slice(0, max);
     },
     async get(id) {
-      return parseMessage(await api(`/messages/${id}?format=full`));
+      return parseMessage(await api(`/messages/${id}?format=full`, 60));
     },
     async send(message) {
       const raw = Buffer.from(buildMime(message)).toString('base64url');
-      return api('/messages/send', { method: 'POST', body: JSON.stringify({ raw, ...(message.threadId ? { threadId: message.threadId } : {}) }) });
+      return api('/messages/send', 100, { method: 'POST', body: JSON.stringify({ raw, ...(message.threadId ? { threadId: message.threadId } : {}) }) });
     },
     async profile() {
-      return api('/profile');
+      return api('/profile', 5);
     },
   };
 }
