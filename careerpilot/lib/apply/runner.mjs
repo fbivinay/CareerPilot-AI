@@ -20,7 +20,7 @@ const isWorkday = (url) => { try { portalHost(url); return true; } catch { retur
 // Start of today in India, for the daily cap.
 const todayIST = () => new Date(new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }) + 'T00:00:00+05:30').toISOString();
 
-export async function autoApply(db, settings, { launch, submit = false, limit = 5, deadline = Infinity, gmail = null, shots = null, retry = false, env = process.env } = {}) {
+export async function autoApply(db, settings, { launch, submit = false, limit = 5, deadline = Infinity, gmail = null, shots = null, retry = false, only = null, env = process.env } = {}) {
   if (!settings.automation.portalApplications) return { skipped: 'portal applications are turned off in Settings' };
   const profile = await loadProfile(db, env);
   const resume = await loadResumePdf(db, env);
@@ -48,6 +48,7 @@ export async function autoApply(db, settings, { launch, submit = false, limit = 
     for (const job of candidates) {
       if (stats.attempted >= budget || Date.now() > deadline) break;
       if (!isWorkday(job.url)) continue; // other portals are not automated yet
+      if (only && !only.includes(companyKey(job.company))) continue;
       stats.considered++;
       const last = await kvGet(db, `apply:last:${job.app_id}`);
       if (!retry && last && last.answersKey === answersKey && ['blocked', 'needs_you', 'unconfirmed'].includes(last.stop)) continue;

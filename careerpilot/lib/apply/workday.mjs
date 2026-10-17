@@ -88,6 +88,7 @@ async function startApplication(page) {
   if (await manual.count()) await manual.first().click();
   for (let i = 0; i < 45; i++) {
     await page.waitForTimeout(1000);
+    if (await chooseEmailSignIn(page)) continue;
     if (await page.locator(`input${A('email')}`).count()) return 'signed-out';
     if (!/sign in|create account/i.test(await activeStep(page)) && (await page.locator('[data-automation-id^="formField-"]').count())) return 'in-form';
   }
@@ -116,12 +117,34 @@ async function verificationLink(gmail, sinceMs, host) {
   return null;
 }
 
+// Workday asks some new accounts to confirm their email ("An email has been sent to you. Please verify
+// your account."): open the link from Gmail, then sign in again (the caller starts over).
+const VERIFY_TEXT = /verify (your )?(candidate )?(account|email)|email has been sent|activate your account/i;
+async function verifyByEmail(page, { db, gmail, host, account, log }) {
+  log('workday: email verification requested');
+  const link = gmail && await verificationLink(gmail, new Date(account.createdAt).getTime(), host);
+  if (!link) { await saveAccount(db, host, { ...account, state: 'unverified' }); return { stop: 'blocked', reason: 'Workday asked to verify the account and the email did not arrive' }; }
+  await page.goto(link, { waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(4000);
+  if (!onPortal(page, host)) { await saveAccount(db, host, { ...account, state: 'unverified' }); return { stop: 'blocked', reason: `Verification link left ${host}` }; }
+  await saveAccount(db, host, { ...account, state: 'active', verifiedAt: now() });
+  return { reopen: true };
+}
+
+// Some portals open sign-in with a choice of "Sign in with Google" or "Sign in with email": email, always.
+async function chooseEmailSignIn(page) {
+  const byEmail = page.getByRole('button', { name: /^(sign in|continue|log in) with email$/i });
+  if (await byEmail.count()) { await byEmail.first().click(); await page.waitForTimeout(1500); return true; }
+  return false;
+}
+
 // Waits for an account form to go away (signed in, or account created), or returns why it did not.
 // Signing in takes a few seconds; a click that landed before the form was ready does nothing, so it is
 // repeated once.
 async function formGone(page, buttonId) {
   for (let i = 0; i < 30; i++) {
     await page.waitForTimeout(1000);
+    if (VERIFY_TEXT.test(await page.locator('body').innerText().catch(() => ''))) return { verify: true };
     if (!(await page.locator(A(buttonId)).count())) return null;
     const errors = await pageErrors(page);
     if (errors.length) return { stop: 'blocked', reason: `Workday account: ${errors.join('; ')}` };
@@ -132,10 +155,12 @@ async function formGone(page, buttonId) {
 
 // Signs in from the page header, before applying: starting the application signed out and signing in
 // inside it collides with a draft already saved for this posting (Workday answers 400, then errors).
-async function signIn(page, account, host) {
+async function signIn(page, account, host, ctx) {
   if (!onPortal(page, host)) return { stop: 'blocked', reason: `Sign-in page is not on ${host}` };
   if (!(await page.locator(A('signInSubmitButton')).count())) {
     await page.click(A('utilityButtonSignIn'));
+    await page.waitForTimeout(1500);
+    await chooseEmailSignIn(page);
     await page.waitForSelector(A('signInSubmitButton'), { timeout: 30000 });
   }
   if (await captchaPresent(page)) return { stop: 'needs_you', reason: 'Workday shows a CAPTCHA on sign-in' };
@@ -146,7 +171,8 @@ async function signIn(page, account, host) {
   await page.locator(A('password')).press('Tab'); // Workday reads the field on blur
   await page.waitForTimeout(700);
   await clickPrimary(page, 'signInSubmitButton');
-  return formGone(page, 'signInSubmitButton');
+  const r = await formGone(page, 'signInSubmitButton');
+  return r?.verify ? verifyByEmail(page, { ...ctx, host, account }) : r;
 }
 
 // Creates the candidate's account from the application's first step. Returns null when the application
@@ -170,33 +196,26 @@ async function createAccount(page, { db, gmail, host, email, log }) {
   if (await consent.count()) await consent.check();
   const createdAt = Date.now();
   await clickPrimary(page, 'createAccountSubmitButton');
-  await page.waitForTimeout(5000);
-  const body = await page.locator('body').innerText();
-  if (/already (exists|in use|registered)|account with this email/i.test(body)) {
-    await saveAccount(db, host, { ...account, state: 'exists-unknown-password' });
-    return { stop: 'blocked', reason: `A Workday account for ${email} already exists at ${host}; its password is not known to CareerPilot` };
+  for (let i = 0; i < 6; i++) {
+    await page.waitForTimeout(1500);
+    if (/already (exists|in use|registered)|account with this email/i.test(await page.locator('body').innerText().catch(() => ''))) {
+      await saveAccount(db, host, { ...account, state: 'exists-unknown-password' });
+      return { stop: 'blocked', reason: `A Workday account for ${email} already exists at ${host}; its password is not known to CareerPilot` };
+    }
   }
-  if (/verify|verification|activate/i.test(body) && !(await page.locator(A('progressBar')).count())) {
-    log('workday: email verification requested');
-    const link = gmail && await verificationLink(gmail, createdAt, host);
-    if (!link) { await saveAccount(db, host, { ...account, state: 'unverified' }); return { stop: 'blocked', reason: 'Workday verification email did not arrive' }; }
-    await page.goto(link, { waitUntil: 'domcontentloaded' });
-    await page.waitForTimeout(4000);
-    if (!onPortal(page, host)) { await saveAccount(db, host, { ...account, state: 'unverified' }); return { stop: 'blocked', reason: `Verification link left ${host}` }; }
-    await saveAccount(db, host, { ...account, state: 'active' });
-    return { reopen: true };
-  }
-  await saveAccount(db, host, { ...account, state: 'active' });
-  return formGone(page, 'createAccountSubmitButton');
+  const r = await formGone(page, 'createAccountSubmitButton');
+  if (r?.verify) return verifyByEmail(page, { db, gmail, host, account: { ...account, createdAt: new Date(createdAt).toISOString() }, log });
+  if (!r) await saveAccount(db, host, { ...account, state: 'active' });
+  return r;
 }
 
 // ---- Form widgets. Fields are found by Workday's own formField-<name> groups, never by position.
 
 // Workday's sticky footer (Back / Save and Continue) covers the bottom of the window: bring a control to
 // the middle of the screen before clicking it, or the click lands on the footer.
-async function centerClick(locator) {
+async function centerClick(locator, options = {}) {
   await locator.evaluate((n) => n.scrollIntoView({ block: 'center', inline: 'nearest' })).catch(() => {});
-  await locator.click();
+  await locator.click(options);
 }
 
 // Closes a search box's popup: an open one sits over the next field and swallows its click. Escape does
@@ -237,7 +256,7 @@ async function setText(page, field, value, scope = page) {
 // `wants`: one pattern, or patterns in order of preference. The first pattern with any matching option
 // wins, so a precise answer is never displaced by a looser one that happens to come earlier in the list.
 // Matched without accents: Workday lists Indian states as "Karnātaka", "Bihār".
-const plain = (t) => String(t).normalize('NFD').replace(/[̀-ͯ]/g, '');
+const plain = (t) => String(t).normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[\u2018\u2019]/g, "'");
 function best(texts, wants) {
   for (const re of [wants].flat()) {
     const i = texts.findIndex((t) => re.test(plain(t)));
@@ -468,8 +487,9 @@ const splitPlace = (s) => { const t = String(s ?? ''); const i = t.lastIndexOf('
 
 // Degree names as Workday lists them, most specific first.
 const DEGREES = [
-  [/^m\.?\s?sc\b|master of science/i, [/^master of science \(m\.?sc\)$/i, /^master of science\b/i]],
-  [/^b\.?\s?sc\b|bachelor of science/i, [/^bachelor of science \(b\.?sc\)$/i, /^bachelor of science\b/i]],
+  // Most specific first; then the plain degree level some portals list ("Masters (+2 or +3 yrs)", "MS").
+  [/^m\.?\s?sc\b|master of science/i, [/^master of science \(m\.?sc\)$/i, /^master of science\b/i, /^m\.?\s?sc\.?$/i, /^m\.?s\.?$/i, /^masters?('s)?\b/i]],
+  [/^b\.?\s?sc\b|bachelor of science/i, [/^bachelor of science \(b\.?sc\)$/i, /^bachelor of science\b/i, /^b\.?\s?sc\.?$/i, /^b\.?s\.?$/i, /^bachelors?('s)?\b/i]],
   [/^m\.?\s?tech\b|master of technology/i, [/^master of technology\b/i, /^m\.?\s?tech$/i]],
   [/^b\.?\s?tech\b|bachelor of technology/i, [/^bachelor of technology\b/i, /^b\.?\s?tech$/i]],
   [/^b\.?\s?e\b|bachelor of engineering/i, [/^bachelor of engineering\b/i]],
@@ -525,8 +545,9 @@ const buttonText = async (panel, field) => (await panel.locator(`${F(field)} but
 async function setDate(page, scope, field, d) {
   const group = scope.locator(F(field)).first();
   if (!d || !(await group.count())) return false;
-  const parts = (await group.locator(A('dateSectionDay-input')).count()) ? ['Month', 'Day', 'Year'] : ['Month', 'Year'];
-  if (parts.includes('Day') && !d.day) return false;
+  const parts = [];
+  for (const p of ['Month', 'Day', 'Year']) if (await group.locator(A(`dateSection${p}-input`)).count()) parts.push(p);
+  if (!parts.length || (parts.includes('Day') && !d.day) || (parts.includes('Month') && !d.month)) return false;
   const want = { Month: String(d.month).padStart(2, '0'), Day: String(d.day ?? '').padStart(2, '0'), Year: String(d.year) };
   const ok = async () => {
     for (const p of parts) {
@@ -536,13 +557,20 @@ async function setDate(page, scope, field, d) {
     return true;
   };
   if (await ok()) return true;
-  await centerClick(group.locator(A('dateSectionMonth-display')).first());
+  try {
+    return await typeDate(page, group, parts, want, ok);
+  } catch {
+    return false;
+  }
+}
+async function typeDate(page, group, parts, want, ok) {
+  await centerClick(group.locator(A(`dateSection${parts[0]}-display`)).first(), { timeout: 8000 });
   await page.keyboard.type(parts.map((p) => want[p]).join(''));
   await page.keyboard.press('Tab');
   if (await ok()) return true;
   // No auto-advance on this tenant: type each part into its own box.
   for (const p of parts) {
-    await centerClick(group.locator(A(`dateSection${p}-display`)).first());
+    await centerClick(group.locator(A(`dateSection${p}-display`)).first(), { timeout: 8000 });
     await page.keyboard.type(want[p]);
   }
   await page.keyboard.press('Tab');
@@ -553,6 +581,13 @@ async function setDate(page, scope, field, d) {
 // similarly named school (St. Joseph's College for St. Joseph's University) would be a different claim.
 async function chooseSchool(page, scope, institution) {
   const name = splitPlace(institution)[0];
+  // A plain text box (Synechron's schoolName): the institution's exact name is the answer.
+  for (const field of ['schoolName', 'school']) {
+    const group = scope.locator(F(field)).first();
+    if ((await group.count()) && !(await group.locator(A('multiSelectContainer')).count())) {
+      return (await setText(page, field, name, scope)) ? { chosen: name } : { missing: true };
+    }
+  }
   const norm = (s) => s.toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/\bst\b/g, 'saint').replace(/\s+/g, ' ').trim();
   const same = { test: (option) => norm(option.split(',')[0].replace(/\(.*?\)/g, '')) === norm(name) };
   const exact = await pick(page, 'school', name, same, scope);
@@ -565,8 +600,9 @@ async function myExperience(page, { profile, answers, resumePath }) {
   const filled = { experience: [], education: [] };
   const problems = [];
   const usedJobs = new Set();
+  const expSection = (await page.locator(groupLabelled('Work-Experience-section')).count()) ? 'Work-Experience' : 'Professional-Experience';
   for (const e of profile.experience ?? []) {
-    const panel = await entryPanel(page, 'Professional-Experience', usedJobs,
+    const panel = await entryPanel(page, expSection, usedJobs,
       async (p) => (await inputValue(p, 'jobTitle')).toLowerCase() === e.title.toLowerCase(),
       async (p) => (await inputValue(p, 'jobTitle')) === '');
     if (!panel) break; // this employer's form has no experience section
@@ -600,6 +636,9 @@ async function myExperience(page, { profile, answers, resumePath }) {
     }
     const gpa = /(\d+(?:\.\d+)?)/.exec(ed.grade ?? '')?.[1];
     if (gpa) await setText(page, 'gradeAverage', gpa, panel);
+    const [from, to] = dateRange(ed.dates);
+    if (from) await setDate(page, panel, 'firstYearAttended', { year: from.year });
+    if (to) await setDate(page, panel, 'lastYearAttended', { year: to.year });
     for (const [label, r] of [['School', school], ['Degree', degree], ['Field of study', study]]) {
       const u = unmet(`${label} for ${ed.degree}`, r);
       if (u) problems.push(u);
@@ -823,7 +862,8 @@ export async function applyWorkday({ page, job, profile, resumePath, db, gmail, 
     if ((await decline.count()) && /cookie/i.test(await page.locator('body').innerText().catch(() => ''))) await decline.first().click().catch(() => {});
     const saved = await loadAccount(db, host);
     if (usable(saved)) {
-      const stopped = await signIn(page, saved, host);
+      let stopped = await signIn(page, saved, host, { db, gmail, log });
+      if (stopped?.reopen) { await openPosting(page, job.url); stopped = await signIn(page, saved, host, { db, gmail, log }); }
       if (stopped) return stopped;
       if (!(await page.locator(A('adventureButton')).count())) await openPosting(page, job.url);
     }
@@ -872,6 +912,8 @@ export async function applyWorkday({ page, job, profile, resumePath, db, gmail, 
     await page.waitForSelector('[data-automation-id^="formField-"]', { timeout: 30000 }).catch(() => {});
     await settle(page);
     const fill = STEPS.find(([re]) => re.test(step))?.[1];
+    // Development aid: CP_STOP_AT="my experience" stops before filling that step, to inspect it untouched.
+    if (process.env.CP_STOP_AT && new RegExp(process.env.CP_STOP_AT, 'i').test(step)) return { stop: 'explored', step, fields: await formFields(page), trail };
     if (!fill) {
       await shot(`step-${step}`);
       return explore ? { stop: 'explored', step, fields: await formFields(page), errors: await pageErrors(page), trail }
