@@ -1,12 +1,12 @@
 import { getDb, all } from '@/lib/db.mjs';
-import { systemStatus } from '@/lib/queries.mjs';
+import { pendingQuestions, systemStatus } from '@/lib/queries.mjs';
 import { A, Badge, Card, PageHeader, Table, Td, fmtDateTime, gmailLink } from '../_ui/kit.jsx';
 
 export const dynamic = 'force-dynamic';
 
 export default async function Pending() {
   const db = await getDb();
-  const [apps, appCount, review, unknown, upcoming, s] = await Promise.all([
+  const [apps, appCount, review, unknown, upcoming, s, questions] = await Promise.all([
     all(db, `SELECT a.id, a.status, a.method, a.blocked_reason, j.title, j.company, j.url, j.score FROM applications a JOIN jobs j ON j.id = a.job_id
       WHERE a.status IN ('ready','blocked','failed') ORDER BY a.status = 'failed' DESC, j.score DESC LIMIT 100`),
     all(db, `SELECT count(*) n FROM applications WHERE status IN ('ready','blocked','failed')`),
@@ -14,6 +14,7 @@ export default async function Pending() {
     all(db, `SELECT o.id, o.subject, c.email FROM outreach o JOIN contacts c ON c.id = o.contact_id WHERE o.status = 'unknown'`),
     all(db, `SELECT * FROM emails WHERE category IN ('interview','assessment','offer') AND received_at >= ? ORDER BY received_at DESC`, [new Date(Date.now() - 14 * 864e5).toISOString()]),
     systemStatus(),
+    pendingQuestions(),
   ]);
   const appTotal = Number(appCount[0].n);
   const problems = [
@@ -26,6 +27,19 @@ export default async function Pending() {
       {problems.length > 0 && (
         <Card title="System problems" className="mb-4 border-bad">
           <ul className="space-y-1 text-sm">{problems.map(([t, e]) => <li key={t}><strong>{t}:</strong> <span className="text-ink-2">{e}</span></li>)}</ul>
+        </Card>
+      )}
+      {questions.length > 0 && (
+        <Card title="Questions blocking applications" className="mb-4">
+          <p className="mb-2 text-sm text-ink-2">CareerPilot never guesses these. Each answer is given once and reused for every employer.</p>
+          <ol className="space-y-1.5 text-sm">
+            {questions.map((q) => (
+              <li key={q.question} className="flex items-start justify-between gap-4">
+                <span>{q.question}</span>
+                <span className="shrink-0 text-xs text-ink-3">{q.applications} application{q.applications === 1 ? '' : 's'}</span>
+              </li>
+            ))}
+          </ol>
         </Card>
       )}
       {unknown.length > 0 && (

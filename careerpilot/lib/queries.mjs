@@ -270,6 +270,27 @@ export async function applicationPlaces({ top = 5 } = {}) {
   return { total: rows.length, places, companies };
 }
 
+// The questions that keep applications blocked, each with how many applications it holds up, so one
+// answer can be seen to unlock several. Blocked reasons list them after a colon, separated by "; ".
+export function blockingQuestions(reasons) {
+  const counts = new Map();
+  for (const reason of reasons) {
+    const m = /^(Needs your answer|No verified answer for|No verified match for|No matching option for):\s*(.+)$/s.exec(reason ?? '');
+    if (!m) continue;
+    for (const part of m[2].split(/;\s+(?=["A-Z])/)) {
+      const q = part.replace(/^"|"$/g, '').replace(/\s*\(offered:.*$/s, '').trim();
+      if (q) counts.set(q, (counts.get(q) ?? 0) + 1);
+    }
+  }
+  return [...counts].map(([question, applications]) => ({ question, applications })).sort((a, b) => b.applications - a.applications);
+}
+
+export async function pendingQuestions() {
+  const db = await getDb();
+  const rows = await all(db, `SELECT blocked_reason FROM applications WHERE status = 'blocked' AND blocked_reason IS NOT NULL`);
+  return blockingQuestions(rows.map((r) => r.blocked_reason));
+}
+
 export async function systemStatus() {
   const db = await getDb();
   const stages = ['discover', 'ai', 'gmail', 'prepare', 'outreach', 'digest'];

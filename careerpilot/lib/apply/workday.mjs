@@ -192,6 +192,24 @@ async function createAccount(page, { db, gmail, host, email, log }) {
 
 // ---- Form widgets. Fields are found by Workday's own formField-<name> groups, never by position.
 
+// Workday's sticky footer (Back / Save and Continue) covers the bottom of the window: bring a control to
+// the middle of the screen before clicking it, or the click lands on the footer.
+async function centerClick(locator) {
+  await locator.evaluate((n) => n.scrollIntoView({ block: 'center', inline: 'nearest' })).catch(() => {});
+  await locator.click();
+}
+
+// Closes a search box's popup: an open one sits over the next field and swallows its click. Escape does
+// not always close it, so like a person: click outside it, on the step's heading.
+async function closePopup(page) {
+  const open = page.locator(`${A('activeListContainer')}:visible`);
+  for (let i = 0; i < 3 && (await open.count()); i++) {
+    if (i === 0) await page.keyboard.press('Escape');
+    else await page.locator('main h2').first().click({ position: { x: 2, y: 2 } }).catch(() => {});
+    await page.waitForTimeout(400);
+  }
+}
+
 const F = (name) => `[data-automation-id="formField-${name}"]`;
 
 // The question's text box: its textarea when it has one (a block can also hold other inputs, and
@@ -234,7 +252,8 @@ async function choose(page, field, wants, scope = page) {
   const button = scope.locator(`${F(field)} button[aria-haspopup="listbox"]`).first();
   if (!(await button.count())) return { missing: true };
   const current = (await button.innerText()).trim();
-  await button.click();
+  if (best([current], wants) === 0) return { chosen: current };
+  await centerClick(button);
   // Only the list this button opened: closed lists stay in the page with their old options.
   const list = await button.getAttribute('aria-controls');
   const options = page.locator(list ? `[id="${list}"] [role="option"]` : '[role="listbox"]:visible [role="option"]');
@@ -272,8 +291,9 @@ async function pick(page, field, search, wants, scope = page) {
   let selected = await chips();
   if (best(selected, wants) >= 0) return { chosen: selected[best(selected, wants)] };
   if (selected.length) { debug('pick', field, 'removing', selected); await unselect(group); }
+  await closePopup(page);
   const box = group.locator('input').first();
-  await box.click();
+  await centerClick(box);
   await box.fill(search);
   await box.press('Enter');
   // Results live in the open popup; selected values elsewhere carry the same promptOption tag.
@@ -285,14 +305,16 @@ async function pick(page, field, search, wants, scope = page) {
     debug('pick', field, `"${search}" auto-selected`, selected);
     if (best(selected, wants) >= 0) return { chosen: selected[best(selected, wants)] };
     await unselect(group);
+    await closePopup(page);
     return { options: selected };
   }
   const texts = (await options.allInnerTexts()).map((t) => t.replace(/\s+/g, ' ').trim());
   const i = best(texts, wants);
   debug('pick', field, `"${search}"`, { offered: texts.slice(0, 8), pick: texts[i] ?? null });
-  if (i < 0) { await page.keyboard.press('Escape'); return { options: texts.slice(0, 15) }; }
+  if (i < 0) { await closePopup(page); return { options: texts.slice(0, 15) }; }
   await options.nth(i).click();
   await page.waitForTimeout(500);
+  await closePopup(page);
   return (await chips()).includes(texts[i]) ? { chosen: texts[i] } : { options: texts.slice(0, 15), note: `"${texts[i]}" did not stick` };
 }
 
@@ -389,9 +411,17 @@ async function myInformation(page, ctx) {
   const { profile, answers, job, host } = ctx;
   const [city, state] = String(profile.location ?? '').split(',').map((s) => s.trim());
   const names = employerNames(job, host);
-  let source = await choose(page, 'source', sourceWants(names));
+  // The employer's own site first. A job found through aggregated job listings (source 'aggregator') may
+  // say "other job board" where the employer's list has no site option; one CareerPilot found on the
+  // employer's own board never claims a job board.
+  const viaListings = job.source === 'aggregator';
+  const wants = [...sourceWants(names), ...(viaListings ? [/^other job ?board$/i, /^(online )?job ?board$/i] : [])];
+  let source = await choose(page, 'source', wants);
   if (source.missing) { // a search box instead of a dropdown: the employer's own name finds its site first
-    for (const q of [...names, 'career', 'website']) { source = await pick(page, 'source', q, sourceWants(names)); if (source.chosen || source.missing) break; }
+    for (const q of [...names, 'career', 'website', ...(viaListings ? ['other job board', 'job board'] : [])]) {
+      source = await pick(page, 'source', q, wants);
+      if (source.chosen || source.missing) break;
+    }
   }
   const filled = { source, country: await choose(page, 'country', /^india$/i) };
   await settle(page); // the address block re-renders for the chosen country
@@ -479,7 +509,7 @@ async function entryPanel(page, section, used, same, empty) {
   }
   const add = page.locator(groupLabelled(`${section}-section`)).locator(A('add-button')).first();
   if (!(await add.count())) return null;
-  await add.click();
+  await centerClick(add);
   const panel = page.locator(groupLabelled(`${section}-${all.length + 1}-panel`));
   await panel.first().waitFor({ timeout: 10000 }).catch(() => {});
   if (!(await panel.count())) return null;
@@ -506,13 +536,13 @@ async function setDate(page, scope, field, d) {
     return true;
   };
   if (await ok()) return true;
-  await group.locator(A('dateSectionMonth-display')).first().click();
+  await centerClick(group.locator(A('dateSectionMonth-display')).first());
   await page.keyboard.type(parts.map((p) => want[p]).join(''));
   await page.keyboard.press('Tab');
   if (await ok()) return true;
   // No auto-advance on this tenant: type each part into its own box.
   for (const p of parts) {
-    await group.locator(A(`dateSection${p}-display`)).first().click();
+    await centerClick(group.locator(A(`dateSection${p}-display`)).first());
     await page.keyboard.type(want[p]);
   }
   await page.keyboard.press('Tab');
@@ -613,7 +643,8 @@ const QUESTION_RULES = [
   [/relocat/i, (c) => yes(c.answers.willing_to_relocate)],
   [/\b(friend|relative|family member|related to)\b/i, (c) => yes(c.answers.relatives_at_employer)],
   [/\binterviewed\b/i, (c) => yes(c.answers.previously_interviewed)],
-  [/\b(ever|previously|formerly|currently)\b.{0,20}\b(worked|employed|work)\b|\bformer (employee|intern|contractor)\b/i, (c) => ({ yes: workedAt(c.profile, c.job.company) })],
+  [/^(name )?(prefix|salutation)$/i, (c) => (c.answers.name_prefix ? { option: [new RegExp(`^${escapeRe(String(c.answers.name_prefix).replace(/\.$/, ''))}\\.?$`, 'i')], text: c.answers.name_prefix } : undefined)],
+  [/\b(ever|previously|formerly|currently|already)\b.{0,20}\b(worked|employed|work)\b|\bformer (employee|intern|contractor)\b/i, (c) => ({ yes: workedAt(c.profile, c.job.company) })],
   [/citizen of any of the following countries|citizen of (cuba|iran|north korea|syria)/i,
     (c) => (c.answers.citizenship ? { yes: new RegExp(`\\b${escapeRe(c.answers.citizenship)}\\b`, 'i').test(c.label) } : undefined)],
   [/countries in which you (currently )?hold citizenship|select (all )?(the )?countr(y|ies) of (your )?citizenship/i,
@@ -659,6 +690,7 @@ const QUESTION_RULES = [
   // Voluntary self-identification: declining is a true answer and the only one CareerPilot gives.
   [/\b(ethnic|race|racial|veteran|disabilit|hispanic|latino|sexual orientation|pronoun)/i,
     (c) => (c.required ? { option: [/decline|not wish|prefer not|do not want|choose not|rather not|not to (self.)?identify|not disclos/i] } : undefined)],
+  [/^e-?mail( address)?$/i, (c) => (c.profile.email ? { text: c.profile.email } : undefined)],
   [/^address line 1$|^street address|^address$/i, (c) => (c.answers.address_line1 ? { text: c.answers.address_line1 } : undefined)],
   [/postal code|\bpin ?code\b|\bzip\b/i, (c) => (c.answers.postal_code ? { text: String(c.answers.postal_code) } : undefined)],
   [/\bsignature\b/i, (c) => (c.answers.may_e_sign
@@ -711,6 +743,7 @@ async function applyAnswer(page, q, a) {
       const labels = await radios.evaluateAll((rs) => rs.map((r) => (r.closest('label')?.innerText || document.querySelector(`label[for="${r.id}"]`)?.innerText || r.value || '').trim()));
       const i = best(labels, wantsYesNo ?? a.option ?? []);
       if (i < 0) return { options: labels };
+      await radios.nth(i).evaluate((n) => n.scrollIntoView({ block: 'center' })).catch(() => {});
       await radios.nth(i).check({ force: true });
       return { chosen: labels[i] };
     }

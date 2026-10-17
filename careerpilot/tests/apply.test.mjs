@@ -38,3 +38,17 @@ test('employer questions are answered only from the profile, in the unit they as
   assert.deepEqual(dateRange('May 2026 - Jun 2026'), [{ month: 5, year: 2026 }, { month: 6, year: 2026 }]);
   assert.ok(fieldWants('Big Data Analytics').test('Data Analytics') && !fieldWants('Big Data Analytics').test('Business Analytics'));
 });
+
+test('blocking questions are counted across applications, most blocking first', async () => {
+  const { blockingQuestions } = await import('../lib/queries.mjs');
+  assert.deepEqual(blockingQuestions([
+    'Needs your answer: "Are you at least 18 years old?"; "Do you have a relative at Acme?"',
+    'No verified answer for: Address Line 1; Postal Code',
+    'No verified match for: Field of study for MSc in Big Data Analytics (offered: Data Mining, Data Science)',
+    'Needs your answer: "Are you at least 18 years old?"',
+    'Missing answers: earliest_full_time_start', // the prepare stage's own reason: not an employer question
+  ]).map((q) => [q.question, q.applications]), [
+    ['Are you at least 18 years old?', 2], ['Do you have a relative at Acme?', 1], ['Address Line 1', 1], ['Postal Code', 1],
+    ['Field of study for MSc in Big Data Analytics', 1],
+  ]);
+});
