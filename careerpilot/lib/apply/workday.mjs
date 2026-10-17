@@ -94,19 +94,21 @@ async function startApplication(page) {
   throw new Error('the application did not open');
 }
 
-// A Workday domain, checked on the parsed hostname (never a substring of the URL).
-const workdayLink = (u) => { try { const h = new URL(u).hostname.toLowerCase(); return new URL(u).protocol === 'https:' && /(^|\.)(myworkdayjobs|myworkday)\.com$/.test(h); } catch { return false; } };
-
-// Only mail whose sender Gmail authenticated (SPF/DKIM), and only links that point at Workday itself:
-// anyone can send a message that merely claims to come from Workday.
-async function verificationLink(gmail, sinceMs) {
+// The verification link for this portal's account: from mail Gmail authenticated (SPF/DKIM aligned) and
+// sent from a Workday domain, received after the account was created (msg.date is Gmail's own receive
+// time), pointing at this same portal. Anyone can send mail that merely claims to come from Workday, and
+// another employer's verification link must not be opened for this one.
+const WORKDAY_SENDER = /(^|\.)(myworkday|workday|myworkdayjobs)\.com$/i;
+const onHost = (u, host) => { try { const x = new URL(u); return x.protocol === 'https:' && x.hostname.toLowerCase() === host; } catch { return false; } };
+async function verificationLink(gmail, sinceMs, host) {
   for (let i = 0; i < 18; i++) { // up to ~3 minutes
     const ids = await gmail.listIds(`from:(myworkday.com OR workday.com OR myworkdayjobs.com) newer_than:1d`, 10);
     for (const id of ids) {
       const msg = await gmail.get(id);
-      if (!msg.authenticated || new Date(msg.date).getTime() < sinceMs - 60_000) continue;
+      if (!msg.authenticated || !WORKDAY_SENDER.test(String(msg.fromAddr ?? '').split('@')[1] ?? '')) continue;
+      if (!msg.date || new Date(msg.date).getTime() < sinceMs - 60_000) continue;
       const link = (msg.html.match(/https:\/\/[^"'\s<>]+/g) ?? []).concat(msg.text.match(/https:\/\/\S+/g) ?? [])
-        .map((u) => u.replace(/&amp;/g, '&')).find((u) => /verif|activat|confirm/i.test(u) && workdayLink(u));
+        .map((u) => u.replace(/&amp;/g, '&')).find((u) => /verif|activat|confirm/i.test(u) && onHost(u, host));
       if (link) return link;
     }
     await sleep(10_000);
@@ -137,6 +139,8 @@ async function signIn(page, account, host) {
     await page.waitForSelector(A('signInSubmitButton'), { timeout: 30000 });
   }
   if (await captchaPresent(page)) return { stop: 'needs_you', reason: 'Workday shows a CAPTCHA on sign-in' };
+  // Checked again right before typing: the clicks above could have navigated anywhere.
+  if (!onPortal(page, host)) return { stop: 'blocked', reason: `Sign-in page is not on ${host}` };
   await page.fill(A('email'), account.email);
   await page.fill(A('password'), account.password);
   await page.locator(A('password')).press('Tab'); // Workday reads the field on blur
@@ -156,6 +160,7 @@ async function createAccount(page, { db, gmail, host, email, log }) {
     await link.first().click();
     await page.waitForSelector(A('verifyPassword'), { timeout: 20000 });
   }
+  if (!onPortal(page, host)) return { stop: 'blocked', reason: `Account page is not on ${host}` };
   const account = { email, password: newPassword(), host, state: 'creating', createdAt: now() };
   await saveAccount(db, host, account);
   await page.fill(A('email'), account.email);
@@ -173,10 +178,11 @@ async function createAccount(page, { db, gmail, host, email, log }) {
   }
   if (/verify|verification|activate/i.test(body) && !(await page.locator(A('progressBar')).count())) {
     log('workday: email verification requested');
-    const link = gmail && await verificationLink(gmail, createdAt);
+    const link = gmail && await verificationLink(gmail, createdAt, host);
     if (!link) { await saveAccount(db, host, { ...account, state: 'unverified' }); return { stop: 'blocked', reason: 'Workday verification email did not arrive' }; }
     await page.goto(link, { waitUntil: 'domcontentloaded' });
     await page.waitForTimeout(4000);
+    if (!onPortal(page, host)) { await saveAccount(db, host, { ...account, state: 'unverified' }); return { stop: 'blocked', reason: `Verification link left ${host}` }; }
     await saveAccount(db, host, { ...account, state: 'active' });
     return { reopen: true };
   }
@@ -212,9 +218,11 @@ async function setText(page, field, value, scope = page) {
 
 // `wants`: one pattern, or patterns in order of preference. The first pattern with any matching option
 // wins, so a precise answer is never displaced by a looser one that happens to come earlier in the list.
+// Matched without accents: Workday lists Indian states as "Karnātaka", "Bihār".
+const plain = (t) => String(t).normalize('NFD').replace(/[̀-ͯ]/g, '');
 function best(texts, wants) {
   for (const re of [wants].flat()) {
-    const i = texts.findIndex((t) => re.test(t));
+    const i = texts.findIndex((t) => re.test(plain(t)));
     if (i >= 0) return i;
   }
   return -1;
@@ -294,7 +302,14 @@ const escapeRe = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const sourceWants = (employerNames) => [
   new RegExp(`^(${employerNames.filter(Boolean).map(escapeRe).join('|')})\\b.*\\b(web ?site|careers?( site| page)?)$`, 'i'),
   /^(the )?(company|corporate|employer|organi[sz]ation)('s)?( careers?)? (web)?site$/i,
-  /\b(company|corporate|employer|official)\b[^,]*\b(web)?site\b/i, /^careers? (web)?site$|careers? page|careers? portal/i];
+  /\b(company|corporate|employer|official)\b[^,]*\b(web)?site\b/i, /\bcareers? (web ?site|site|page|portal)\b/i];
+// The employer's names as its options may say them: the company, the portal's tenant, and the Workday
+// site's name ("ag" tenant, "airbus" site) unless that is a generic word.
+const GENERIC_SITES = /^(external|careers?|jobs?|careersite|search|en|apply|global|ext|candidate|recruiting|opportunities|.*_site|.*careers?_site)$/i;
+function employerNames(job, host) {
+  const site = new URL(job.url).pathname.split('/').filter(Boolean).find((s) => !/^[a-z]{2}-[A-Z]{2}$/.test(s));
+  return [job.company, host.split('.')[0], site && /^[a-z]+$/i.test(site) && !GENERIC_SITES.test(site) ? site : null].filter(Boolean);
+}
 
 // A required choice that could not be made: what the form offered instead (for the stop reason).
 // A field that is not on this employer's form at all ({missing}) is not a problem.
@@ -370,12 +385,15 @@ async function saveAndContinue(page) {
 
 const digits = (phone) => String(phone ?? '').replace(/^\s*\+91[\s-]*/, '').replace(/\D/g, '');
 
-async function myInformation(page, { profile, answers, job, host }) {
+async function myInformation(page, ctx) {
+  const { profile, answers, job, host } = ctx;
   const [city, state] = String(profile.location ?? '').split(',').map((s) => s.trim());
-  const filled = {
-    source: await choose(page, 'source', sourceWants([job.company, host.split('.')[0]])),
-    country: await choose(page, 'country', /^india$/i),
-  };
+  const names = employerNames(job, host);
+  let source = await choose(page, 'source', sourceWants(names));
+  if (source.missing) { // a search box instead of a dropdown: the employer's own name finds its site first
+    for (const q of [...names, 'career', 'website']) { source = await pick(page, 'source', q, sourceWants(names)); if (source.chosen || source.missing) break; }
+  }
+  const filled = { source, country: await choose(page, 'country', /^india$/i) };
   await settle(page); // the address block re-renders for the chosen country
   filled.givenName = await setText(page, 'legalName--firstName', answers.legal_given_name);
   filled.familyName = await setText(page, 'legalName--lastName', answers.legal_family_name);
@@ -386,7 +404,26 @@ async function myInformation(page, { profile, answers, job, host }) {
   filled.phone = await setText(page, 'phoneNumber', digits(profile.phone));
   const problems = [unmet('How did you hear about us', filled.source), unmet('Country', filled.country),
     unmet('State', filled.state ?? { missing: true }), unmet('Phone device type', filled.phoneType), unmet('Country phone code', filled.phoneCode)].filter(Boolean);
-  return problems.length ? { filled, stop: 'blocked', reason: `No matching option for: ${problems.join('; ')}` } : { filled };
+  if (problems.length) return { filled, stop: 'blocked', reason: `No matching option for: ${problems.join('; ')}` };
+  const rest = await answerRemaining(page, ctx); // this employer's own questions on the same page
+  return rest.unknown.length ? { filled: { ...filled, extra: rest.filled }, stop: 'blocked', reason: `Needs your answer: ${rest.unknown.map((u) => `"${u}"`).join('; ')}` }
+    : { filled: { ...filled, extra: rest.filled } };
+}
+
+// Required questions still empty after a step's own filling: answered from the profile when a rule
+// knows them, otherwise returned as unknown.
+async function answerRemaining(page, ctx) {
+  const empty = new Set((await emptyRequired(page)).map((l) => l.trim()));
+  const filled = [];
+  const unknown = [];
+  for (const q of await readQuestions(page)) {
+    if (!empty.has(q.label.trim())) continue;
+    const a = answerFor(q, ctx);
+    const r = a === undefined ? {} : await applyAnswer(page, q, a);
+    if (r.chosen) filled.push({ question: q.label.slice(0, 120), answer: r.chosen });
+    else unknown.push(q.label.slice(0, 200));
+  }
+  return { filled, unknown };
 }
 
 const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
@@ -622,6 +659,8 @@ const QUESTION_RULES = [
   // Voluntary self-identification: declining is a true answer and the only one CareerPilot gives.
   [/\b(ethnic|race|racial|veteran|disabilit|hispanic|latino|sexual orientation|pronoun)/i,
     (c) => (c.required ? { option: [/decline|not wish|prefer not|do not want|choose not|rather not|not to (self.)?identify|not disclos/i] } : undefined)],
+  [/^address line 1$|^street address|^address$/i, (c) => (c.answers.address_line1 ? { text: c.answers.address_line1 } : undefined)],
+  [/postal code|\bpin ?code\b|\bzip\b/i, (c) => (c.answers.postal_code ? { text: String(c.answers.postal_code) } : undefined)],
   [/\bsignature\b/i, (c) => (c.answers.may_e_sign
     ? { text: `${c.profile.name}, ${new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Asia/Kolkata' })}` }
     : undefined)],
@@ -745,6 +784,10 @@ export async function applyWorkday({ page, job, profile, resumePath, db, gmail, 
   // Signs in (when an account exists), then opens the application. Returns where it landed, or a stop.
   const begin = async () => {
     await openPosting(page, job.url);
+    if (!onPortal(page, host)) return { stop: 'blocked', reason: `The posting redirected away from ${host}` };
+    // A cookie banner (Labcorp's has Accept / Decline): decline, the choice that tracks least.
+    const decline = page.getByRole('button', { name: /^(decline|reject all|reject)$/i });
+    if ((await decline.count()) && /cookie/i.test(await page.locator('body').innerText().catch(() => ''))) await decline.first().click().catch(() => {});
     const saved = await loadAccount(db, host);
     if (usable(saved)) {
       const stopped = await signIn(page, saved, host);

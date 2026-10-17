@@ -25,6 +25,7 @@ export const DEFAULT_SETTINGS = {
   },
   automation: {
     emailApplications: true,         // send applications to employer-published application addresses
+    portalApplications: true,        // submit on employer Workday sites; questions the profile cannot answer block, never guess
     outreach: true,                  // cold outreach to verified public recruiting contacts
     followUps: true,
     actOnUndisclosedComp: true,      // allow automatic actions when salary is not disclosed (status stays low-confidence)
@@ -32,6 +33,7 @@ export const DEFAULT_SETTINGS = {
   limits: {
     outreachPerDay: 10,
     emailApplicationsPerDay: 10,
+    portalApplicationsPerDay: 10,
     perCompanyCooldownDays: 21,
     maxContactsPerCompany: 2,
     maxApplicationsPerAddress: 2,   // email applications to one employer address per cooldown window

@@ -64,6 +64,7 @@ export default async function Settings({ searchParams }) {
         <Card title="Automation">
           <div className="space-y-2">
             <Toggle name="emailApplications" label="Send applications to employer-published application emails" checked={s.automation.emailApplications} />
+            <Toggle name="portalApplications" label="Submit applications on employer Workday sites" checked={s.automation.portalApplications} hint="Questions your profile does not answer stop that application and are listed for you." />
             <Toggle name="outreach" label="Email verified recruiting contacts from postings" checked={s.automation.outreach} />
             <Toggle name="followUps" label="Send follow-ups when there is no reply" checked={s.automation.followUps} />
             <Toggle name="actOnUndisclosedComp" label="Act on jobs whose pay is not disclosed" checked={s.automation.actOnUndisclosedComp} hint="Off = only jobs with verified pay get automatic emails." />
@@ -73,6 +74,7 @@ export default async function Settings({ searchParams }) {
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
             <Field name="outreachPerDay" label="Outreach per day" value={s.limits.outreachPerDay} />
             <Field name="emailApplicationsPerDay" label="Email applications per day" value={s.limits.emailApplicationsPerDay} />
+            <Field name="portalApplicationsPerDay" label="Portal applications per day" value={s.limits.portalApplicationsPerDay} />
             <Field name="perCompanyCooldownDays" label="Company cooldown (days)" value={s.limits.perCompanyCooldownDays} />
             <Field name="maxContactsPerCompany" label="Contacts per company" value={s.limits.maxContactsPerCompany} />
             <Field name="followUpAfterDays" label="Follow up after (days)" value={s.limits.followUpAfterDays} />

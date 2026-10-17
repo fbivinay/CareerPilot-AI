@@ -1,0 +1,74 @@
+# CareerPilot portal applications: fills and submits prepared applications on employer Workday sites
+# (careerpilot/lib/apply). Questions the candidate's profile cannot answer stop that application and are
+# listed on the dashboard; nothing is guessed and no CAPTCHA is solved.
+#
+# Manual trigger only for now; a daily schedule is added once the first submissions are verified.
+# Free-tier budget: a Workday application takes ~4-5 minutes in a browser, so a run is capped at a few.
+name: careerpilot-apply
+
+on:
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: 'Most applications to attempt this run'
+        default: '3'
+      submit:
+        description: 'Submit (false = fill up to Review only)'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: careerpilot-apply
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Restore dependencies
+        id: deps
+        uses: actions/cache@v4
+        with:
+          path: |
+            node_modules
+            careerpilot/node_modules
+          key: deps-${{ runner.os }}-${{ hashFiles('package.json', 'careerpilot/package-lock.json') }}
+      - name: Install dependencies
+        if: steps.deps.outputs.cache-hit != 'true'
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+        run: |
+          npm install --ignore-scripts --no-audit --no-fund
+          npm ci --prefix careerpilot --ignore-scripts --no-audit --no-fund
+      - name: Restore browser
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('package.json') }}
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Apply
+        working-directory: careerpilot
+        env:
+          RUN_BUDGET_MINUTES: '24'
+          TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+          TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+          APP_ENCRYPTION_KEY: ${{ secrets.APP_ENCRYPTION_KEY }}
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          LIMIT: ${{ inputs.limit || '3' }}
+          SUBMIT: ${{ inputs.submit && '--submit' || '' }}
+        run: |
+          if [ -z "$TURSO_DATABASE_URL" ]; then
+            echo "::notice::TURSO_DATABASE_URL secret is not set yet; skipping (see careerpilot/SETUP.md)."
+            exit 0
+          fi
+          node scripts/auto-apply.mjs $SUBMIT --limit "$LIMIT"
