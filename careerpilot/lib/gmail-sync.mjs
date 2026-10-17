@@ -4,9 +4,9 @@
 import { all, audit, kvGet, kvSet, now, one, run } from './db.mjs';
 import { aiJson, AiUnavailable } from './ai.mjs';
 import { createApplication, transition } from './applications.mjs';
-import { alertPlatform, classifyEmail, extractDetails, parseJobAlert } from './email-intel.mjs';
+import { classifyEmail, extractDetails, parseJobAlert, platformSender } from './email-intel.mjs';
 import { upsertJob } from './jobs.mjs';
-import { upsertContact } from './contacts.mjs';
+import { domainMatchesCompany, upsertContact } from './contacts.mjs';
 import { log } from './log.mjs';
 
 const CATEGORY_STATUS = {
@@ -97,7 +97,8 @@ export async function processMessage(db, msg, settings, { ourThreadIds }) {
     // A confirmation for something the candidate applied to by hand: record the application.
     if (!link && cls.category === 'application_confirmation') {
       const guess = companyFromSubject(msg.subject);
-      if (guess) {
+      // Only authenticated mail from a hiring platform or the company itself may create a record.
+      if (guess && msg.authenticated && (platformSender(msg.fromAddr) || domainMatchesCompany(msg.fromAddr, guess.company))) {
         const first = companyKey(guess.company).split(' ')[0] ?? '';
         const candidates = first.length >= 3
           ? await all(db, `SELECT id, company, title FROM jobs WHERE status != 'duplicate' AND lower(company) LIKE ?`, [`%${first}%`])
@@ -115,8 +116,12 @@ export async function processMessage(db, msg, settings, { ourThreadIds }) {
 
     const target = CATEGORY_STATUS[cls.category];
     if (target && link?.app_id) {
-      const app = await one(db, 'SELECT * FROM applications WHERE id = ?', [link.app_id]);
-      if (cls.confidence >= AUTO_CONFIDENCE && !link.ambiguous) {
+      const app = await one(db, 'SELECT a.*, j.company FROM applications a JOIN jobs j ON j.id = a.job_id WHERE a.id = ?', [link.app_id]);
+      // Status changes only from mail we can trust: a reply in a thread we started, or mail that passed
+      // Gmail's DKIM/SPF check and comes from a hiring platform or the company's own domain. Offers are
+      // always confirmed by the candidate.
+      const trusted = link.how === 'thread' || (msg.authenticated && (platformSender(msg.fromAddr) || domainMatchesCompany(msg.fromAddr, app.company ?? link.company ?? '')));
+      if (trusted && target !== 'offer' && cls.confidence >= AUTO_CONFIDENCE && !link.ambiguous) {
         result.transitioned = await transition(db, app, target, {
           evidence: { type: 'email', emailId: msg.id, threadId: msg.threadId, subject: msg.subject, from: msg.fromAddr },
           reason: `${cls.category} email (${classifiedBy}, ${cls.confidence})`, at: msg.date,
@@ -131,10 +136,14 @@ export async function processMessage(db, msg, settings, { ourThreadIds }) {
       await run(db, 'UPDATE contacts SET opted_out = 1 WHERE email = ?', [msg.fromAddr]);
       await audit(db, 'contact', msg.fromAddr, 'opted_out', { detail: { emailId: msg.id } });
     }
-    // A real person writing from a company domain about an application is a verified contact.
-    if (link?.job_id && !NOREPLY.test(msg.fromAddr) && !GENERIC_DOMAINS.test(msg.fromAddr) && cls.category !== 'opt_out') {
+    // A real person writing about an application, from the company's own domain, in our thread or with
+    // passing DKIM/SPF, becomes a verified contact.
+    if (link?.job_id && !NOREPLY.test(msg.fromAddr) && !GENERIC_DOMAINS.test(msg.fromAddr) && cls.category !== 'opt_out'
+      && (link.how === 'thread' || msg.authenticated)) {
       const job = await one(db, 'SELECT company FROM jobs WHERE id = ?', [link.job_id]);
-      await upsertContact(db, { email: msg.fromAddr, name: msg.fromName, company: job?.company, sourceType: 'inbound_email', sourceRef: msg.id, domainMatch: true });
+      if (job && domainMatchesCompany(msg.fromAddr, job.company)) {
+        await upsertContact(db, { email: msg.fromAddr, name: msg.fromName, company: job.company, sourceType: 'inbound_email', sourceRef: msg.id, domainMatch: true });
+      }
     }
   }
 

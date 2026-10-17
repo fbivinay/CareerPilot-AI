@@ -105,6 +105,8 @@ export function parseMessage(m) {
     else if (part.mimeType === 'text/html' && part.body?.data) html += b64(part.body.data);
     for (const p of part.parts ?? []) walk(p);
   })(m.payload);
+  // Trust only the Authentication-Results header Gmail's own MX added; a sender can forge others.
+  const authResults = (m.payload?.headers ?? []).find((h) => h.name.toLowerCase() === 'authentication-results' && /^\s*mx\.google\.com/i.test(h.value))?.value ?? '';
   const from = headers.from ?? '';
   const addr = (from.match(/<([^>]+)>/)?.[1] ?? from).trim().toLowerCase();
   const name = from.includes('<') ? from.slice(0, from.indexOf('<')).replace(/"/g, '').trim() : '';
@@ -119,12 +121,22 @@ export function parseMessage(m) {
     messageId: headers['message-id'] ?? null,
     references: headers.references ?? null,
     listUnsubscribe: headers['list-unsubscribe'] ?? null,
+    authenticated: fromAuthenticated(authResults, addr),
     date: m.internalDate ? new Date(Number(m.internalDate)).toISOString() : null,
     snippet: decodeEntities(m.snippet ?? ''),
     text: text || htmlToPlain(html),
     html,
     attachments,
   };
+}
+
+// The visible From domain is proven only by DMARC alignment, or by a passing DKIM signature whose
+// signing domain is the From domain (or its parent). Plain SPF checks the envelope sender, not From.
+export function fromAuthenticated(authResults, fromAddr) {
+  if (/\bdmarc=pass\b/i.test(authResults)) return true;
+  const domain = String(fromAddr).split('@')[1] ?? '';
+  return [...authResults.matchAll(/\bdkim=pass\b[^;]*?header\.(?:i=[^@\s;]*@|d=)([a-z0-9.-]+)/gi)]
+    .some(([, d]) => domain && (domain === d.toLowerCase() || domain.endsWith('.' + d.toLowerCase())));
 }
 
 const encodeHeader = (s) => (/^[\x20-\x7e]*$/.test(s) ? s : `=?UTF-8?B?${Buffer.from(s).toString('base64')}?=`);

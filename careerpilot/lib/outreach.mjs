@@ -42,7 +42,8 @@ export async function blockReason(db, { job, contact, kind }, settings) {
   if ((job.score ?? 0) < s.matching.autoActionScore) return `score ${job.score} below auto-action threshold ${s.matching.autoActionScore}`;
   if (job.confidence !== 'high' && !s.automation.actOnUndisclosedComp) return 'low-confidence match (compensation unverified)';
   if (contact.opted_out) return 'contact opted out';
-  if (contact.source_type !== 'inbound_email' && !contact.domain_match && kind !== 'application') return 'contact domain does not match the company';
+  // Resume and personal details only go to addresses on the employer's own domain (or a person who wrote to us from it).
+  if (contact.source_type !== 'inbound_email' && !contact.domain_match) return 'address domain does not match the company (add it manually to approve)';
   if (await one(db, `SELECT 1 FROM outreach WHERE contact_id = ? AND job_id = ? AND kind = ?`, [contact.id, job.id, kind])) return 'already sent for this job';
   const cooldown = new Date(Date.now() - s.limits.perCompanyCooldownDays * 864e5).toISOString();
   if (kind !== 'application') {

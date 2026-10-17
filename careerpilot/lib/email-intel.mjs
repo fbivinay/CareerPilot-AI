@@ -28,6 +28,11 @@ const RULES = [
 
 export const OPT_OUT = /\b(unsubscribe|remove me|do not contact|don't contact|stop (emailing|contacting)|not interested, thanks|please don't email)\b/i;
 
+// Hiring platforms whose (authenticated) mail can be trusted to describe an application's state.
+export function platformSender(fromAddr) {
+  return ATS_SENDERS.test(fromAddr ?? '') || alertPlatform(fromAddr) != null;
+}
+
 export function alertPlatform(fromAddr) {
   return ALERT_SENDERS.find(([, re]) => re.test(fromAddr))?.[0] ?? null;
 }

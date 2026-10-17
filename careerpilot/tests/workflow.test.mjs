@@ -74,7 +74,7 @@ test('gmail sync links a confirmation, transitions the application and records e
     { source: 'lever', settings });
   const app = await createApplication(db, id, { method: 'portal' });
   const msg = { id: 'm1', threadId: 't1', fromAddr: 'no-reply@hire.lever.co', fromName: 'Acme', subject: 'Thank you for applying to Acme',
-    text: 'Hi, we have received your application for Junior Data Analyst.', snippet: '', date: '2026-10-20T10:00:00.000Z', html: '' };
+    text: 'Hi, we have received your application for Junior Data Analyst.', snippet: '', date: '2026-10-20T10:00:00.000Z', html: '', authenticated: true };
   const r = await processMessage(db, msg, settings, { ourThreadIds: new Set() });
   assert.equal(r.transitioned, true);
   const after = await one(db, 'SELECT * FROM applications WHERE id = ?', [app.id]);
@@ -94,11 +94,32 @@ test('a confirmation for a manual application creates a tracked application', as
   assert.deepEqual(companyFromSubject('Your application to Data Analyst at Foo Labs'), { title: 'Data Analyst', company: 'Foo Labs' });
   const db = await openDb({ url: ':memory:' });
   const r = await processMessage(db, { id: 'm9', threadId: 't9', fromAddr: 'jobs-noreply@linkedin.com', fromName: 'LinkedIn',
-    subject: 'Your application was sent to Foo Labs', text: 'Your application was sent to Foo Labs', snippet: '', date: '2026-10-20T10:00:00.000Z', html: '' },
+    subject: 'Your application was sent to Foo Labs', text: 'Your application was sent to Foo Labs', snippet: '', date: '2026-10-20T10:00:00.000Z', html: '', authenticated: true },
   settings, { ourThreadIds: new Set() });
   assert.equal(r.transitioned, true);
   const apps = await all(db, 'SELECT a.status, j.company FROM applications a JOIN jobs j ON j.id = a.job_id');
   assert.deepEqual(apps.map((a) => [a.status, a.company]), [['confirmed', 'Foo Labs']]);
+});
+
+test('spoofed or unauthenticated mail never changes status; offers always need the candidate', async () => {
+  const db = await openDb({ url: ':memory:' });
+  const { id } = await upsertJob(db, { url: 'https://jobs.lever.co/acme/5', title: 'Junior Data Analyst', company: 'Acme', location: 'Bengaluru', description: 'Freshers' }, { source: 'lever', settings });
+  const app = await createApplication(db, id, { method: 'portal' });
+  const base = { threadId: 'tx', fromName: 'Acme HR', snippet: '', date: '2026-10-21T10:00:00.000Z', html: '' };
+  // Claims to be Acme but fails DMARC/DKIM.
+  const r1 = await processMessage(db, { ...base, id: 's1', fromAddr: 'hr@acme.com', subject: 'Acme update', text: 'Unfortunately, Acme will not be moving forward.', authenticated: false }, settings, { ourThreadIds: new Set() });
+  assert.equal(r1.transitioned, false);
+  assert.equal(r1.review, true);
+  // Authenticated, but from an unrelated domain that merely mentions Acme.
+  const r2 = await processMessage(db, { ...base, id: 's2', fromAddr: 'x@random.org', subject: 'Acme update', text: 'Unfortunately, Acme will not be moving forward.', authenticated: true }, settings, { ourThreadIds: new Set() });
+  assert.equal(r2.transitioned, false);
+  // Authenticated offer from the company itself still waits for the candidate.
+  const r3 = await processMessage(db, { ...base, id: 's3', fromAddr: 'hr@acme.com', subject: 'Offer from Acme', text: 'We are pleased to offer you the role at Acme.', authenticated: true }, settings, { ourThreadIds: new Set() });
+  assert.equal(r3.transitioned, false);
+  assert.equal((await one(db, 'SELECT status FROM applications WHERE id = ?', [app.id])).status, 'ready');
+  // Authenticated rejection from the company's domain is applied.
+  const r4 = await processMessage(db, { ...base, id: 's4', fromAddr: 'hr@acme.com', subject: 'Acme update', text: 'Unfortunately, Acme will not be moving forward.', authenticated: true }, settings, { ourThreadIds: new Set() });
+  assert.equal(r4.transitioned, true);
 });
 
 test('outreach policy gate', async () => {
@@ -107,7 +128,8 @@ test('outreach policy gate', async () => {
   const contact = { id: 'c', opted_out: 0, domain_match: 1, source_type: 'jd' };
   assert.equal(await blockReason(db, { job, contact, kind: 'initial' }, settings), null);
   assert.equal(await blockReason(db, { job, contact: { ...contact, opted_out: 1 }, kind: 'initial' }, settings), 'contact opted out');
-  assert.equal(await blockReason(db, { job, contact: { ...contact, domain_match: 0 }, kind: 'initial' }, settings), 'contact domain does not match the company');
+  assert.match(await blockReason(db, { job, contact: { ...contact, domain_match: 0 }, kind: 'initial' }, settings), /domain does not match/);
+  assert.match(await blockReason(db, { job, contact: { ...contact, domain_match: 0 }, kind: 'application' }, settings), /domain does not match/);
   assert.match(await blockReason(db, { job: { ...job, score: 50 }, contact, kind: 'initial' }, settings), /below auto-action/);
   const strict = structuredClone(settings);
   strict.automation.actOnUndisclosedComp = false;
@@ -157,4 +179,13 @@ test('MIME message carries threading headers and attachment', () => {
   const raw = buildMime({ to: 'a@b.in', subject: 'Re: Hello', text: 'Hi', inReplyTo: '<m1@mail>', attachments: [{ filename: 'r.pdf', mimeType: 'application/pdf', content: Buffer.from('x') }] });
   assert.match(raw, /In-Reply-To: <m1@mail>/);
   assert.match(raw, /filename="r.pdf"/);
+});
+
+test('login redirect target is restricted to this origin', async () => {
+  const src = (await import('node:fs')).readFileSync(new URL('../app/actions.js', import.meta.url), 'utf8');
+  const safeNext = new Function(`${src.match(/function safeNext[\s\S]*?\n}\n/)[0]}; return safeNext;`)();
+  assert.equal(safeNext('/jobs?status=all'), '/jobs?status=all');
+  assert.equal(safeNext('//evil.com'), '/');
+  assert.equal(safeNext(String.raw`/\evil.com`), '/');
+  assert.equal(safeNext('https://evil.com/x'), '/');
 });

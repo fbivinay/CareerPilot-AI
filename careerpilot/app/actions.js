@@ -36,8 +36,17 @@ export async function login(_prev, formData) {
   (await cookies()).set(COOKIE, await createSession(), {
     httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production', maxAge: MAX_AGE, path: '/',
   });
-  const next = String(formData.get('next') ?? '/');
-  redirect(next.startsWith('/') && !next.startsWith('//') ? next : '/');
+  redirect(safeNext(formData.get('next')));
+}
+
+// Only same-origin paths; "//host", "/\host" and absolute URLs resolve to another origin and are refused.
+function safeNext(raw) {
+  try {
+    const u = new URL(String(raw ?? '/'), 'http://local.invalid');
+    return u.origin === 'http://local.invalid' ? u.pathname + u.search : '/';
+  } catch {
+    return '/';
+  }
 }
 
 export async function logout() {
