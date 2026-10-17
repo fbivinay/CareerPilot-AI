@@ -71,9 +71,9 @@ async function linkEmail(db, msg, { stated = applicationDetails(msg), creates = 
     if (creates) return null;
   }
 
-  // Job-board mail is full of other employers (recommendations, company blurbs): only its sender name and
-  // subject say which company it is about.
-  const body = alertPlatform(msg.fromAddr) ? '' : (msg.text ?? '').slice(0, 3000);
+  // Job-board mail and bulk mail (newsletters, promotions: they carry List-Unsubscribe) are full of other
+  // companies' names, so only their sender and subject say which company they are about.
+  const body = alertPlatform(msg.fromAddr) || msg.listUnsubscribe ? '' : (msg.text ?? '').slice(0, 3000);
   const hay = `${msg.fromName} ${msg.fromAddr.split('@')[1] ?? ''} ${msg.subject} ${body}`.toLowerCase();
   const hits = apps.filter((a) => mentionsCompany(hay, a.company));
   const companies = new Set(hits.map((h) => companyKey(h.company)));
@@ -233,11 +233,14 @@ export async function processSentMessage(db, msg, settings, { selfAddress }) {
   return { recorded: true };
 }
 
-export async function syncGmail(db, gmail, settings, { lookbackDays = 30, max = 300, deadline = Infinity, selfAddress } = {}) {
+export async function syncGmail(db, gmail, settings, { lookbackDays = 30, max = 5000, deadline = Infinity, selfAddress } = {}) {
   const last = await kvGet(db, 'gmail:last_sync');
   const after = last ? Math.floor(new Date(last).getTime() / 1000) - 3600 : Math.floor(Date.now() / 1000) - lookbackDays * 86400;
-  const ids = await gmail.listIds(`after:${after} -in:sent -in:chats -in:drafts -category:promotions -category:social`, max);
-  const sentIds = await gmail.listIds(`after:${after} in:sent`, 100);
+  // Gmail lists newest first, so a capped list silently skips the oldest mail: list everything since the
+  // checkpoint (max is only a safety bound) and let the deadline limit the processing. Every tab is read;
+  // Promotions and Social occasionally hold real job mail.
+  const ids = await gmail.listIds(`after:${after} -in:sent -in:chats -in:drafts`, max);
+  const sentIds = await gmail.listIds(`after:${after} in:sent`, max);
   const all_ = [...ids, ...sentIds];
   const known = new Set((await all(db, `SELECT id FROM emails WHERE id IN (${all_.map(() => '?').join(',') || "''"})`, all_)).map((r) => r.id));
   const ourThreadIds = new Set((await all(db, `SELECT gmail_thread_id t FROM outreach WHERE gmail_thread_id IS NOT NULL

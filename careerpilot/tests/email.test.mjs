@@ -119,3 +119,20 @@ test('Gmail calls stay under the per-user quota and rate-limit replies are retri
   await b;
   assert.deepEqual(calls, [0, 2_000, 60_050]);
 });
+
+test('Gmail sync reads every message since the checkpoint from every tab, not just the newest 300', async () => {
+  const { openDb } = await import('../lib/db.mjs');
+  const { syncGmail } = await import('../lib/gmail-sync.mjs');
+  const { DEFAULT_SETTINGS } = await import('../lib/settings.mjs');
+  const db = await openDb({ url: ':memory:' });
+  const ids = Array.from({ length: 450 }, (_, i) => `m${449 - i}`); // Gmail order: newest first
+  const queries = [];
+  const gmail = {
+    listIds: async (q, max) => { queries.push(q); return q.includes('in:sent') && !q.includes('-in:sent') ? [] : ids.slice(0, max); },
+    get: async (id) => ({ id, threadId: id, fromAddr: 'news@example.org', fromName: 'News', subject: 'Weekly digest', text: 'Hello',
+      snippet: '', date: new Date(Date.UTC(2026, 9, 1) + Number(id.slice(1)) * 60_000).toISOString() }),
+  };
+  const r = await syncGmail(db, gmail, { ...DEFAULT_SETTINGS, timeline: null }, { selfAddress: 'me@example.com' });
+  assert.equal(r.processed, 450);
+  assert.ok(queries.every((q) => !q.includes('category:')));
+});

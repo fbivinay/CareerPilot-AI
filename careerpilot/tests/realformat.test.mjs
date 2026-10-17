@@ -132,3 +132,19 @@ test('Wellfound confirmations: the upsell is not an interview, and companies nam
   const apps = await all(db, 'SELECT a.status, j.company, j.title FROM applications a JOIN jobs j ON j.id = a.job_id ORDER BY j.company');
   assert.deepEqual(apps.map((a) => [a.company, a.title, a.status]), [['Exampleschool', 'Data Analyst Intern', 'confirmed'], ['Othercorp', 'Product Analyst', 'ready']]);
 });
+
+test('non-job mail: a failed KYC check is no rejection, and newsletters naming a company are not linked to it', async () => {
+  assert.notEqual(classifyEmail({ fromAddr: 'noreply@digilocker.gov.in', subject: 'Aadhaar KYC Verification Failed - DigiLocker',
+    text: 'Dear User, we regret to inform you that your Aadhaar KYC verification attempt has failed.' }).category, 'rejection');
+  assert.equal(classifyEmail({ fromAddr: 'jobs@acme.com', subject: 'Your application',
+    text: 'We regret to inform you that your application was not successful.' }).category, 'rejection');
+
+  const db = await openDb({ url: ':memory:' });
+  const job = await upsertJob(db, { url: 'https://jobs.example.com/target/1', title: 'Data Analyst', company: 'Target', location: 'Bengaluru' }, { source: 'test', settings });
+  await createApplication(db, job.id, { status: 'assessment' });
+  const letter = { id: 'n1', threadId: 'tn1', fromAddr: 'writer@substack.com', fromName: 'AI Weekly', snippet: '', html: '',
+    date: '2026-10-10T08:00:00.000Z', subject: 'When Agents Cross the Boundary', listUnsubscribe: '<https://substack.com/unsubscribe>',
+    text: 'This week: what is a good target for agent reliability? Target and Walmart both shipped new assistants.' };
+  await processMessage(db, letter, settings, { ourThreadIds: new Set() });
+  assert.equal((await one(db, 'SELECT application_id FROM emails WHERE id = ?', ['n1'])).application_id, null);
+});

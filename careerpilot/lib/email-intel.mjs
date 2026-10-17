@@ -38,7 +38,8 @@ const SIGNALS = [
   ['rejection', {
     strong: [/\bnot (be )?(moving|move|going) forward with your (application|candidacy|profile)\b/,
       /\b(decided|chosen|decision) (not )?to (move|proceed|go) forward with (other|another|different) candidates?\b/,
-      /\bmove forward with (other|another|different) candidates?\b/, /\bregret to inform\b/,
+      /\bmove forward with (other|another|different) candidates?\b/,
+      /\bregret to inform\b[^.!?]{0,150}\b(application|candidacy|candidature|position|role|profile|shortlisted|selected|interview|opportunity)\b/,
       /\b(have|has) not been (selected|shortlisted)\b/, /\bwill not be (proceeding|progressing|moving forward)\b/,
       /\b(unable|not able) to (move forward|proceed|offer you)\b/, /\bdecided not to (proceed|progress|move forward)\b/,
       /\bpursue other candidates\b/, /\bposition has (now )?been filled\b/, /\bnot (to )?progress(ing)? your application\b/,
