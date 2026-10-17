@@ -4,7 +4,7 @@ import { linkEmailToApplication, markEmailReviewed } from '../actions.js';
 
 export const dynamic = 'force-dynamic';
 
-const CATEGORIES = ['application_confirmation', 'assessment', 'interview', 'offer', 'rejection', 'recruiter_reply', 'job_alert', 'ats_update', 'opt_out', 'other'];
+const CATEGORIES = ['application_confirmation', 'sent_application', 'assessment', 'interview', 'offer', 'rejection', 'recruiter_reply', 'job_alert', 'ats_update', 'opt_out', 'bounce', 'other'];
 
 export default async function Inbox({ searchParams }) {
   const params = await searchParams;

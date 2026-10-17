@@ -1,5 +1,6 @@
-// Rule-first email understanding: category, confidence, extracted next steps, and job-alert parsing.
-// An LLM (no-training provider only) is consulted just for messages the rules cannot decide.
+// Rule-first email understanding: category, confidence, extracted next steps, job-alert parsing and
+// application details. An LLM (no-training provider only) is consulted just for messages the rules
+// cannot decide. Formats here were checked against real hiring mail (foundit, SHL, LinkedIn, ATSs).
 
 export const ALERT_SENDERS = [
   ['linkedin', /@(.*\.)?linkedin\.com$/],
@@ -12,15 +13,20 @@ export const ALERT_SENDERS = [
   ['foundit', /@(.*\.)?(foundit\.in|monsterindia\.com)$/],
   ['hirist', /@(.*\.)?(hirist\.(com|tech)|iimjobs\.com)$/],
   ['glassdoor', /@(.*\.)?glassdoor\.(com|co\.in)$/],
+  ['unstop', /@(.*\.)?unstop\.com$/],
 ];
 
 const ATS_SENDERS = /@(.*\.)?(greenhouse\.io|greenhouse-mail\.io|lever\.co|hire\.lever\.co|ashbyhq\.com|myworkday\.com|smartrecruiters\.com|workablemail\.com|workable\.com|recruitee\.com|teamtailor\.com|breezy\.hr|freshteam\.com|zohorecruit\.(com|in)|keka\.com|darwinbox\.(in|com)|icims\.com|successfactors\.com|jobvite\.com)$/;
-const ASSESSMENT_HOSTS = /(hackerrank\.com|codility\.com|hackerearth\.com|mettl\.com|testgorilla\.com|imocha\.io|codesignal\.com|coderbyte\.com|glider\.ai|vervoe\.com|xobin\.com|testdome\.com|interviewbit\.com|hirepro\.in|amcat|talview\.com)/i;
+// Assessment vendors that send tests on an employer's behalf.
+const VENDOR_SENDERS = /@(.*\.)?(shl\.com|aspiringminds\.com|hackerrank\.com|hackerrankforwork\.com|codility\.com|hackerearth\.com|mettl\.com|mercer-mettl\.com|testgorilla\.com|imocha\.io|codesignal\.com|talview\.com|hirepro\.in|elitmus\.com|glider\.ai|xobin\.com|doselect\.com)$/;
+const ASSESSMENT_HOSTS = /(hackerrank\.com|codility\.com|hackerearth\.com|mettl\.com|testgorilla\.com|imocha\.io|codesignal\.com|coderbyte\.com|glider\.ai|vervoe\.com|xobin\.com|testdome\.com|interviewbit\.com|hirepro\.in|amcat|aspiringminds\.com|shl\.com|talview\.com|elitmus\.com|doselect\.com)/i;
 const MEETING_HOSTS = /(meet\.google\.com|zoom\.us|teams\.microsoft\.com|teams\.live\.com|calendly\.com|webex\.com)/i;
+// Newsletters and creator platforms: their articles mention interviews and assessments all the time.
+const NEWSLETTER_SENDERS = /@([\w-]+\.)*(substack\.com|beehiiv\.com|medium\.com|mailchimpapp\.net|convertkit-mail\d*\.com|buttondown\.email|ghost\.io)$/i;
 
 // Phrases that decide a category on their own (strong) or only hint at it (weak: confidence too low
-// for automatic status changes, so the message goes to review). Matching is per sentence, and
-// conditional sentences ("if you are shortlisted, we will schedule an interview") are ignored.
+// for automatic status changes). Matching is per sentence; a condition before the phrase
+// ("if you are shortlisted, we will schedule an interview") cancels it.
 const SIGNALS = [
   ['offer', {
     strong: [/\b(pleased|delighted|happy|excited) to (extend|offer) (you )?(an? |the |this )?(formal |written )?(offer|position|role|job)\b/,
@@ -45,19 +51,19 @@ const SIGNALS = [
     weak: [/\binterview\b/],
   }],
   ['assessment', {
-    strong: [/\b(complete|take|attempt|start) (the|an|your|this) (online |coding |technical )?(assessment|test|challenge|assignment)\b/,
+    strong: [/\b(complete|take|attempt|start) (the|an|your|this|one or more) (online |coding |technical )?(assessments?|tests?|challenges?|assignments?)\b/,
+      /\binvites you to complete\b/, /^assessment invitation\b/,
       /\b(online assessment|coding (challenge|test|assessment|round)|take[\s-]?home (assignment|task|test|exercise)|technical assessment|aptitude test)\b[^.!?]{0,120}\b(link|complete|deadline|within|invite|attempt|below)/],
     weak: [/\b(assessment|assignment|coding test)\b/],
   }],
   ['application_confirmation', {
     strong: [/\b(thank you|thanks) for (applying|your application|submitting your application)\b/, /\b(we('ve| have)|has been) received your application\b/,
       /\byour application (has been|was) (received|submitted|sent)\b/, /\byour application was sent to\b/,
-      /\bapplication (received|submitted) successfully\b/, /\bsuccessfully (applied|submitted your application)\b/],
+      /\bapplication (received|submitted) successfully\b/, /\bsuccessfully (applied|submitted your application)\b/,
+      /\bapplication successful\b/, /\byou['’]?ve applied to\b/, /\byou have (successfully )?applied (to|for)\b/],
     weak: [/\bapplication\b[^.!?]{0,30}\b(received|submitted)\b/],
   }],
 ];
-// A condition only cancels an event when it precedes it in the sentence ("If shortlisted, we will schedule
-// an interview"); a trailing clause ("..., should another role match") does not cancel a real rejection.
 const CONDITION_BEFORE = /\b(if|should|once(?! again)|in case|whether|in the event)\b/;
 const hit = (sentence, re) => {
   const m = re.exec(sentence);
@@ -66,13 +72,15 @@ const hit = (sentence, re) => {
 
 export const OPT_OUT = /\b(unsubscribe|remove me|do not contact|don't contact|stop (emailing|contacting)|not interested, thanks|please don't email)\b/i;
 
-// Hiring platforms whose (authenticated) mail can be trusted to describe an application's state.
-export function platformSender(fromAddr) {
-  return ATS_SENDERS.test(fromAddr ?? '') || alertPlatform(fromAddr) != null;
+export function alertPlatform(fromAddr) {
+  return ALERT_SENDERS.find(([, re]) => re.test(fromAddr ?? ''))?.[0] ?? null;
 }
 
-export function alertPlatform(fromAddr) {
-  return ALERT_SENDERS.find(([, re]) => re.test(fromAddr))?.[0] ?? null;
+// Hiring platforms and assessment vendors whose (authenticated) mail can be trusted to describe an
+// application's state.
+export function platformSender(fromAddr) {
+  const a = fromAddr ?? '';
+  return ATS_SENDERS.test(a) || VENDOR_SENDERS.test(a) || alertPlatform(a) != null;
 }
 
 // Drop quoted earlier messages ("On … wrote:", "> …", forwarded headers) so a reply is judged on what
@@ -85,56 +93,109 @@ export function stripQuoted(text) {
 }
 
 const sentences = (s) => s.split(/(?<=[.!?])\s+|\n+/).map((x) => x.trim()).filter(Boolean);
+const JOB_LIST_SUBJECT = /\b(job alert|jobs? for you|new jobs?|recommended jobs?|jobs? matching|matching jobs?|\d+\+? (new )?(jobs?|openings|roles)|jobs? you may|top jobs?|job recommendations?|jobs? based on your)\b/i;
 
 export function classifyEmail(msg, { ourThreadIds = new Set() } = {}) {
   const subject = String(msg.subject ?? '');
+  const fromAddr = String(msg.fromAddr ?? '');
   const own = stripQuoted(msg.text).slice(0, 8000);
   const parts = sentences(`${subject}\n${own}`.toLowerCase());
   const inOurThread = ourThreadIds.has(msg.threadId);
-  if (/^(mailer-daemon|postmaster)@/i.test(msg.fromAddr ?? '')
+  if (/^(mailer-daemon|postmaster)@/i.test(fromAddr)
     && /delivery status notification|undeliverable|delivery (has )?failed|address not found|returned mail|failure notice|could not be delivered/i.test(subject)) {
     return { category: 'bounce', confidence: 0.95 };
   }
   if (inOurThread && OPT_OUT.test(own.slice(0, 1500))) return { category: 'opt_out', confidence: 0.9 };
+  if (NEWSLETTER_SENDERS.test(fromAddr) && !inOurThread) return { category: 'other', confidence: 0.5 };
 
   for (const [category, { strong }] of SIGNALS) {
     if (parts.some((p) => strong.some((re) => hit(p, re)))) return { category, confidence: 0.9 };
   }
   if (ASSESSMENT_HOSTS.test(own) && /\b(test|assessment|challenge)\b/i.test(own)) return { category: 'assessment', confidence: 0.85 };
 
-  const platform = alertPlatform(msg.fromAddr ?? '');
+  const platform = alertPlatform(fromAddr);
   if (platform) {
     if (/\b(viewed|seen) your (application|profile)\b|\byour application was viewed\b/i.test(subject)) return { category: 'ats_update', confidence: 0.6 };
-    if (/alert|job|notif/i.test(String(msg.fromAddr).split('@')[0]) || /\b(jobs?|alert|recommend|match(es|ing)?|hiring|openings?|opportunit)/i.test(subject)) {
+    if (/alert|jobs-listings|jobalert|recommend/i.test(fromAddr.split('@')[0]) || JOB_LIST_SUBJECT.test(subject)) {
       return { category: 'job_alert', confidence: 0.9, platform };
     }
   }
-  for (const [category, { weak }] of SIGNALS) {
-    if (parts.some((p) => weak.some((re) => hit(p, re)))) return { category, confidence: 0.6 };
+  // Weak hints only count from hiring senders or in our own threads; elsewhere "interview" is just a word.
+  if (inOurThread || platformSender(fromAddr)) {
+    for (const [category, { weak }] of SIGNALS) {
+      if (parts.some((p) => weak.some((re) => hit(p, re)))) return { category, confidence: 0.6 };
+    }
   }
   if (inOurThread) return { category: 'recruiter_reply', confidence: 0.75 };
-  if (ATS_SENDERS.test(msg.fromAddr ?? '')) return { category: 'ats_update', confidence: 0.5 };
+  if (ATS_SENDERS.test(fromAddr)) return { category: 'ats_update', confidence: 0.5 };
   return { category: 'other', confidence: 0.5 };
 }
 
+const decode = (s) => String(s ?? '').replace(/&#39;|&apos;/g, "'").replace(/&amp;/g, '&').replace(/&quot;/g, '"');
+const clean = (s) => decode(s).replace(/[*_|]/g, ' ').replace(/\s+/g, ' ').trim();
+
+// Company and role named in a confirmation or invitation, from the wording hiring platforms use.
+// Returns {company, title, url} with nulls for anything not stated. A hidden company ("**") is null.
+export function applicationDetails(msg) {
+  const subject = decode(msg.subject);
+  const text = decode(stripQuoted(msg.text)).slice(0, 6000);
+  let company = null;
+  let title = null;
+  const found = text.match(/you['’]?ve applied to (.{2,120}?) job at (.{2,100}?)\.(?:\s|$)/i)               // foundit
+    ?? text.match(/your application (?:for|to) (?:the )?(.{2,100}?) (?:position|role|job|opening) at (.{2,80}?)[.!\n]/i)
+    ?? text.match(/(?:thank you|thanks) for applying (?:for|to) (?:the )?(.{2,100}?) (?:position|role|job|opening) at (.{2,80}?)[.!\n]/i);
+  if (found) [title, company] = [found[1], found[2]];
+  if (!company) {
+    company = text.match(/recruitment process (?:of |at |for )?(.{2,80}?) (?:invites|has invited|would like)/i)?.[1]   // SHL and similar
+      ?? subject.match(/^(.{2,80}?) application successful\b/i)?.[1]                                                // foundit subject
+      ?? subject.match(/your application was sent to (.{2,80})$/i)?.[1]                                             // LinkedIn
+      ?? subject.match(/application (?:to|for) .{2,80}? at (.{2,80}?)(?:[!.|]|$)/i)?.[1]
+      ?? subject.match(/(?:applying (?:to|at|with)|interest in) ([A-Z][\w&.' -]{1,60}?)(?:[!.|,]| -|$)/)?.[1]
+      ?? null;
+  }
+  if (!title) title = subject.match(/application (?:to|for) (.{2,80}?) at /i)?.[1] ?? null;
+  company = company && clean(company);
+  if (!company || /^\*+$/.test(company)) company = null;
+  // foundit puts the posting id in its links; a token-free public URL is rebuilt from it.
+  const jobId = `${msg.text ?? ''} ${msg.html ?? ''}`.match(/jobId(?:%3D|=)(\d{5,})/i)?.[1];
+  return {
+    company,
+    title: title && clean(title),
+    url: jobId && alertPlatform(msg.fromAddr) === 'foundit' ? `https://www.foundit.in/seeker/job-details?id=${jobId}` : null,
+  };
+}
+
+// A message the candidate sent that is itself an application ("Application for Data Analyst Position").
+export function sentApplication(msg) {
+  const subject = decode(msg.subject);
+  if (!/\b(application|applying)\b/i.test(subject) && !(/\b(resume|cv)\b/i.test(subject) && (msg.attachments ?? []).length)) return null;
+  if (/^(re|fwd?):/i.test(subject)) return null;
+  const title = subject.match(/(?:application|applying) (?:for|to) (?:the )?(?:post of |position of |role of )?(.{2,90}?)(?:\s+(?:position|role|post|opening|job))?\s*(?:[-–|:(]|$)/i)?.[1] ?? null;
+  return { title: title && clean(title) };
+}
+
 const MONTHS = 'jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?';
-const DATE_RE = new RegExp(`\\b(\\d{1,2}(?:st|nd|rd|th)?\\s+(?:${MONTHS})(?:,?\\s+\\d{4})?|(?:${MONTHS})\\s+\\d{1,2}(?:st|nd|rd|th)?(?:,?\\s+\\d{4})?|\\d{1,2}[/-]\\d{1,2}[/-]\\d{2,4})(?:[^\\n.]{0,20}?\\b(\\d{1,2}(?::\\d{2})?\\s*(?:am|pm|ist)))?`, 'gi');
+const DATE_RE = new RegExp(`\\b(\\d{1,2}(?:st|nd|rd|th)?\\s+(?:${MONTHS})(?:,?\\s+\\d{4})?|(?:${MONTHS})\\s+\\d{1,2}(?:st|nd|rd|th)?(?:,?\\s+\\d{4})?|\\d{1,2}[/-]\\d{1,2}[/-]\\d{2,4})(?:[^\\n.]{0,20}?\\b(\\d{1,2}[:.]\\d{2}\\s*(?:am|pm)?|\\d{1,2}\\s*(?:am|pm)))?`, 'gi');
 
 export function extractDetails(msg) {
   const text = msg.text ?? '';
-  const links = [...new Set((text + ' ' + (msg.html ?? '')).match(/https?:\/\/[^\s"'<>)]+/g) ?? [])];
+  const links = [...new Set((text + ' ' + (msg.html ?? '')).match(/https?:\/\/[^\s"'<>)\]]+/g) ?? [])];
   const dates = [...text.matchAll(DATE_RE)].slice(0, 5).map((m) => m[0].trim());
-  const deadline = text.match(/\b(?:deadline|due (?:by|on|date)|expires?(?: on)?|(?:complete|submit|finish|attempt)[^.\n]{0,30}?\b(?:by|before|within))\b[^.\n]{0,40}/i)?.[0] ?? null;
+  const deadline = text.match(/\b(?:deadline|due (?:by|on|date)|expires?(?: on)?|(?:link|test|assessment) is valid|valid (?:from|till|until)|(?:complete|submit|finish|attempt)[^.\n]{0,30}?\b(?:by|before|within))\b[^\n]{0,90}/i)?.[0]
+    ?.replace(/\s+/g, ' ').trim() ?? null;
   return {
     dates,
     deadline,
-    assessmentLinks: links.filter((l) => ASSESSMENT_HOSTS.test(l)).slice(0, 5),
-    meetingLinks: links.filter((l) => MEETING_HOSTS.test(l)).slice(0, 5),
+    // Links are kept only for known assessment/meeting hosts, and never with query strings
+    // (auto-login and test-session tokens live there).
+    assessmentLinks: links.filter((l) => ASSESSMENT_HOSTS.test(l)).map((l) => l.split('?')[0]).slice(0, 5),
+    meetingLinks: links.filter((l) => MEETING_HOSTS.test(l)).map((l) => l.split('?')[0]).slice(0, 5),
     attachments: (msg.attachments ?? []).map((a) => a.filename),
   };
 }
 
-// Platform job links and the identity to deduplicate them by.
+// Platform job links and the identity to deduplicate them by. Auto-login links are reduced to the
+// posting id, so session tokens are never stored.
 const ALERT_LINKS = [
   [/linkedin\.com\/(?:comm\/)?jobs\/view\/(?:[^/?]*-)?(\d{6,})/i, (m) => `https://www.linkedin.com/jobs/view/${m[1]}`],
   [/naukri\.com\/job-listings-([a-z0-9-]+)/i, (m) => `https://www.naukri.com/job-listings-${m[1]}`],
@@ -143,6 +204,7 @@ const ALERT_LINKS = [
   [/instahyre\.com\/job-(\d+)[^"\s?]*/i, (m) => `https://www.instahyre.com/job-${m[1]}`],
   [/internshala\.com\/(internship|job)\/detail\/([a-z0-9-]+)/i, (m) => `https://internshala.com/${m[1]}/detail/${m[2]}`],
   [/indeed\.(?:com|co\.in)\/(?:viewjob|rc\/clk|pagead\/clk)\?[^"\s]*jk=([a-f0-9]+)/i, (m) => `https://in.indeed.com/viewjob?jk=${m[1]}`],
+  [/foundit\.in\/[^"\s]*?job-details(?:%3F|\?)id(?:%3D|=)(\d+)/i, (m) => `https://www.foundit.in/seeker/job-details?id=${m[1]}`],
   [/foundit\.in\/job\/([a-z0-9-]+)/i, (m) => `https://www.foundit.in/job/${m[1]}`],
 ];
 
@@ -161,7 +223,7 @@ export function parseJobAlert(msg) {
       const url = canon(m);
       const text = stripTags(a[2]);
       const job = out.get(url) ?? { url, title: '', company: '', location: '' };
-      if (text && text.length > 3 && text.length < 140 && !/^(view|apply|see|more|easy apply)/i.test(text)) {
+      if (text && text.length > 3 && text.length < 140 && !/^(view|apply|see|more|easy apply|quick apply)/i.test(text)) {
         if (!job.title) job.title = text;
         else if (!job.company) job.company = text;
       }

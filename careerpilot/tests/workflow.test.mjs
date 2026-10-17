@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { all, one, openDb } from '../lib/db.mjs';
 import { canTransition, createApplication, transition } from '../lib/applications.mjs';
 import { classifyEmail, parseJobAlert, stripQuoted } from '../lib/email-intel.mjs';
-import { companyFromSubject, processMessage } from '../lib/gmail-sync.mjs';
+import { processMessage, processSentMessage } from '../lib/gmail-sync.mjs';
 import { applicationEmail, domainMatchesCompany, emailsInText } from '../lib/contacts.mjs';
 import { blockReason, inSendWindow, runOutreach } from '../lib/outreach.mjs';
 import { buildMime } from '../lib/gmail.mjs';
@@ -93,7 +93,6 @@ test('gmail sync links a confirmation, transitions the application and records e
 });
 
 test('a confirmation for a manual application creates a tracked application', async () => {
-  assert.deepEqual(companyFromSubject('Your application to Data Analyst at Foo Labs'), { title: 'Data Analyst', company: 'Foo Labs' });
   const db = await openDb({ url: ':memory:' });
   const r = await processMessage(db, { id: 'm9', threadId: 't9', fromAddr: 'jobs-noreply@linkedin.com', fromName: 'LinkedIn',
     subject: 'Your application was sent to Foo Labs', text: 'Your application was sent to Foo Labs', snippet: '', date: '2026-10-20T10:00:00.000Z', html: '', authenticated: true },
