@@ -1,11 +1,12 @@
-import { overview, systemStatus } from '@/lib/queries.mjs';
+import { applicationPlaces, overview, systemStatus } from '@/lib/queries.mjs';
 import { Badge, Card, KV, PageHeader, Stat, fmtDateTime, pct } from './_ui/kit.jsx';
 import { logout } from './actions.js';
+import { PlacesDonut, TopCompanies } from './_ui/places.jsx';
 
 export const dynamic = 'force-dynamic';
 
 export default async function Overview() {
-  const [o, s] = await Promise.all([overview(), systemStatus()]);
+  const [o, s, where] = await Promise.all([overview(), systemStatus(), applicationPlaces()]);
   return (
     <>
       <PageHeader title="Overview" sub="Every number opens the list it counts.">
@@ -38,6 +39,16 @@ export default async function Overview() {
         <Stat label="Outreach sent" value={o.outreachSent} to="/outreach?status=sent" hint={`${pct(o.replies, o.outreachSent)} replied`} />
         <Stat label="Emails to review" value={o.review} to="/inbox?review=1" tone={o.review ? 'warn' : undefined} />
       </div>
+
+      {where.total > 0 && (
+        <>
+          <h2 className="mb-2 text-sm font-semibold text-ink-2">Where your applications go</h2>
+          <div className="mb-6 grid gap-4 lg:grid-cols-2">
+            <Card title="By site"><PlacesDonut total={where.total} places={where.places} /></Card>
+            <Card title="Top companies"><TopCompanies total={where.total} companies={where.companies} /></Card>
+          </div>
+        </>
+      )}
 
       <div className="grid gap-4 lg:grid-cols-2">
         <Card title="Automation runs">

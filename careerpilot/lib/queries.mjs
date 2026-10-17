@@ -192,6 +192,84 @@ export async function overview() {
     outreachSent, replies, review, unknownSends, pending: ready + blocked + failed + review + unknownSends };
 }
 
+// ---- Where applications go: the employer's own site (named by its application system), a job site,
+// or email; and which companies. Every application counts, from ready to offer.
+
+const PLACES = [
+  [/myworkdayjobs\.com/i, 'Workday', 'workday.com'], [/greenhouse\.io/i, 'Greenhouse', 'greenhouse.io'],
+  [/lever\.co/i, 'Lever', 'lever.co'], [/ashbyhq\.com/i, 'Ashby', 'ashbyhq.com'], [/bamboohr\.com/i, 'BambooHR', 'bamboohr.com'],
+  [/smartrecruiters\.com/i, 'SmartRecruiters', 'smartrecruiters.com'], [/workable\.com/i, 'Workable', 'workable.com'],
+  [/foundit\.in/i, 'foundit', 'foundit.in'], [/wellfound\.com/i, 'Wellfound', 'wellfound.com'],
+  [/linkedin\.com/i, 'LinkedIn', 'linkedin.com'], [/naukri\.com/i, 'Naukri', 'naukri.com'],
+];
+const PLATFORMS = { foundit: ['foundit', 'foundit.in'], wellfound: ['Wellfound', 'wellfound.com'], linkedin: ['LinkedIn', 'linkedin.com'], naukri: ['Naukri', 'naukri.com'] };
+
+export function placeOf({ method, url }) {
+  if (String(method ?? '').startsWith('email')) return { label: 'Email', domain: null };
+  const platform = /^platform:(\w+)/.exec(method ?? '')?.[1];
+  if (platform) { const [label, domain] = PLATFORMS[platform] ?? [platform, null]; return { label, domain }; }
+  const hit = PLACES.find(([re]) => re.test(url ?? ''));
+  return hit ? { label: hit[1], domain: hit[2] } : { label: 'Company website', domain: null };
+}
+
+// Short all-letter names are acronyms from portal addresses ("Pwc", "Hpe"): show them as such.
+export const displayCompany = (name) => (/^[a-z]{2,3}$/i.test(name ?? '') ? name.toUpperCase() : name);
+
+// The company's own web domain, for its logo, only when there is evidence: the posting lives on the
+// company's own site, or the posting names a site whose name is the company's. Otherwise none (initials).
+const NOT_COMPANY_HOSTS = /myworkdayjobs|myworkday|greenhouse|lever\.co|ashbyhq|bamboohr|smartrecruiters|workable|foundit|wellfound|linkedin|naukri|indeed|instahyre|internshala|cutshort|mail\.google|google\.com/i;
+const registrable = (host) => {
+  const p = host.replace(/^www\./, '').split('.');
+  return p.length > 2 && /^(co|com|org|net|ac|gov)$/.test(p.at(-2)) && p.at(-1).length === 2 ? p.slice(-3).join('.') : p.slice(-2).join('.');
+};
+export function companyDomain(company, url, description) {
+  const key = String(company ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (key.length < 2) return null;
+  try { const h = new URL(url).hostname.toLowerCase(); if (!NOT_COMPANY_HOSTS.test(h) && registrable(h).split('.')[0].replace(/-/g, '') === key) return registrable(h); } catch { /* not a URL */ }
+  for (const m of String(description ?? '').matchAll(/\b(?:https?:\/\/)?(?:www\.)?([a-z0-9-]+)\.(co\.in|com|in|io|ai|org|net|co)\b/gi)) {
+    if (m[1].toLowerCase().replace(/-/g, '') === key) return `${m[1]}.${m[2]}`.toLowerCase();
+  }
+  return null;
+}
+
+// The company's logo from the company itself: a Workday career site serves it at /<site>/assets/logo;
+// otherwise the favicon of a domain the evidence above ties to the company; otherwise none (initials).
+export function companyLogo(company, url, description) {
+  try {
+    const u = new URL(url);
+    if (/\.wd\d+\.myworkdayjobs\.com$/i.test(u.hostname)) {
+      const site = u.pathname.split('/').filter(Boolean).find((s) => !/^[a-z]{2}-[A-Z]{2}$/.test(s));
+      if (site) return `https://${u.hostname}/${site}/assets/logo`;
+    }
+  } catch { /* not a URL */ }
+  const domain = companyDomain(company, url, description);
+  return domain ? `https://www.google.com/s2/favicons?domain=${domain}&sz=64` : null;
+}
+export const placeLogo = (domain) => (domain ? `https://www.google.com/s2/favicons?domain=${domain}&sz=64` : null);
+
+export async function applicationPlaces({ top = 5 } = {}) {
+  const db = await getDb();
+  const rows = await all(db, `SELECT a.method, a.status, j.url, j.company FROM applications a JOIN jobs j ON j.id = a.job_id`);
+  const tally = (key) => {
+    const m = new Map();
+    for (const r of rows) { const k = key(r); const e = m.get(k.label) ?? { ...k, count: 0 }; e.count++; m.set(k.label, e); }
+    return [...m.values()].sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
+  };
+  const fold = (list) => {
+    const rest = list.slice(top);
+    return { shown: list.slice(0, top), others: rest.length ? { count: rest.reduce((n, e) => n + e.count, 0), names: rest.length } : null };
+  };
+  const places = fold(tally(placeOf));
+  for (const p of places.shown) p.logo = placeLogo(p.domain);
+  const companies = fold(tally((r) => ({ label: r.company })));
+  for (const c of companies.shown) {
+    const j = await one(db, `SELECT j.url, j.description FROM jobs j JOIN applications a ON a.job_id = j.id WHERE j.company = ? ORDER BY length(coalesce(j.description, '')) DESC LIMIT 1`, [c.label]);
+    c.logo = companyLogo(c.label, j?.url, j?.description);
+    c.name = displayCompany(c.label);
+  }
+  return { total: rows.length, places, companies };
+}
+
 export async function systemStatus() {
   const db = await getDb();
   const stages = ['discover', 'ai', 'gmail', 'prepare', 'outreach', 'digest'];
