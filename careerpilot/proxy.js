@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server';
 import { COOKIE, verifySession } from './lib/session.mjs';
 
-// Every page and server action requires a valid session, except the login page itself.
+// Every page and server action requires a valid session, except sign-in and the two public pages
+// (about, privacy) that Google's OAuth consent screen links to.
 export async function proxy(request) {
   if (await verifySession(request.cookies.get(COOKIE)?.value)) return NextResponse.next();
   const url = new URL('/login', request.url);
@@ -10,5 +11,5 @@ export async function proxy(request) {
 }
 
 export const config = {
-  matcher: ['/((?!login|_next/static|_next/image|favicon.ico|icon.svg).*)'],
+  matcher: ['/((?!login|about|privacy|_next/static|_next/image|favicon.ico|icon.svg).*)'],
 };

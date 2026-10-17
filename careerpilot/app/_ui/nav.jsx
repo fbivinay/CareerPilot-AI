@@ -15,7 +15,7 @@ const LINKS = [
 
 export function Nav() {
   const path = usePathname();
-  if (path === '/login') return null;
+  if (['/login', '/about', '/privacy'].includes(path)) return null;
   return (
     <header className="sticky top-0 z-10 border-b border-line bg-surface/90 backdrop-blur">
       <div className="mx-auto flex max-w-7xl items-center gap-6 px-4 sm:px-6">

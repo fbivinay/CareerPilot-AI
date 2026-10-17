@@ -4,9 +4,10 @@
 //   node scripts/setup.mjs password    set the dashboard password (hidden prompt) -> DASHBOARD_PASSWORD_HASH
 //   node scripts/setup.mjs profile     encrypt private/profile.yml + master resume into the database vault
 //   node scripts/setup.mjs github      copy the pipeline's secrets from .env to GitHub Actions secrets (gh CLI)
+//   node scripts/setup.mjs vercel      set the read-only dashboard's variables on the linked Vercel project (vercel CLI)
 //   node scripts/setup.mjs check       show which settings are present (names only)
 import { randomBytes } from 'node:crypto';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, execSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
@@ -21,6 +22,9 @@ if (existsSync(ENV_FILE)) process.loadEnvFile(ENV_FILE);
 const ACTIONS_SECRETS = ['TURSO_DATABASE_URL', 'TURSO_AUTH_TOKEN', 'APP_ENCRYPTION_KEY', 'GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET',
   'GROQ_API_KEY', 'GEMINI_API_KEY', 'OPENROUTER_API_KEY'];
 const ALL = [...ACTIONS_SECRETS, 'SESSION_SECRET', 'DASHBOARD_PASSWORD_HASH'];
+// The Vercel dashboard is read-only: database and sign-in only. Gmail, AI and encryption keys stay off the
+// internet-facing host, so it can neither send mail nor decrypt the profile or the Gmail token.
+const VERCEL_VARS = ['TURSO_DATABASE_URL', 'TURSO_AUTH_TOKEN', 'SESSION_SECRET', 'DASHBOARD_PASSWORD_HASH'];
 
 // Line-based so values are written verbatim (no regex replacement patterns).
 function setEnv(name, value) {
@@ -85,6 +89,15 @@ const commands = {
       console.log(`set GitHub Actions secret ${name}`);
     }
   },
+  vercel() {
+    const vars = { ...Object.fromEntries(VERCEL_VARS.map((n) => [n, process.env[n]])), DASHBOARD_READONLY: '1' };
+    for (const [name, value] of Object.entries(vars)) {
+      if (!value) { console.log(`skip ${name} (not set)`); continue; }
+      try { execSync(`vercel env rm ${name} production --yes`, { cwd: ROOT, stdio: 'ignore' }); } catch { /* not set yet */ }
+      execSync(`vercel env add ${name} production`, { cwd: ROOT, input: value, stdio: ['pipe', 'ignore', 'inherit'] });
+      console.log(`set Vercel production variable ${name}`);
+    }
+  },
   check() {
     for (const name of ALL) console.log(`${process.env[name] ? 'OK     ' : 'missing'} ${name}`);
   },
@@ -92,7 +105,7 @@ const commands = {
 
 const cmd = process.argv[2];
 if (!commands[cmd]) {
-  console.log('Usage: node scripts/setup.mjs keys|password|profile|github|check');
+  console.log('Usage: node scripts/setup.mjs keys|password|profile|github|vercel|check');
   process.exit(1);
 }
 await commands[cmd]();

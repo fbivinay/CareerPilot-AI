@@ -113,8 +113,21 @@ company contacted at most twice per 21 days, one follow-up after 7 days. Consume
 Settings by about 5/day per week while replies are healthy and nothing bounces. Every email carries
 an opt-out line; an "unsubscribe" reply blocks that contact permanently.
 
-## 8. Vercel (later, not done yet)
+## 8. Vercel (read-only dashboard)
 
-Project root directory `careerpilot`, framework Next.js, Hobby plan. Environment variables:
-`TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN`, `SESSION_SECRET`, `DASHBOARD_PASSWORD_HASH`,
-`DASHBOARD_READONLY=1`. No Vercel cron is used. Gmail and AI keys are **not** needed on Vercel.
+Project `careerpilot` on the Hobby plan: root directory `careerpilot`, functions in Mumbai (`vercel.json`,
+next to the Turso database), connected to this repository, so every push to `main` redeploys it.
+`.vercelignore` keeps `.env`, `private/` and `.data/` from ever being uploaded by a CLI deploy.
+
+```bash
+npm run setup -- vercel    # sets TURSO_DATABASE_URL, TURSO_AUTH_TOKEN, SESSION_SECRET, DASHBOARD_PASSWORD_HASH, DASHBOARD_READONLY=1
+```
+
+Gmail, AI and encryption keys are **not** on Vercel: the deployed dashboard can neither send mail nor
+decrypt your profile or Gmail token. Change settings and connect Gmail from the local dashboard. No Vercel
+cron is used. `/about` and `/privacy` are public (no sign-in); Google's Branding page links to them.
+
+**Publishing the Google app** (removes the 7-day Gmail expiry): Branding → Application home page
+`https://<your-app>.vercel.app/about`, Privacy policy `https://<your-app>.vercel.app/privacy`, Authorized
+domains `<your-app>.vercel.app` → Save. Audience → **Publish app** → Confirm (do not submit for
+verification). Then reconnect Gmail once from the local dashboard (Settings → Gmail).

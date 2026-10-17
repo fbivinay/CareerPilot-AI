@@ -1,0 +1,13 @@
+# Upload only what the dashboard build needs. .env, private/ (profile, resume) and .data/ (local
+# database) must never leave this PC, so everything is excluded unless listed here.
+/*
+!/app
+!/lib
+!/config
+!/package.json
+!/package-lock.json
+!/next.config.mjs
+!/postcss.config.mjs
+!/jsconfig.json
+!/proxy.js
+!/vercel.json
