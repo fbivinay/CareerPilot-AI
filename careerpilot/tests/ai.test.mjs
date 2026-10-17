@@ -49,3 +49,12 @@ test('payment-required responses park the provider and nothing is retried', asyn
   await assert.rejects(aiJson(db, task(), { env: { GROQ_API_KEY: 'g' }, fetchImpl, settings: DEFAULT_SETTINGS }), AiUnavailable);
   assert.equal(n, 1);
 });
+
+test('gpt-oss calls ask for low reasoning effort, other models get no reasoning field', async () => {
+  const db = await openDb({ url: ':memory:' });
+  const bodies = [];
+  const fetchImpl = async (url, init) => { bodies.push(JSON.parse(init.body)); return ok({ score: 1 }); };
+  await aiJson(db, task({ tier: 'fast' }), { env: { GROQ_API_KEY: 'g' }, fetchImpl, settings: DEFAULT_SETTINGS });
+  await aiJson(db, task(), { env: { GEMINI_API_KEY: 'm' }, fetchImpl, settings: DEFAULT_SETTINGS });
+  assert.deepEqual(bodies.map((b) => [b.model, b.reasoning_effort]), [['openai/gpt-oss-20b', 'low'], ['gemini-2.5-flash', undefined]]);
+});

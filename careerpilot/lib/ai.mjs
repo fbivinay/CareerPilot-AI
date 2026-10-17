@@ -23,7 +23,7 @@ export const PROVIDERS = {
   groq: {
     baseUrl: 'https://api.groq.com/openai/v1',
     keyEnv: 'GROQ_API_KEY',
-    models: { quality: 'llama-3.3-70b-versatile', fast: 'llama-3.1-8b-instant' },
+    models: { quality: 'openai/gpt-oss-120b', fast: 'openai/gpt-oss-20b' },
     trainsOnData: false,
     allow: ['public', 'profile', 'email'],
   },
@@ -96,6 +96,9 @@ async function callProvider(p, model, key, { system, user, maxTokens }, fetchImp
       temperature: 0.2,
       max_tokens: maxTokens,
       response_format: { type: 'json_object' },
+      // gpt-oss reasons before answering and the reasoning counts against max_tokens: at the default
+      // effort a long job description runs out of tokens mid-JSON.
+      ...(/gpt-oss/.test(model) && { reasoning_effort: 'low' }),
       messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
     }),
     signal: AbortSignal.timeout(60_000),
