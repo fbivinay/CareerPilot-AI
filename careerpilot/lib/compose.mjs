@@ -100,6 +100,7 @@ export async function draftAnswer(db, { profile, job, question }, settings, ai =
       system: [
         'You answer one open question on a job application form, as the candidate, in the first person.',
         'Use ONLY facts from CANDIDATE FACTS and JOB. Never invent skills, experience, numbers, dates, achievements, or claims about the company that the JOB text does not make.',
+        'Do not claim personal habits, traits or activities that CANDIDATE FACTS do not show (for example publishing, mentoring or leading teams); say what the candidate has done and wants to do.',
         'If answering needs a fact that CANDIDATE FACTS does not contain, reply {"answer": null}.',
         'Plain text, 50-120 words, no placeholders or brackets. Reply with JSON: {"answer": string or null}.',
       ].join(' '),

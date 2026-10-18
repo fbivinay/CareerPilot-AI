@@ -14,11 +14,11 @@ import { all, audit, now, one, run } from './db.mjs';
 // since: the ones mail is matched against. The candidate's own (job sites, other mail) are not its work;
 // the dashboard shows only its work (the candidate's choice, 2026-10-18). `a` is applications.
 export const CAREERPILOT_APP = `a.method IN ('portal', 'email')`;
-// What the dashboard lists: the ones it sent, and queued ones only where it submits by itself
-// (Workday). A queued portal application the candidate then sent themselves (confirmed, but never
-// submitted by CareerPilot) is theirs. `j` is the application's job.
-export const SHOWN_APP = `(a.method = 'email' OR a.evidence LIKE '%"type":"workday"%'
-  OR (a.method = 'portal' AND a.status IN ('ready','blocked','failed','expired','withdrawn') AND j.url LIKE '%.myworkdayjobs.com/%'))`;
+// What the dashboard lists: the ones it queued, and the ones it sent itself (Workday) or filled for the
+// candidate to submit (apply-assist, on forms with a CAPTCHA). A queued portal application the candidate
+// then sent on their own (confirmed, but never submitted or filled by CareerPilot) is theirs.
+export const SHOWN_APP = `(a.method = 'email' OR a.evidence LIKE '%"type":"workday"%' OR a.evidence LIKE '%"type":"confirmation_page"%'
+  OR (a.method = 'portal' AND a.status IN ('ready','blocked','failed','expired','withdrawn')))`;
 // Jobs CareerPilot found, not ones recorded from the candidate's own application mail.
 export const SHOWN_JOB = `j.source NOT LIKE 'email%'`;
 // Mail about CareerPilot's work: linked to an application the dashboard shows, in a thread CareerPilot

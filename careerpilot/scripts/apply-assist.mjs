@@ -1,9 +1,11 @@
 #!/usr/bin/env node
-// Local application assistant for employer ATS portals (Greenhouse, Lever, Ashby, ...).
-// Opens each "ready" application in your own Chrome, fills standard fields from your verified
-// profile and attaches your master resume. It never ticks consent/declaration boxes, never solves
-// CAPTCHAs and never clicks Submit. When you submit, it detects the confirmation page and records
-// the application as submitted with that evidence. Close the tab to skip a job.
+// Local application assistant for employer ATS portals (Greenhouse, Lever, Ashby, ...), whose forms carry
+// CAPTCHAs, so a person submits them. Opens each "ready" application in your own Chrome, fills your details,
+// attaches your resume and answers the employer's questions from your profile (the same rules as Workday
+// applications). It never solves CAPTCHAs and never clicks Submit: you check the form, finish anything it
+// lists as left, and submit. It then detects the confirmation page and records the application as
+// submitted with that evidence. Close the tab to skip a job. (Workday applications are submitted by
+// scripts/auto-apply.mjs.)
 //   npm run apply:assist              next 5 ready applications
 //   npm run apply:assist -- --limit 10
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -14,7 +16,10 @@ import { getDb, all, one } from '../lib/db.mjs';
 import { transition } from '../lib/applications.mjs';
 import { loadProfile, loadResumePdf } from '../lib/profile.mjs';
 import { answerPack } from '../lib/prepare.mjs';
-import { CONFIRMATION, applyUrl, prefillPage } from '../lib/prefill.mjs';
+import { CONFIRMATION, answerQuestions, applyUrl, prefillPage } from '../lib/prefill.mjs';
+import { askContext } from '../lib/apply/workday.mjs';
+import { draftAnswer } from '../lib/compose.mjs';
+import { getSettings } from '../lib/settings.mjs';
 
 const envFile = path.resolve(import.meta.dirname, '..', '.env');
 if (existsSync(envFile)) process.loadEnvFile(envFile);
@@ -25,8 +30,10 @@ const profile = await loadProfile(db);
 const resume = await loadResumePdf(db);
 if (!profile || !resume) throw new Error('Import your profile first: npm run setup -- profile');
 
-const apps = await all(db, `SELECT a.*, j.url, j.title, j.company, j.employment_type FROM applications a JOIN jobs j ON j.id = a.job_id
-  WHERE a.status = 'ready' AND a.method = 'portal' ORDER BY j.score DESC LIMIT ?`, [limit]);
+const settings = await getSettings(db);
+const apps = await all(db, `SELECT a.*, j.id job_id, j.url, j.title, j.company, j.location, j.source, j.description, j.employment_type
+  FROM applications a JOIN jobs j ON j.id = a.job_id
+  WHERE a.status = 'ready' AND a.method = 'portal' AND j.url NOT LIKE '%.myworkdayjobs.com/%' ORDER BY j.score DESC LIMIT ?`, [limit]);
 if (!apps.length) { console.log('No portal applications are ready. Blocked ones list missing answers in the dashboard.'); process.exit(0); }
 
 const dir = mkdtempSync(path.join(tmpdir(), 'careerpilot-'));
@@ -40,9 +47,15 @@ try {
     const page = await context.newPage();
     console.log(`\n${app.title} at ${app.company}\n  ${app.url}`);
     await page.goto(applyUrl(app.url), { waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(3000); // the form renders after the page loads
     const { filled, resume: attached } = await prefillPage(page, answerPack(profile, app).fields, resumePath);
     console.log(`  Prefilled: ${filled.join(', ') || 'nothing recognised'}${attached ? '; resume attached' : '; attach the resume yourself'}.`);
-    console.log('  Review every answer, complete the rest, then press Submit yourself. Close the tab to skip.');
+    const ctx = await askContext(db, { ...app, id: app.job_id }, profile);
+    if (profile.answers?.draft_open_answers) ctx.draft = (question) => draftAnswer(db, { profile, job: app, question }, settings);
+    const { answered, left } = await answerQuestions(page, ctx);
+    console.log(`  Answered ${answered.length} of the employer's questions.`);
+    if (left.length) console.log(`  Still needed from you:\n    - ${left.join('\n    - ')}`);
+    console.log('  Check every answer, complete anything left, tick the CAPTCHA if shown, then press Submit. Close the tab to skip.');
 
     // Wait until the confirmation page appears or the tab is closed (skip).
     const outcome = await Promise.race([

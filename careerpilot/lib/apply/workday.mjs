@@ -264,7 +264,7 @@ async function setText(page, field, value, scope = page) {
 // wins, so a precise answer is never displaced by a looser one that happens to come earlier in the list.
 // Matched without accents: Workday lists Indian states as "Karnātaka", "Bihār".
 const plain = (t) => String(t).normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[\u2018\u2019]/g, "'");
-function best(texts, wants) {
+export function best(texts, wants) {
   for (const re of [wants].flat()) {
     const i = texts.findIndex((t) => re.test(plain(t)));
     if (i >= 0) return i;
@@ -355,7 +355,7 @@ async function pick(page, field, search, wants, scope = page) {
 
 // "How did you hear about us": the employer's own site is where CareerPilot finds postings ("Marvell
 // Website", "Company Website"). Job-board names that merely contain "career" (Career Builder) never match.
-const escapeRe = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+export const escapeRe = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const sourceWants = (employerNames) => [
   new RegExp(`^(${employerNames.filter(Boolean).map(escapeRe).join('|')})\\b.*\\b(web ?site|careers?( site| page)?|job board)$`, 'i'),
   /^(the )?(company|corporate|employer|organi[sz]ation)('s)?( careers?)? (web)?site$/i,
@@ -773,6 +773,14 @@ function workYears(profile) {
   return Math.floor(months / 12);
 }
 const longDate = ({ year, month, day }) => new Date(Date.UTC(year, month - 1, day)).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
+// A date typed into a text box, in the format the question names ("in YYYY-MM-DD format"), else fallback(d).
+const dateAs = (label, d, fallback) => {
+  const p = (n) => String(n).padStart(2, '0');
+  if (/yyyy-mm-dd/i.test(label)) return `${d.year}-${p(d.month)}-${p(d.day)}`;
+  if (/mm\/dd\/yyyy/i.test(label)) return `${p(d.month)}/${p(d.day)}/${d.year}`;
+  if (/dd[/-]mm[/-]yyyy/i.test(label)) return `${p(d.day)}/${p(d.month)}/${d.year}`;
+  return fallback(d);
+};
 // The [low, high] rupees a pay-range option stands for: "INR 6,00,000 - INR10,00,000", "Up to INR 6,00,000",
 // "INR 50,00,000 - above", "6-10 LPA". null when it names no amount.
 function payRange(text) {
@@ -816,6 +824,11 @@ const QUESTION_RULES = [
   [/government (or public institution )?employment experience|(employed by|worked for) (a |the )?(government|public sector)/i,
     (c) => ({ yes: (c.profile.experience ?? []).some((e) => /government|ministry|municipal|public sector|federal/i.test(e.company)) })],
   // Being an official, and being related to one, are separate facts (Northern Trust asks both).
+  // "How did you hear about this job?" on other employers' forms (a Workday form's own source field is
+  // filled on My Information): the employer's site first, as there.
+  [/how did you (hear|learn|find out)|where did you (hear|find|see) (about )?(this|the) (job|role|position|opening)/i, (c) => ({
+    option: [...sourceWants([c.job.company].filter(Boolean)), ...(c.job.source === 'aggregator' ? [/^other job ?board$/i, /^(online )?job ?board$/i] : []), ...SOURCE_FALLBACK],
+    search: '' })],
   // Hiring checks and disclosures, from the candidate's answers of 2026-10-18.
   [/background (check|verification)|\bbgv\b/i, (c) => yes(c.answers.willing_background_check)],
   [/medical history/i, (c) => yes(c.answers.medical_history_to_declare)],
@@ -835,7 +848,7 @@ const QUESTION_RULES = [
     const d = isoDate(c.answers.date_of_birth);
     if (!d?.day) return undefined;
     if (c.kind === 'date') return { date: d };
-    return c.kind === 'text' ? { text: `${String(d.day).padStart(2, '0')}/${String(d.month).padStart(2, '0')}/${d.year}` } : undefined;
+    return c.kind === 'text' ? { text: dateAs(c.label, d, (x) => `${String(x.day).padStart(2, '0')}/${String(x.month).padStart(2, '0')}/${x.year}`) } : undefined;
   }],
   // Letting the employer use AI tools on the application (allowed by the candidate on 2026-10-18); one
   // about future openings also needs their wish to be considered for other roles.
@@ -874,7 +887,7 @@ const QUESTION_RULES = [
       : c.job.employment_type === 'internship' ? c.answers.internship_available_from : c.answers.earliest_joining_date);
     if (!when?.day) return undefined;
     if (c.kind === 'date') return { date: when };
-    if (c.kind === 'text' || c.kind === 'textarea') return { text: `From ${longDate(when)}` };
+    if (c.kind === 'text' || c.kind === 'textarea') return { text: dateAs(c.label, when, (d) => `From ${longDate(d)}`) };
     // A list of notice spans: the shortest that still reaches the joining date (lists run shortest first).
     const days = Math.max(0, Math.ceil((Date.UTC(when.year, when.month - 1, when.day) - Date.now()) / 864e5));
     return { option: [{ test: (t) => (optionDays(t) ?? -1) >= days }] };
@@ -945,8 +958,9 @@ const QUESTION_RULES = [
     return { text, option: [range] };
   }],
   [/^gender$|\bgender\b/i, (c) => (c.answers.gender ? { option: [new RegExp(`^${escapeRe(c.answers.gender)}$`, 'i')] } : undefined)],
-  // Being considered for the employer's other open positions (the candidate said yes on 2026-10-18).
-  [/(other|additional) (open )?(positions|roles|vacancies|opportunities) than|considered? (me )?for (other|future) (open )?(positions|roles|vacancies|opportunities)|\btalent pool\b/i,
+  // Being considered for the employer's other open positions, which means keeping the CV for that (the
+  // candidate said yes on 2026-10-18; Artefact: "I agree to have my CV retained for 2 years").
+  [/(other|additional) (open )?(positions|roles|vacancies|opportunities) than|considered? (me )?for (other|future) (open )?(positions|roles|vacancies|opportunities)|\btalent pool\b|\b(cv|resume)\b.{0,20}\bretained\b/i,
     (c) => (c.kind === 'checkbox' ? (c.answers.consider_for_other_roles ? { yes: true } : undefined) : yes(c.answers.consider_for_other_roles))],
   // Marketing opt-ins are never given: a tick box stays unticked and a required yes/no is answered no. A
   // required consent to the employer's terms or privacy notice is ticked (the candidate authorized both
@@ -961,6 +975,13 @@ const QUESTION_RULES = [
   [/\b(ethnic|race|racial|veteran|disabilit|hispanic|latino|sexual orientation|pronoun)/i,
     (c) => (c.required ? { option: [/decline|not wish|prefer not|do not want|choose not|rather not|not to (self.)?identify|not disclos/i] } : undefined)],
   [/^e-?mail( address)?$/i, (c) => (c.profile.email ? { text: c.profile.email } : undefined)],
+  // Where the candidate is and would work: Bengaluru per the profile (and willing to relocate).
+  [/^(current )?location$|^(current )?city$/i, (c) => (c.profile.location ? { text: c.profile.location } : undefined)],
+  [/(desired|preferred) (work |job )?location/i, (c) => ({ option: [new RegExp(`\\b(${escapeRe(String(c.profile.location ?? '').split(',')[0])}|bengaluru|bangalore)\\b`, 'i')] })],
+  // The profile's own links, wherever a form asks again (Artefact repeats LinkedIn and Website).
+  [/^linked ?in( profile| url)?$/i, (c) => (c.profile.links?.linkedin ? { text: c.profile.links.linkedin } : undefined)],
+  [/^github( profile| url)?$/i, (c) => (c.profile.links?.github ? { text: c.profile.links.github } : undefined)],
+  [/^(website|portfolio|personal (website|site))( url)?$/i, (c) => (c.profile.links?.portfolio ? { text: c.profile.links.portfolio } : undefined)],
   [/^address line 1$|^street address|^address$/i, (c) => (c.answers.address_line1 ? { text: c.answers.address_line1 } : undefined)],
   [/^address line 2$/i, (c) => (c.answers.address_line2 ? { text: c.answers.address_line2 } : undefined)],
   [/postal code|\bpin ?code\b|\bzip\b/i, (c) => (c.answers.postal_code ? { text: String(c.answers.postal_code) } : undefined)],
@@ -1044,6 +1065,8 @@ async function applyAnswer(page, q, a) {
 // (ctx.draft, the candidate's choice of 2026-10-18); a disclosure never does: only the candidate knows it.
 const OPEN_QUESTION = /\b(why|reasons?|motivat\w*|interest(s|ed)?|tell us|describe|explain|what (excites|attracts|appeals|makes you))\b/i;
 const DISCLOSURE = /conflict|disclos|relationship|relative|criminal|convict|offen[cs]e|lawsuit|litigation|terminat|dismiss|disciplin|visa|citizen|health|disabilit/i;
+// Whether an unanswered question may get a drafted answer: required, free text, open, not a disclosure.
+export const draftable = (q) => q.required && (q.kind === 'textarea' || q.kind === 'text') && OPEN_QUESTION.test(q.label) && !DISCLOSURE.test(q.label);
 const offered = (r) => (r.options ? ` (offered: ${r.options.filter((o) => !/^select one$/i.test(o)).slice(0, 8).join(', ')})` : '');
 
 // Answers every question it can. Some answers reveal follow-up questions, so the page is read again
@@ -1059,8 +1082,7 @@ async function applicationQuestions(page, ctx) {
     for (const q of fresh) {
       seen.add(q.field);
       let a = answerFor(q, ctx);
-      if (a === undefined && q.required && ctx.draft && (q.kind === 'textarea' || q.kind === 'text')
-        && OPEN_QUESTION.test(q.label) && !DISCLOSURE.test(q.label)) {
+      if (a === undefined && ctx.draft && draftable(q)) {
         const text = await ctx.draft(q.label);
         if (text) { a = { text }; drafted.set(q.field, a); }
       }
@@ -1094,6 +1116,20 @@ const STEPS = [
   [/voluntary disclosures|self.?identif/i, applicationQuestions],
 ];
 
+// What answerFor needs besides the profile, for any employer's form: whether the job is in India, and
+// whether the candidate applied to this employer before (another posting here that CareerPilot tracked to
+// submitted or later, or one they named in answers.applied_before; unknown until they have answered).
+export async function askContext(db, job, profile) {
+  const answers = profile.answers ?? {};
+  const tracked = await one(db, `SELECT count(*) n FROM applications a JOIN jobs j ON j.id = a.job_id WHERE lower(j.company) = lower(?)
+    AND j.id != ? AND a.status IN ('submitted', 'confirmed', 'assessment', 'interview', 'offer', 'rejected')`, [job.company, job.id]);
+  const named = answers.applied_before;
+  const appliedHere = Number(tracked?.n) > 0 || (Array.isArray(named) && named.some((n) => norm(n) === norm(job.company))) ? true
+    : named == null ? undefined : false;
+  const inIndia = /india|bengaluru|bangalore|hyderabad|pune|chennai|mumbai|delhi|gurgaon|gurugram|noida|kolkata/i.test(`${job.location ?? ''} ${job.url}`);
+  return { profile, answers, job, inIndia, appliedHere };
+}
+
 // Runs the application up to Review; submits only when dryRun is false. Returns
 // {stop: 'submitted'|'review'|'blocked'|'needs_you'|'expired'|'explored', step, reason?, fields?, trail}.
 // explore: on a step with no filler yet, return its fields instead of a 'blocked' stop (development aid).
@@ -1102,13 +1138,7 @@ export async function applyWorkday({ page, job, profile, resumePath, db, gmail, 
   const host = portalHost(job.url);
   const answers = profile.answers ?? {};
   const trail = [];
-  // Whether the candidate applied to this employer before: another posting here that CareerPilot tracked
-  // to submitted or later, or one they named (answers.applied_before); unknown until they have answered.
-  const tracked = await one(db, `SELECT count(*) n FROM applications a JOIN jobs j ON j.id = a.job_id WHERE lower(j.company) = lower(?)
-    AND j.id != ? AND a.status IN ('submitted', 'confirmed', 'assessment', 'interview', 'offer', 'rejected')`, [job.company, job.id]);
-  const named = answers.applied_before;
-  const appliedHere = Number(tracked?.n) > 0 || (Array.isArray(named) && named.some((n) => norm(n) === norm(job.company))) ? true
-    : named == null ? undefined : false;
+  const { appliedHere, inIndia } = await askContext(db, job, profile);
   const usable = (a) => a && (a.state === 'active' || a.state === 'unverified');
   // Signs in (when an account exists), then opens the application. Returns where it landed, or a stop.
   const begin = async () => {
@@ -1184,7 +1214,6 @@ export async function applyWorkday({ page, job, profile, resumePath, db, gmail, 
       return explore ? { stop: 'explored', step, fields: await formFields(page), errors: await pageErrors(page), trail }
         : { stop: 'blocked', step, reason: `The "${step}" step is not automated yet`, trail };
     }
-    const inIndia = /india|bengaluru|bangalore|hyderabad|pune|chennai|mumbai|delhi|gurgaon|gurugram|noida|kolkata/i.test(`${job.location ?? ''} ${job.url}`);
     const result = await fill(page, { profile, answers, job, host, resumePath, inIndia, draft, appliedHere });
     trail.push({ step, ...result });
     await shot(`filled-${step}`);
