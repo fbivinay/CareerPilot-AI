@@ -196,5 +196,15 @@ export async function prefillPage(page, fields, resumePath) {
   const values = { ...fields, full_name: [fields.first_name, fields.last_name].filter(Boolean).join(' ') };
   const filled = [];
   for (const [name, labels] of FIELDS) if (await fillOne(page, labels, values[name])) filled.push(name);
+  // A form's resume reading takes the latest job for the current one (Lever's "Current company"): the
+  // field gets the job still going, or is emptied when there is none.
+  const current = page.getByLabel(/^current (company|employer|organi[sz]ation)/i).first();
+  const want = fields.current_company ?? '';
+  try {
+    if (await current.isVisible({ timeout: 500 }) && await current.isEditable() && (await current.inputValue()) !== want) {
+      await current.fill(want);
+      filled.push(want ? 'current_company' : 'current_company (emptied)');
+    }
+  } catch { /* not on this form, or not a text input */ }
   return { filled, resume };
 }

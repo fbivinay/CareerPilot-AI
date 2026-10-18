@@ -179,6 +179,13 @@ test('internship questions use the standing answers, with the options the form o
   assert.equal(pick('What Industry do you specialize in ?', ['Healthcare', 'Medtech', 'Automotive', 'Manufacturing', 'Others']), 'Others');
 });
 
+test('the answer pack names a current company only for a job still going', async () => {
+  const { answerPack } = await import('../lib/prepare.mjs');
+  const company = (dates) => answerPack({ name: 'A Candidate', experience: [{ company: 'Acme Labs, Bengaluru', dates }] }, {}).fields.current_company;
+  assert.equal(company('May 2026 - Jun 2026'), undefined); // a finished internship
+  assert.equal(company('May 2026 - Present'), 'Acme Labs');
+});
+
 test('an open question is drafted from the job and profile only; a draft with an unknown number is dropped', async () => {
   const { openDb } = await import('../lib/db.mjs');
   const { draftAnswer } = await import('../lib/compose.mjs');

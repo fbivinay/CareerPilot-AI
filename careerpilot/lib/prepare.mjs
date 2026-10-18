@@ -21,6 +21,8 @@ const plain = (v) => (v instanceof Date ? v.toISOString().slice(0, 10)
 export function answerPack(profile, job) {
   const a = Object.fromEntries(Object.entries(profile.answers ?? {}).map(([k, v]) => [k, plain(v)]));
   const missing = (REQUIRED[job.employment_type] ?? []).filter((k) => a[k] == null || a[k] === '');
+  // A job still going ("May 2026 - Present"); a finished internship is no current employer.
+  const current = (profile.experience ?? []).find((e) => /[-–]\s*(present|current|now)\b/i.test(e.dates ?? ''));
   return {
     missing,
     fields: {
@@ -33,6 +35,7 @@ export function answerPack(profile, job) {
       github: profile.links?.github,
       portfolio: profile.links?.portfolio,
       current_education: `${profile.education?.[0]?.degree}, ${profile.education?.[0]?.institution}`,
+      current_company: current?.company.replace(/,[^,]*$/, '').trim(), // "ComedKares, Bengaluru" -> "ComedKares"
       graduation: a.graduation_month,
       ...Object.fromEntries(Object.entries(a).filter(([, v]) => v != null)),
     },
