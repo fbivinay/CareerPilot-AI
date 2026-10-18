@@ -1131,6 +1131,10 @@ const QUESTION_RULES = [
   // Keeping the profile for roles not applied to, with emails about them (GE Vernova; the candidate said yes
   // on 2026-10-18). Before the marketing rule.
   [/\bretain(ing)? your (candidate )?profile\b.{0,200}\b(roles?|positions?|opportunit\w*)\b/i, (c) => yes(c.answers.retain_profile_for_other_roles)],
+  // How to be contacted while recruiting (GE Vernova offers "Email" / "Email & Text/SMS", texts only outside
+  // India): email, plus texts where the candidate allowed them and the form can send them.
+  [/\bcommunication method\b.{0,80}\b(contact|recruit\w*)\b/i, (c) => ({
+    option: [...(c.answers.sms_updates && !(c.inIndia && /sms is (currently )?supported in\b/i.test(c.label) && !/\bindia\b/i.test(c.label)) ? [/\b(text|sms)\b/i] : []), /^e-?mail$/i] })],
   // Fractal's questions, from the candidate's answers of 2026-10-18.
   [/\b(roll|seat|registration|enrol+ment) (number|no\.?)\b.{0,80}\b(education|qualification|degree)\b/i,
     (c) => (c.answers.highest_qualification_reg_no ? { text: String(c.answers.highest_qualification_reg_no) } : undefined)],

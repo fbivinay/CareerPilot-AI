@@ -305,6 +305,8 @@ test('Barclays, Mastercard, Maersk, ICF, US Bank, Mobility, PwC and RELX questio
     { profile, answers, job: { company: 'Fractal', title: 'Data Scientist (Computer Vision)' }, inIndia: true });
   assert.equal(best(['Data Engineer', 'Data Scientist', 'ML Engineer'], role.option), 1);
   assert.equal(best(['I am an Intern', 'I am an Apprentice', 'I am a Fresher', 'I am an Experienced Professional'], role.option), 2);
+  answers.sms_updates = true;
+  assert.equal(best(['Email', 'Email & Text/SMS'], ask('Which communication method would you like us to use when contacting you throughout the recruiting process? (SMS is currently supported in Australia, Canada, France, Germany, Ireland, the United Kingdom, and the United States.)', 'dropdown', 'GE Vernova').option), 0);
   assert.equal(best(['I wish to subscribe to marketing communications', 'I wish to unsubscribe from marketing communications'],
     ask('Do you wish to receive our marketing communications? If you do not respond, it will be considered that you wish to subscribe', 'dropdown', 'Fractal').option), 1);
   assert.equal(best(['Indian Citizen', 'US Citizen', 'Foreign National'], ask('Please specify your Citizenship Status', 'dropdown', 'Maersk').option), 0);
