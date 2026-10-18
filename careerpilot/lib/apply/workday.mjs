@@ -500,10 +500,21 @@ async function myInformation(page, ctx) {
   filled.phone = await setText(page, 'phoneNumber', digits(profile.phone));
   // The whole street address: in its two lines, or in the only one a form has (BMS, which then asks to
   // confirm the address matches the candidate's Aadhaar card).
-  if (answers.address_line1 && answers.address_line2 && (await page.locator(F('addressLine1')).count())) {
-    filled.street = (await page.locator(F('addressLine2')).count())
+  // By label, not id: TransUnion's addressLine1..3 are "Building", "Door Number", "Street Number".
+  const labelOf = async (field) => (await page.locator(`${F(field)} label`).first().innerText().catch(() => '')).replace(/\*\s*$/, '').trim();
+  // Address lines named for what they hold (TransUnion), overwriting what an earlier attempt left there.
+  for (const field of ['addressLine1', 'addressLine2', 'addressLine3']) {
+    const label = await labelOf(field);
+    const value = /^building( name| number)?$/i.test(label) ? answers.address_building
+      : /^door (number|no\.?)$/i.test(label) ? answers.address_door_number
+        : /^street number$/i.test(label) ? answers.address_street_number : undefined;
+    if (value != null) await setText(page, field, String(value));
+  }
+  if (answers.address_line1 && answers.address_line2 && /^(address line 1|street address|address)$/i.test(await labelOf('addressLine1'))) {
+    filled.street = /^address line 2$/i.test(await labelOf('addressLine2'))
       ? await setText(page, 'addressLine2', answers.address_line2)
-      : await setText(page, 'addressLine1', `${answers.address_line1}, ${answers.address_line2}`);
+      : (await page.locator(F('addressLine2')).count()) ? false
+        : await setText(page, 'addressLine1', `${answers.address_line1}, ${answers.address_line2}`);
   }
   const problems = [unmet('How did you hear about us', filled.source), unmet('Country', filled.country),
     unmet('State', filled.state ?? { missing: true }), unmet('Phone device type', filled.phoneType), unmet('Country phone code', filled.phoneCode)].filter(Boolean);
