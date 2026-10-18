@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { all, one, openDb, run } from '../lib/db.mjs';
-import { expireMissing, touchKnown, upsertJob } from '../lib/jobs.mjs';
+import { expireMissing, reevaluateAll, touchKnown, upsertJob } from '../lib/jobs.mjs';
 import { boardFromPostingUrl, placesFilter } from '../lib/discover.mjs';
 import { locationNarrowing } from '../../providers/workday.mjs';
 import { createApplication } from '../lib/applications.mjs';
@@ -20,6 +20,14 @@ test('upsert is idempotent and keys on the canonical URL', async () => {
   assert.equal(b.created, false);
   assert.equal((await all(db, 'SELECT * FROM jobs')).length, 1);
   assert.equal(a.status, 'qualified');
+});
+
+test('re-evaluation reaches every live job, a page at a time', async () => {
+  const db = await openDb({ url: ':memory:' });
+  for (let i = 0; i < 5; i++) await upsertJob(db, posting({ url: `https://jobs.lever.co/acme/${i}`, title: `Junior Data Scientist ${i}` }), { source: 'lever', boardId: 'b1', settings });
+  await run(db, `UPDATE jobs SET status = 'new'`);
+  assert.equal(await reevaluateAll(db, settings, 2), 5);
+  assert.equal(Number((await one(db, `SELECT count(*) n FROM jobs WHERE status = 'new'`)).n), 0);
 });
 
 test('same role from another source becomes a duplicate; the canonical row gets the richer JD and is re-judged', async () => {

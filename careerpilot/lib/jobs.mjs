@@ -147,9 +147,15 @@ export async function expireMissing(db, boardId, seen, { places = null } = {}) {
   return gone.length;
 }
 
-// Re-run rules over every live job, e.g. after settings change.
-export async function reevaluateAll(db, settings) {
-  const rows = await all(db, `SELECT * FROM jobs WHERE status IN ('new', 'qualified', 'excluded')`);
-  await batchChunks(db, rows.flatMap((row) => evaluationStatements(row, settings).stmts));
-  return rows.length;
+// Re-run rules over every live job, e.g. after settings change. A page at a time: one read of every
+// job's text (11 MB at 18k jobs) makes Turso close the connection, and the next request fails.
+export async function reevaluateAll(db, settings, page = 1000) {
+  let count = 0;
+  for (let after = ''; ;) {
+    const rows = await all(db, `SELECT * FROM jobs WHERE status IN ('new', 'qualified', 'excluded') AND id > ? ORDER BY id LIMIT ?`, [after, page]);
+    if (!rows.length) return count;
+    await batchChunks(db, rows.flatMap((row) => evaluationStatements(row, settings).stmts));
+    count += rows.length;
+    after = rows.at(-1).id;
+  }
 }
