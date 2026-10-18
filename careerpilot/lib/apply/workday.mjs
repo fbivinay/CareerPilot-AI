@@ -927,6 +927,20 @@ const QUESTION_RULES = [
   [/\b(active|pending) backlogs?\b|\bbacklogs? in (your|the) (current )?(degree|course|program)|\barrears?\b/i, (c) => (c.answers.active_backlogs == null ? undefined
     : c.answers.active_backlogs ? undefined // how many, and when they clear, is the candidate's to say
       : { option: [/^no\b|^none\b|\bno active\b|^0\b/i], text: '0' })],
+  // The internship length when a form makes the candidate pick (internship_min_months 6: "6 months or more"):
+  // an option starting at that many months or more ("6 Months and Above", "6-12 months"; not "4 to 6 Months").
+  [/\b(duration|length) of (the |your |an )?internship|internship (duration|length|period)|how long (an |the |of an |of the )?internship/i, (c) => {
+    const min = Number(c.answers.internship_min_months);
+    if (!min) return undefined;
+    const atLeast = Array.from({ length: 25 - min }, (_, i) => min + i).join('|');
+    return { text: `${min} months or more`, option: [new RegExp(`^(?!.*\\b(less|under|up ?to|within|below|max)\\b)\\D*(${atLeast})\\b.*\\bmonths?\\b`, 'i')] };
+  }],
+  [/\bfull.?time (role|job|position|employment|opportunit\w*)\b.{0,40}\bafter (the |your )?internship/i, (c) => yes(c.answers.full_time_after_internship)],
+  [/\bhours? (per|a|each) day\b.{0,40}\binternship|\binternship\b.{0,40}\bhours? (per|a|each) day/i, (c) => (c.answers.internship_hours_per_day
+    ? { text: String(c.answers.internship_hours_per_day), option: [new RegExp(`^${Number(c.answers.internship_hours_per_day)}\\s*(hours?|hrs?)\\b`, 'i')] } : undefined)],
+  // Aptitude or technical tests before the interviews (Mactores).
+  [/\b(aptitude|technical|coding|online) (tests?|assessments?)\b[\s\S]{0,300}\b(willing|ready|agree|comfortable)\b.{0,10}\b(to take|taking|to attempt|to appear)\b|\b(willing|ready|agree|comfortable)\b.{0,10}\b(to take|taking|to attempt|to appear)\b.{0,60}\b(aptitude|technical|coding|online) (tests?|assessments?)/i,
+    (c) => yes(c.answers.willing_to_take_tests)],
   // "Do you hold the certifications outlined in the job description?" when the description names none.
   [/certifications?\b.{0,60}\b(outlined|listed|required|mentioned|specified) in the job description/i, (c) =>
     // PwC's template names the headings even when empty: "Certifications (if blank, certifications not
@@ -979,9 +993,10 @@ const QUESTION_RULES = [
   // on 2026-10-17).
   [/job alert|newsletter|marketing|talent (community|network)|future (opportunit|role|position)|contact me about|keep me (informed|updated)|receive (\w+ )?communications?\b.*\bevents?\b/i,
     (c) => (c.kind === 'dropdown' || c.kind === 'radio' ? { option: [/^(no|i do not|i don't|do not|disagree|decline)\b/i] } : undefined)],
-  // Also a required "I have read the Privacy Notice" (Dentsu), and a required consent to the tool the employer
-  // runs its hiring process with (Logitech's automated interview scheduling).
-  [/\b(consent|agree|acknowledge|accept)\b.*\b(terms|conditions|privacy|policy|notice)\b|\b(terms|privacy)\b.*\b(consent|agree|accept)|\b(have read|reading|read and understood)\b.*\b(privacy|terms|notice|policy)\b|automated (interview )?scheduling|scheduling (system|tool|assistant)/i,
+  // Also a required "I have read the Privacy Notice" (Dentsu) or "… understand how my information will be
+  // processed" (Visa), and a required consent to the tool the employer runs its hiring process with
+  // (Logitech's automated interview scheduling).
+  [/\b(consent|agree|acknowledge|accept)\b.*\b(terms|conditions|privacy|policy|notice)\b|\b(terms|privacy)\b.*\b(consent|agree|accept)|\b(have read|reading|read and understood)\b.*\b(privacy|terms|notice|policy)\b|\bhow (my|your) (personal )?(information|data) (will be|is|are) (processed|used|handled)\b|automated (interview )?scheduling|scheduling (system|tool|assistant)/i,
     (c) => (c.required && ['checkbox', 'dropdown', 'radio'].includes(c.kind) ? { yes: true } : undefined)],
   // Voluntary self-identification: declining is a true answer and the only one CareerPilot gives.
   [/\b(ethnic|race|racial|veteran|disabilit|hispanic|latino|sexual orientation|pronoun)/i,

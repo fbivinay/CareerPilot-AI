@@ -59,6 +59,7 @@ test('employer questions are answered only from the profile, in the unit they as
   assert.deepEqual(ask('Have you worked for Haleon in the past?'), { yes: false });
   assert.deepEqual(ask('Have you worked for Acme Labs in the past?'), { yes: true });
   assert.deepEqual(ask('I have read the Privacy Notice', 'checkbox'), { yes: true });
+  assert.deepEqual(ask('I acknowledge that I have read and understand how my information will be processed.', 'checkbox'), { yes: true });
   assert.deepEqual(ask('Logitech uses an automated scheduling system to support you during the recruitment process. Your consent is required to proceed.'), { yes: true });
   // Consent yes, marketing never, self-identification declined.
   assert.deepEqual(ask('Yes, I have read and consent to the terms and conditions', 'checkbox'), { yes: true });
@@ -177,6 +178,14 @@ test('internship questions use the standing answers, with the options the form o
   assert.deepEqual(ask('Do you have plans to pursue higher education?'), { yes: false });
   assert.equal(pick('Do you have any active backlogs in your current degree program?', ['1 active backlog', 'No active backlogs']), 'No active backlogs');
   assert.equal(pick('What Industry do you specialize in ?', ['Healthcare', 'Medtech', 'Automotive', 'Manufacturing', 'Others']), 'Others');
+  // Mactores (Lever), with the answers given on 2026-10-18; unknown until given.
+  assert.equal(ask('Whats the duration of the internship are you looking for?'), undefined);
+  Object.assign(answers, { internship_min_months: 6, full_time_after_internship: true, internship_hours_per_day: 8, willing_to_take_tests: true });
+  assert.equal(pick('Whats the duration of the internship are you looking for?', ['3 Months', '4 to 6 Months', '6 Months and Above']), '6 Months and Above');
+  assert.equal(pick('Whats the duration of the internship are you looking for?', ['Less than 6 months', '6-12 months']), '6-12 months');
+  assert.deepEqual(ask('Are you looking for a full time role immediately after the internship?'), { yes: true });
+  assert.equal(pick('How many hours per day are you available for internship', ['4 hours (Half day)', '8 hours (Full Day)']), '8 hours (Full Day)');
+  assert.deepEqual(ask('As part of the hiring process, as the first step, Mactores conducts Aptitude Test and relevant Technical Test for your Job Role. These tests help us reduce our time to decisions and help you analyze your skills and expertise. Please confirm if you will be willing to take these tests before the initial interview?'), { yes: true });
 });
 
 test('the answer pack names a current company only for a job still going', async () => {
