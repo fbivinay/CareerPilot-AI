@@ -682,6 +682,16 @@ const QUESTION_RULES = [
   [/relocat/i, (c) => yes(c.answers.willing_to_relocate)],
   [/\b(friend|relative|family member|related to)\b|personal relationship with any|relationship with (any|a) (current )?employee/i, (c) => yes(c.answers.relatives_at_employer)],
   [/restrictive covenant|non-?compete|non-?solicit/i, (c) => yes(c.answers.restrictive_covenants)],
+  // Any other past tie to the employer (client, partner, vendor, contractor, consultant).
+  [/collaborated with|\b(client|partner|vendor|supplier)\b.{0,40}\bcapacity|contractor or consultant|consultant roles?\b/i,
+    (c) => yes(c.answers.prior_relationship_with_employer)],
+  // An attestation the candidate signs by typing their name, and its date (only with their permission).
+  [/by signing (below|this)|attestation|i hereby attest/i, (c) => (c.answers.may_e_sign ? { text: c.profile.name, yes: true } : undefined)],
+  [/^date\s*:?$/i, (c) => {
+    if (!c.answers.may_e_sign) return undefined;
+    const [year, month, day] = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }).split('-').map(Number);
+    return { date: { year, month, day }, text: `${String(day).padStart(2, '0')}/${String(month).padStart(2, '0')}/${year}` };
+  }],
   [/\binterviewed\b/i, (c) => yes(c.answers.previously_interviewed)],
   [/^(name )?(prefix|salutation)$/i, (c) => (c.answers.name_prefix ? { option: [new RegExp(`^${escapeRe(String(c.answers.name_prefix).replace(/\.$/, ''))}\\.?$`, 'i')], text: c.answers.name_prefix } : undefined)],
   [/\b(ever|previously|formerly|currently|already)\b.{0,20}\b(worked|employed|work)\b|\bformer (employee|intern|contractor)\b/i, (c) => ({ yes: workedAt(c.profile, c.job.company) })],
