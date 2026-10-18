@@ -375,10 +375,14 @@ async function pick(page, field, search, wants, scope = page) {
 // "How did you hear about us": the employer's own site is where CareerPilot finds postings ("Marvell
 // Website", "Company Website"). Job-board names that merely contain "career" (Career Builder) never match.
 export const escapeRe = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+// A careers portal that is someone else's is not the employer's site (AllianceBernstein: "School's Career
+// Portal (i.e. Handshake/Symplicity)").
+const NOT_OWN_SITE = /\b(school|university|college|campus|handshake|symplicity|job ?boards?|agency|recruiters?)\b/i;
 const sourceWants = (employerNames) => [
   new RegExp(`^(${employerNames.filter(Boolean).map(escapeRe).join('|')})\\b.*\\b(web ?site|careers?( site| page)?|job board)$`, 'i'),
   /^(the )?(company|corporate|employer|organi[sz]ation)('s)?( careers?)? (web)?site$/i,
-  /\b(company|corporate|employer|official)\b[^,]*\b(web)?site\b/i, /\bcareers? (web ?site|site|page|portal)\b/i];
+  /\b(company|corporate|employer|official)\b[^,]*\b(web)?site\b/i,
+  { test: (t) => /\bcareers? (web ?site|site|page|portal)\b/i.test(t) && !NOT_OWN_SITE.test(t) }];
 // Only when the list has no site of the employer's own (Circles: "Websites"; NatWest offers only search
 // engines and job boards): the nearest true answer.
 const SOURCE_FALLBACK = [/^(company )?(careers? )?web ?sites?$/i, /^other$/i];

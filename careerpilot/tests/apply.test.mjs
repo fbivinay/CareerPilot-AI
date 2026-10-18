@@ -274,6 +274,10 @@ test('Barclays, Mastercard, Maersk, ICF, US Bank, Mobility, PwC and RELX questio
   assert.deepEqual(ask('I am aware that I am expected to work in India, even if I am deployed on a project which has flexibility to work from home', 'dropdown', 'PwC'), { yes: true });
   assert.deepEqual(ask('By checking this box you consent to sharing information with AllianceBernstein.', 'checkbox', 'Abglobal'), { yes: true });
   assert.equal(ask('I consent to sharing my information with third parties and partners.', 'checkbox', 'Abglobal'), undefined);
+  // A school's careers portal is not the employer's own site.
+  const heard = ask('How did you hear about this job?', 'dropdown', 'AllianceBernstein').option;
+  assert.equal(best(["School's Career Portal (i.e. Handshake/Symplicity)", 'Careers Page', 'Other'], heard), 1);
+  assert.equal(best(["School's Career Portal (i.e. Handshake/Symplicity)", 'Other'], heard), 1);
   const relx = ['Bachelor’s Degree or Equivalent Degree', "Associate's Degree or 2-year Equivalent Degree", 'Master’s Degree or Equivalent Degree', 'Master’s in Business Administration (MBA)'];
   assert.equal(best(relx, degreeWants('MSc in Big Data Analytics')), 2);
   assert.equal(best(relx, degreeWants('BSc in Statistics')), 0);
