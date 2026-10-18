@@ -912,6 +912,9 @@ const QUESTION_RULES = [
   [/\b(work|residency|residence) permit\b/i, (c) => (c.inIndia && /^india/i.test(c.answers.citizenship ?? '')
     ? { option: [/not applicable|^n\/?a$/i, /^yes\b/i] } : undefined)],
   [/\bsponsor|\b(require|need) (a )?visa\b/i, (c) => (c.inIndia ? yes(c.answers.needs_visa_sponsorship) : undefined)],
+  // Citizenship status for a job in India (Maersk): an Indian citizen.
+  [/\bcitizenship status\b/i, (c) => (c.inIndia && /^india/i.test(c.answers.citizenship ?? '')
+    ? { text: 'Indian citizen', option: [/\bindian?\b.*\bcitizen|\bcitizen\b.*\bindia/i, /^citizen( of (the |this )?country)?$/i] } : undefined)],
   // A citizen of the job's country: an Indian citizen, for a job in India (AllianceBernstein).
   [/\bcitizen\b.{0,40}\bcountry (where|in which)\b.{0,60}\b(role|job|position)\b/i, (c) => (c.inIndia && /^india/i.test(c.answers.citizenship ?? '') ? { yes: true } : undefined)],
   [/(legal|lawful)\w* (right|authori[sz]\w*|eligib\w*|permi\w*) to work|authori[sz]ed to work|work authori[sz]ation|eligible to work|right to work/i,
@@ -1037,9 +1040,9 @@ const QUESTION_RULES = [
     return { option: [{ test: (t) => (optionDays(t) ?? -1) >= days }] };
   }],
   // The profile lists the most recent degree first.
-  // Not a number or id that merely names the qualification (Fractal: "Roll number / Seat Number /
-  // Registration Number of your Highest Education Qualification").
-  [/^(?!.*\b(roll|seat|registration|enrol+ment|certificate|id|number)\b).*\bhighest (level of )?(education|qualification|degree)\b/i, (c) => {
+  // Not a number, id or place that merely names the qualification (Fractal: "Roll number / Seat Number /
+  // Registration Number of your Highest Education Qualification", "… is located in which State?").
+  [/^(?!.*\b(roll|seat|registration|enrol+ment|certificate|id|number|located)\b).*\bhighest (level of )?(education|qualification|degree)\b/i, (c) => {
     const [ed] = c.profile.education ?? [];
     if (!ed || (c.kind !== 'text' && c.kind !== 'textarea')) return undefined;
     return { text: `${ed.degree}, ${ed.institution}${studying(c.profile) ? ' (pursuing)' : ''}` };
@@ -1092,6 +1095,9 @@ const QUESTION_RULES = [
   }],
   // Before the pay questions: "Currency (Salary Expectations)" names one.
   [/^currency\b|\bcurrency \(/i, () => ({ option: [/\binr\b|indian rupee/i], text: 'INR' })], // the profile's figures are in rupees
+  // Notice owed to a current employer, before the notice-length rule: none without a current job.
+  [/\bnotice( period)?\b.{0,30}\b(to|with) (your )?current employer\b|\bserving (a |your |the )?notice/i,
+    (c) => (employed(c) === false ? { text: 'No', option: [/not applicable|fresher|no notice/i, /^no\b/i] } : undefined)],
   [/notice period|\bhow much notice\b/i, (c) => (c.answers.notice_period == null ? undefined
     : { text: String(c.answers.notice_period), option: [new RegExp(`^${c.answers.notice_period}\\b`), /immediate|^0\b|no notice|not applicable/i,
       ...(c.answers.notice_period === 0 ? [/^(less than|under|below|within|up ?to|<)\s*\d+/i] : [])] })], // Mobility: "Less than 30 days"
@@ -1121,6 +1127,29 @@ const QUESTION_RULES = [
   // candidate said yes on 2026-10-18; Artefact: "I agree to have my CV retained for 2 years").
   [/(other|additional) (open )?(positions|roles|vacancies|opportunities) than|considered? (me )?for (other|future) (open )?(positions|roles|vacancies|opportunities)|\btalent pool\b|\b(cv|resume)\b.{0,20}\bretained\b/i,
     (c) => (c.kind === 'checkbox' ? (c.answers.consider_for_other_roles ? { yes: true } : undefined) : yes(c.answers.consider_for_other_roles))],
+  // Keeping the profile for roles not applied to, with emails about them (GE Vernova; the candidate said yes
+  // on 2026-10-18). Before the marketing rule.
+  [/\bretain(ing)? your (candidate )?profile\b.{0,200}\b(roles?|positions?|opportunit\w*)\b/i, (c) => yes(c.answers.retain_profile_for_other_roles)],
+  // Fractal's questions, from the candidate's answers of 2026-10-18.
+  [/\b(roll|seat|registration|enrol+ment) (number|no\.?)\b.{0,80}\b(education|qualification|degree)\b/i,
+    (c) => (c.answers.highest_qualification_reg_no ? { text: String(c.answers.highest_qualification_reg_no) } : undefined)],
+  [/\btype of (education|degree|qualification)\b/i, (c) => (c.answers.education_type
+    ? { text: c.answers.education_type, option: [new RegExp(`^${escapeRe(c.answers.education_type)}\\b`, 'i')] } : undefined)],
+  [/\binstitution\b.{0,80}\bhighest (education|qualification)\b.{0,60}\blocated in which (state|country)\b/i, (c) => {
+    const v = /country\b/i.test(c.label.slice(-40)) ? c.answers.highest_institution_country : c.answers.highest_institution_state;
+    return v ? { text: v, option: [new RegExp(`^${escapeRe(v)}$`, 'i')] } : undefined;
+  }],
+  // The role applied for: the posting's own title, or a role name it contains ("Data Scientist" in
+  // "Data Scientist (Computer Vision)").
+  [/\bselect the (role|position) you are applying for\b|\bwhich (role|position) are you applying for\b/i, (c) => {
+    const title = String(c.job.title ?? '').toLowerCase();
+    return title ? { option: [new RegExp(`^${escapeRe(c.job.title)}$`, 'i'), { test: (t) => t.length >= 6 && title.includes(t.toLowerCase()) }] } : undefined;
+  }],
+  [/\bcomfortable working from (the )?office\b|\bwork(ing)? (from|at) (the )?(office|client location)\b/i,
+    (c) => ((c.answers.work_arrangements ?? []).some((k) => /on.?site|office/i.test(k)) ? { yes: true } : undefined)],
+  [/\bprior evaluation\b|\b(tests?|interviews?)\b.{0,60}\b(last|past) \d+ months\b/i,
+    (c) => (c.appliedHere === false && c.answers.previously_interviewed === false ? { yes: false } : undefined)],
+  [/\b(completed|hold)\b.{0,60}\b(fractal data science professional certificate|analytics vidhya'?s? black belt)/i, (c) => yes(c.answers.fractal_av_certificates)],
   // Marketing opt-ins are never given: a tick box stays unticked and a required yes/no is answered no. A
   // required consent to the employer's terms or privacy notice is ticked (the candidate authorized both
   // on 2026-10-17).

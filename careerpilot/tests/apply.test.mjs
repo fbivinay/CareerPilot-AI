@@ -290,6 +290,25 @@ test('Barclays, Mastercard, Maersk, ICF, US Bank, Mobility, PwC and RELX questio
   assert.deepEqual(ask('Please confirm if you have a valid PAN card.', 'dropdown', 'Maersk'), { yes: true });
   assert.deepEqual(ask('I confirm that I am 18+ years of age', 'dropdown', 'Maersk'), { yes: true });
   assert.deepEqual(ask('I agree that I will not disclose or use, while interviewing with or employed with GE Vernova and GE Vernova’s affiliate businesses, any confidential or proprietary information of others, including any former employer.', 'dropdown', 'GE Vernova'), { yes: true });
+  // Fractal, Maersk, TransUnion and GE Vernova, with the answers of 2026-10-18.
+  Object.assign(answers, { citizenship: 'India', highest_qualification_reg_no: 'X123', education_type: 'Masters', highest_institution_state: 'Karnataka',
+    highest_institution_country: 'India', fractal_av_certificates: false, retain_profile_for_other_roles: true, previously_interviewed: false });
+  const fr = (label, options) => options.filter((o) => (ask(label, 'dropdown', 'Fractal').option ?? []).some((re) => re.test(o)));
+  assert.equal(ask('Enter the Roll number/ Seat Number / Registration Number of your Highest Education Qualification', 'textarea', 'Fractal').text, 'X123');
+  assert.deepEqual(fr('Type of Education', ['Bachelors', 'Masters', 'Ph.D']), ['Masters']);
+  assert.deepEqual(fr('The Institution where you completed your highest education qualification is located in which State?', ['Assam', 'Karnataka']), ['Karnataka']);
+  assert.deepEqual(fr('The Institution where you completed your highest education qualification is located in which Country?', ['India', 'Nepal']), ['India']);
+  assert.deepEqual(ask('Are you comfortable working from office or at client location?', 'dropdown', 'Fractal'), { yes: true });
+  assert.deepEqual(ask('Have you undergone any prior evaluation at Fractal or any of its entities in the form of test / interview (online or offline) in the last 6 months ?', 'dropdown', 'Fractal'), { yes: false });
+  assert.deepEqual(ask('Please select "Yes" or "No" to indicate whether you have completed Fractal Data Science Professional Certificate. If the answer is yes, please attach the certificate.', 'dropdown', 'Fractal'), { yes: false });
+  const role = answerFor({ label: 'Please select the role you are applying for', kind: 'dropdown', required: true },
+    { profile, answers, job: { company: 'Fractal', title: 'Data Scientist (Computer Vision)' }, inIndia: true });
+  assert.equal(best(['Data Engineer', 'Data Scientist', 'ML Engineer'], role.option), 1);
+  assert.equal(best(['Indian Citizen', 'US Citizen', 'Foreign National'], ask('Please specify your Citizenship Status', 'dropdown', 'Maersk').option), 0);
+  const notice = ask('Do you need to provide a notice period to your current employer?', 'dropdown', 'TransUnion');
+  assert.equal(best(['Yes', 'No'], notice.option), 1);
+  assert.equal(best(['Yes', 'No', 'Not Applicable, I am a Fresher'], ask('Are you serving Notice Period?', 'dropdown', 'Fractal').option), 2);
+  assert.deepEqual(ask('In addition to the role you are applying for, do you consent to GE Vernova retaining your Candidate profile to assess your suitability for roles for which you may not have applied, and to contact you by email about job opportunities?', 'dropdown', 'GE Vernova'), { yes: true });
   // A number that names the qualification is not the qualification.
   assert.equal(answerFor({ label: 'Enter the Roll number/ Seat Number / Registration Number of your Highest Education Qualification', kind: 'textarea', required: true },
     { profile: { name: 'A', education: [{ degree: 'MSc in X', institution: 'Y', dates: 'Aug 2025 - Jun 2099' }] }, answers: {}, job: { company: 'Fractal' } }), undefined);
