@@ -3,7 +3,7 @@
 // Never fills a field it does not recognise (Workday forms carry honeypot inputs), never solves a
 // CAPTCHA, never invents an answer: anything it cannot answer stops the application as 'blocked'.
 import { randomBytes } from 'node:crypto';
-import { now } from '../db.mjs';
+import { now, one } from '../db.mjs';
 import { vaultGet, vaultPut } from '../vault.mjs';
 
 const A = (id) => `[data-automation-id="${id}"]`;
@@ -702,11 +702,13 @@ function signs(c) {
 // "no", and unknown otherwise. Employment comes from the profile's full history, the rest from the
 // candidate's standing answers.
 const RELATIVE = /\b(friend|relative|family member|related to)\b|\bpersonal relationship\b|relationship with (any|a) (current )?employee/i;
-const PAST_TIE = new RegExp(`${RELATIVE.source}|\\binterviewed\\b|\\b(ever|previously|formerly|currently|already)\\b.{0,20}\\b(worked|employed|work|employee)\\b|\\bformer (employee|intern|contractor)\\b|collaborated with|\\b(client|partner|vendor|supplier)\\b.{0,40}\\bcapacity|contractor or consultant|consultant roles?\\b`, 'i');
+const PAST_TIE = new RegExp(`${RELATIVE.source}|\\binterviewed\\b|\\b(ever|previously|already) applied\\b|\\breceived an offer\\b|\\bindependent contractor\\b|third.party labou?r|\\b(ever|previously|formerly|currently|already)\\b.{0,20}\\b(worked|employed|work|employee)\\b|\\bformer (employee|intern|contractor)\\b|collaborated with|\\b(client|partner|vendor|supplier)\\b.{0,40}\\bcapacity|contractor or consultant|consultant roles?\\b`, 'i');
 function pastTies(c) {
   const facts = [
     [RELATIVE, c.answers.relatives_at_employer],
     [/\binterview(ed|s)?\b/i, c.answers.previously_interviewed],
+    // No application, no offer: both follow from whether the candidate applied here before.
+    [/\bapplied\b|\breceived an offer\b/i, c.appliedHere],
     [/\b(work|worked|employed|employee|intern)\b/i, workedAt(c.profile, c.job.company)],
     // A contract may not be in the history, even when named in passing ("Employee, Intern or Contractor").
     [/collaborat|\b(client|partner|vendor|supplier|contractor|consultant)s?\b/i, c.answers.prior_relationship_with_employer],
@@ -726,6 +728,22 @@ function workYears(profile) {
   return Math.floor(months / 12);
 }
 const longDate = ({ year, month, day }) => new Date(Date.UTC(year, month - 1, day)).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
+// The days an option like "Immediately", "15 days", "Within 1 month" or "1-2 months" stands for (its upper end).
+const optionDays = (text) => {
+  if (/immediate|right away|\basap\b/i.test(text)) return 0;
+  const spans = [...String(text).matchAll(/(\d+)\s*(day|week|month)/gi)].map(([, n, unit]) => Number(n) * { day: 1, week: 7, month: 30 }[unit.toLowerCase()]);
+  return spans.length ? Math.max(...spans) : null;
+};
+
+// Agreements that restrict joining a new employer. A question that also asks about a bond or "other
+// circumstances" needs the candidate's answer on those too.
+function restrictions(c) {
+  const facts = [];
+  if (/restrictive covenant|non-?compet|non-?solicit|agreement|obligation/i.test(c.label)) facts.push(yes(c.answers.restrictive_covenants)?.yes);
+  if (/\bbond\b|commitment|obligation|other circumstances|preclude/i.test(c.label)) facts.push(yes(c.answers.employment_restrictions)?.yes);
+  if (facts.includes(true)) return { yes: true };
+  return facts.length && !facts.includes(undefined) ? { yes: false } : undefined;
+}
 
 // [pattern on the question, answer(ctx)]: the first matching pattern decides; undefined = not known.
 const QUESTION_RULES = [
@@ -735,7 +753,21 @@ const QUESTION_RULES = [
     (c) => (c.inIndia ? yes(c.answers.indian_work_authorization) : undefined)],
   [/relocat/i, (c) => yes(c.answers.willing_to_relocate)],
   [/reasonable (adjustment|accommodation)s?|accommodations? (during|in|for) the (recruit|interview|hiring|application)/i, (c) => yes(c.answers.needs_accommodation)],
-  [/restrictive covenant|non-?compete|non-?solicit/i, (c) => yes(c.answers.restrictive_covenants)],
+  [/government official|public official|politically exposed/i, (c) => yes(c.answers.government_official)],
+  [/restrictive covenant|non-?compet(e|ition)|non-?solicit|(agreement|obligation)s?\b.{0,80}\brestricts?\b|\bbond\b.{0,40}\b(employer|company)\b|commitments? ?\/ ?bond|service (bond|agreement)/i, restrictions],
+  [/date of birth|\bdob\b|\bbirth ?date\b/i, (c) => {
+    const d = isoDate(c.answers.date_of_birth);
+    if (!d?.day) return undefined;
+    if (c.kind === 'date') return { date: d };
+    return c.kind === 'text' ? { text: `${String(d.day).padStart(2, '0')}/${String(d.month).padStart(2, '0')}/${d.year}` } : undefined;
+  }],
+  // Letting the employer use AI tools on the application (allowed by the candidate on 2026-10-18); one
+  // about future openings also needs their wish to be considered for other roles.
+  [/\b(ai|artificial intelligence)\b\)?.{0,15}\btools?\b/i, (c) => {
+    const facts = [yes(c.answers.allow_ai_screening)?.yes];
+    if (/future (job )?(openings|roles|positions|opportunities)|other (positions|roles)/i.test(c.label)) facts.push(yes(c.answers.consider_for_other_roles)?.yes);
+    return facts.includes(undefined) ? undefined : { yes: facts.every(Boolean) };
+  }],
   // A statement to sign, and its date (only with the candidate's permission).
   [/by signing (below|this)|attestation|i hereby attest|\bsignature\b/i, signs],
   [/^date\s*:?$/i, (c) => {
@@ -758,7 +790,10 @@ const QUESTION_RULES = [
       : c.job.employment_type === 'internship' ? c.answers.internship_available_from : c.answers.earliest_joining_date);
     if (!when?.day) return undefined;
     if (c.kind === 'date') return { date: when };
-    return c.kind === 'text' || c.kind === 'textarea' ? { text: `From ${longDate(when)}` } : undefined;
+    if (c.kind === 'text' || c.kind === 'textarea') return { text: `From ${longDate(when)}` };
+    // A list of notice spans: the shortest that still reaches the joining date (lists run shortest first).
+    const days = Math.max(0, Math.ceil((Date.UTC(when.year, when.month - 1, when.day) - Date.now()) / 864e5));
+    return { option: [{ test: (t) => (optionDays(t) ?? -1) >= days }] };
   }],
   // The profile lists the most recent degree first.
   [/\bhighest (level of )?(education|qualification|degree)\b/i, (c) => {
@@ -770,7 +805,13 @@ const QUESTION_RULES = [
     return { text: `${ed.degree}, ${ed.institution}${pursuing ? ' (pursuing)' : ''}` };
   }],
   // Total work experience in years; a question about one skill or tool ("with Python") is not this one.
-  [/\byears of (relevant |total |work |professional )?experience\b|\bexperience \(?in years\)?/i, (c) => {
+  [/\bindustry\b.{0,30}\bspeciali[sz]/i, (c) => (c.answers.industry_specialization
+    ? { text: c.answers.industry_specialization, option: [/\bdata\b|analytics/i, /\b(ai|artificial intelligence|machine learning)\b/i] } : undefined)],
+  // "Do you hold the certifications outlined in the job description?" when the description names none.
+  [/certifications?\b.{0,60}\b(outlined|listed|required|mentioned|specified) in the job description/i, (c) =>
+    (/\b(certif\w*|clearance)\b/i.test(c.job.description ?? '') ? undefined
+      : { option: [/not applicable|n\/a|^none/i, /^yes\b/i], text: 'Not applicable: the job description lists none' })],
+  [/\byears of (relevant |total |work |professional |prior )?experience\b|\bexperience \(?in years\)?/i, (c) => {
     if (/\b(with|in|using|on) [A-Z]/.test(c.label)) return undefined;
     const years = workYears(c.profile);
     return { text: String(years), option: years ? [new RegExp(`^${years}\\b`)] : [/^0\b|fresher|less than (1|one)|< ?1|no experience|^none/i] };
@@ -782,13 +823,15 @@ const QUESTION_RULES = [
     if (/\byear\b/i.test(c.label)) return { text: String(d.year), option: [new RegExp(`^${d.year}$`)] };
     return undefined;
   }],
-  [/notice period/i, (c) => (c.answers.notice_period == null ? undefined
+  // Before the pay questions: "Currency (Salary Expectations)" names one.
+  [/^currency\b|\bcurrency \(/i, () => ({ option: [/\binr\b|indian rupee/i], text: 'INR' })], // the profile's figures are in rupees
+  [/notice period|\bhow much notice\b/i, (c) => (c.answers.notice_period == null ? undefined
     : { text: String(c.answers.notice_period), option: [new RegExp(`^${c.answers.notice_period}\\b`), /immediate|^0\b|no notice|not applicable/i] })],
-  [/\b(current|present)\b.{0,10}\b(ctc|salary|compensation|pay)\b/i, (c) => (c.answers.current_ctc == null ? undefined
+  [/\b(current|present)\b.{0,25}\b(ctc|salary|compensation|pay)\b/i, (c) => (c.answers.current_ctc == null ? undefined
     : { text: String(c.answers.current_ctc), option: [/^0\b|not applicable|n\/a|student|fresher/i] })],
   // The candidate's own figures (₹7 LPA full-time, ₹40,000 a month for internships), converted to the
   // unit the question names; with no unit named, the unit is written out.
-  [/\bexpected\b.{0,10}\b(ctc|salary|compensation|pay|stipend)\b/i, (c) => {
+  [/\bexpected\b.{0,10}\b(ctc|salary|compensation|pay|stipend)\b|\b(salary|pay|compensation|ctc) expectations?\b/i, (c) => {
     const internship = c.job.employment_type === 'internship';
     const stipend = c.answers.expected_internship_stipend_monthly;
     const yearly = internship ? (stipend == null ? null : stipend * 12) : c.answers.expected_ctc;
@@ -800,10 +843,13 @@ const QUESTION_RULES = [
     return { text: internship ? `${monthly} per month` : `${lpa(yearly)} LPA` };
   }],
   [/^gender$|\bgender\b/i, (c) => (c.answers.gender ? { option: [new RegExp(`^${escapeRe(c.answers.gender)}$`, 'i')] } : undefined)],
-  // Marketing and talent-pool opt-ins are never given: a tick box stays unticked and a required yes/no is
-  // answered no. A required consent to the employer's terms or privacy notice is ticked (the candidate
-  // authorized both on 2026-10-17).
-  [/job alert|newsletter|marketing|talent (community|network|pool)|future (opportunit|role|position)|(other|additional) (positions|roles|vacancies|opportunities) than|considered for other (positions|roles)|contact me about|keep me (informed|updated)|receive (\w+ )?communications?\b.*\bevents?\b/i,
+  // Being considered for the employer's other open positions (the candidate said yes on 2026-10-18).
+  [/(other|additional) (open )?(positions|roles|vacancies|opportunities) than|considered? (me )?for (other|future) (open )?(positions|roles|vacancies|opportunities)|\btalent pool\b/i,
+    (c) => (c.kind === 'checkbox' ? (c.answers.consider_for_other_roles ? { yes: true } : undefined) : yes(c.answers.consider_for_other_roles))],
+  // Marketing opt-ins are never given: a tick box stays unticked and a required yes/no is answered no. A
+  // required consent to the employer's terms or privacy notice is ticked (the candidate authorized both
+  // on 2026-10-17).
+  [/job alert|newsletter|marketing|talent (community|network)|future (opportunit|role|position)|contact me about|keep me (informed|updated)|receive (\w+ )?communications?\b.*\bevents?\b/i,
     (c) => (c.kind === 'dropdown' || c.kind === 'radio' ? { option: [/^(no|i do not|i don't|do not|disagree|decline)\b/i] } : undefined)],
   [/\b(consent|agree|acknowledge|accept)\b.*\b(terms|conditions|privacy|policy|notice)\b|\b(terms|privacy)\b.*\b(consent|agree|accept)/i,
     (c) => (c.kind === 'checkbox' && c.required ? { yes: true } : undefined)],
@@ -849,13 +895,19 @@ async function tick(box) {
 }
 
 async function applyAnswer(page, q, a) {
-  const wantsYesNo = a.yes !== undefined ? [a.yes ? /^yes\b/i : /^no\b/i] : null;
+  // Yes/no options also come worded as consent ("I agree" / "I do not agree").
+  const wantsYesNo = a.yes === undefined ? null
+    : [a.yes ? /^(yes|i agree|agree|i consent|i accept|accept)\b/i : /^(no|i do not|i don't|do not|disagree|decline)\b/i];
   switch (q.kind) {
     case 'dropdown': return choose(page, q.field, wantsYesNo ?? a.option ?? [new RegExp(`^${escapeRe(a.text ?? '')}$`, 'i')]);
     case 'date': return { chosen: (await setDate(page, page, q.field, a.date)) ? 'date set' : undefined };
-    case 'text': case 'textarea':
-      if (a.text == null) return {};
-      return { chosen: (await setText(page, q.field, a.text)) ? a.text : undefined };
+    case 'text': case 'textarea': {
+      // A yes/no question in a text box: "No" as it is; a "yes" there usually owes details ("If yes, please
+      // provide..."), so it is typed only when the question asks for none.
+      const text = a.text ?? (a.yes === false ? 'No' : a.yes === true && !/\bif (yes|so)\b/i.test(q.label) ? 'Yes' : null);
+      if (text == null) return {};
+      return { chosen: (await setText(page, q.field, text)) ? text : undefined };
+    }
     case 'radio': {
       const radios = page.locator(`${F(q.field)} input[type=radio]`);
       const labels = await radios.evaluateAll((rs) => rs.map((r) => (r.closest('label')?.innerText || document.querySelector(`label[for="${r.id}"]`)?.innerText || r.value || '').trim()));
@@ -884,18 +936,29 @@ async function applyAnswer(page, q, a) {
   }
 }
 
+// An open question ("Top 3 reasons to join us") gets an answer drafted from the job and the verified profile
+// (ctx.draft, the candidate's choice of 2026-10-18); a disclosure never does: only the candidate knows it.
+const OPEN_QUESTION = /\b(why|reasons?|motivat\w*|interest(s|ed)?|tell us|describe|explain|what (excites|attracts|appeals|makes you))\b/i;
+const DISCLOSURE = /conflict|disclos|relationship|relative|criminal|convict|offen[cs]e|lawsuit|litigation|terminat|dismiss|disciplin|visa|citizen|health|disabilit/i;
+
 // Answers every question it can. Some answers reveal follow-up questions, so the page is read again
 // until nothing new appears.
 async function applicationQuestions(page, ctx) {
   const filled = [];
   const unknown = new Map();
   const seen = new Set();
+  const drafted = new Map();
   for (let pass = 0; pass < 4; pass++) {
     const fresh = (await readQuestions(page)).filter((q) => !seen.has(q.field));
     if (!fresh.length) break;
     for (const q of fresh) {
       seen.add(q.field);
-      const a = answerFor(q, ctx);
+      let a = answerFor(q, ctx);
+      if (a === undefined && q.required && ctx.draft && (q.kind === 'textarea' || q.kind === 'text')
+        && OPEN_QUESTION.test(q.label) && !DISCLOSURE.test(q.label)) {
+        const text = await ctx.draft(q.label);
+        if (text) { a = { text }; drafted.set(q.field, a); }
+      }
       if (a === undefined) {
         if (q.required) unknown.set(q.field, q.label);
         continue;
@@ -911,7 +974,7 @@ async function applicationQuestions(page, ctx) {
   const emptied = new Set((await emptyRequired(page)).map((l) => l.trim()));
   for (const q of await readQuestions(page)) {
     if (unknown.has(q.field) || !(emptied.has(q.label.trim()) || q.kind === 'textarea')) continue;
-    const a = answerFor(q, ctx);
+    const a = drafted.get(q.field) ?? answerFor(q, ctx);
     if (a !== undefined) { debug('re-answering', q.label.slice(0, 60)); await applyAnswer(page, q, a); }
   }
   return unknown.size ? { filled, stop: 'blocked', reason: `Needs your answer: ${[...unknown.values()].map((u) => `"${u.slice(0, 200)}"`).join('; ')}` } : { filled };
@@ -927,10 +990,18 @@ const STEPS = [
 // Runs the application up to Review; submits only when dryRun is false. Returns
 // {stop: 'submitted'|'review'|'blocked'|'needs_you'|'explored', step, reason?, fields?, trail}.
 // explore: on a step with no filler yet, return its fields instead of a 'blocked' stop (development aid).
-export async function applyWorkday({ page, job, profile, resumePath, db, gmail, dryRun = true, explore = false, shot = async () => {}, log = () => {} }) {
+// draft(question): an answer to an open question, or null (see OPEN_QUESTION).
+export async function applyWorkday({ page, job, profile, resumePath, db, gmail, dryRun = true, explore = false, draft = null, shot = async () => {}, log = () => {} }) {
   const host = portalHost(job.url);
   const answers = profile.answers ?? {};
   const trail = [];
+  // Whether the candidate applied to this employer before: another posting here that CareerPilot tracked
+  // to submitted or later, or one they named (answers.applied_before); unknown until they have answered.
+  const tracked = await one(db, `SELECT count(*) n FROM applications a JOIN jobs j ON j.id = a.job_id WHERE lower(j.company) = lower(?)
+    AND j.id != ? AND a.status IN ('submitted', 'confirmed', 'assessment', 'interview', 'offer', 'rejected')`, [job.company, job.id]);
+  const named = answers.applied_before;
+  const appliedHere = Number(tracked?.n) > 0 || (Array.isArray(named) && named.some((n) => norm(n) === norm(job.company))) ? true
+    : named == null ? undefined : false;
   const usable = (a) => a && (a.state === 'active' || a.state === 'unverified');
   // Signs in (when an account exists), then opens the application. Returns where it landed, or a stop.
   const begin = async () => {
@@ -999,7 +1070,7 @@ export async function applyWorkday({ page, job, profile, resumePath, db, gmail, 
         : { stop: 'blocked', step, reason: `The "${step}" step is not automated yet`, trail };
     }
     const inIndia = /india|bengaluru|bangalore|hyderabad|pune|chennai|mumbai|delhi|gurgaon|gurugram|noida|kolkata/i.test(`${job.location ?? ''} ${job.url}`);
-    const result = await fill(page, { profile, answers, job, host, resumePath, inIndia });
+    const result = await fill(page, { profile, answers, job, host, resumePath, inIndia, draft, appliedHere });
     trail.push({ step, ...result });
     await shot(`filled-${step}`);
     if (result.stop) return { ...result, step, trail };

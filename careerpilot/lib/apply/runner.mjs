@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { all, audit, kvGet, kvSet, now, one } from '../db.mjs';
 import { getApplication, transition } from '../applications.mjs';
+import { draftAnswer } from '../compose.mjs';
 import { loadProfile, loadResumePdf } from '../profile.mjs';
 import { log } from '../log.mjs';
 import { applyWorkday, portalHost } from './workday.mjs';
@@ -62,7 +63,9 @@ export async function autoApply(db, settings, { launch, submit = false, limit = 
       const shot = shots ? async (name) => page.screenshot({ path: path.join(shots, `${companyKey(job.company).replace(/ /g, '-')}-${job.app_id.slice(0, 6)}-${name.replace(/[^\w-]+/g, '_')}.png`), fullPage: true }).catch(() => {}) : undefined;
       let r;
       try {
-        r = await applyWorkday({ page, job, profile, resumePath, db, gmail, dryRun: !submit, shot });
+        // Open questions are drafted only with the candidate's say-so (answers.draft_open_answers).
+        const draft = profile.answers?.draft_open_answers ? (question) => draftAnswer(db, { profile, job, question }, settings) : null;
+        r = await applyWorkday({ page, job, profile, resumePath, db, gmail, dryRun: !submit, draft, shot });
       } catch (err) {
         r = { stop: 'error', reason: String(err.message).split('\n')[0].slice(0, 300) };
         await shot?.('error');
@@ -92,7 +95,10 @@ async function record(db, job, r, answersKey) {
   if (r.stop === 'submitted') {
     await transition(db, app, 'submitted', { evidence: { type: 'workday', ...r.evidence }, reason: 'submitted on the employer’s Workday site by CareerPilot' });
     if (answered.length) await audit(db, 'application', app.id, 'answers', { detail: { questions: answered } });
-  } else if (r.stop !== 'review' && r.stop !== 'error') {
+  } else if (r.stop === 'review') {
+    // A practice run that reaches Review clears an earlier block: nothing is left unanswered.
+    if (app.status === 'blocked') await transition(db, app, 'ready', { reason: 'Filled up to Review in a practice run' });
+  } else if (r.stop !== 'error') {
     const reason = r.stop === 'needs_you' ? `Needs you: ${r.reason}. Open the posting and submit it yourself.` : r.reason ?? 'Stopped';
     if (app.status === 'blocked') await one(db, 'UPDATE applications SET blocked_reason = ?, updated_at = ? WHERE id = ? RETURNING id', [reason, now(), app.id]);
     else await transition(db, app, 'blocked', { reason });

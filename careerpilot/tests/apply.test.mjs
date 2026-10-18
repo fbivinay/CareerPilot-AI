@@ -85,7 +85,45 @@ test('questions answered by deriving from the profile, and opt-ins declined', as
   assert.equal(ask('Do you require Northern Trust to make reasonable adjustments in order to participate in the recruiting process?'), undefined);
   const decline = ask('I consent to receive communication, including electronic communication, from entities within the PwC network about job related events');
   assert.ok(decline.option[0].test('No') && !decline.option[0].test('Yes'));
-  assert.ok(ask('I agree to have my personal data processed by PwC for the purpose of recruitment for other positions than the one I have initially applied for', 'radio').option[0].test('I do not agree'));
+  assert.equal(ask('I agree to have my personal data processed by PwC for the purpose of recruitment for other positions than the one I have initially applied for', 'radio'), undefined);
+});
+
+test('restrictions, consents and pay questions follow the standing answers', async () => {
+  const { answerFor } = await import('../lib/apply/workday.mjs');
+  const answers = { restrictive_covenants: false, employment_restrictions: false, government_official: false, allow_ai_screening: true,
+    consider_for_other_roles: true, date_of_birth: '2003-05-14', earliest_joining_date: '2099-01-31', expected_ctc: 700000, industry_specialization: 'Data analytics and AI' };
+  const profile = { name: 'A Candidate', experience: [] };
+  const ask = (label, kind = 'dropdown', job = { company: 'PwC', description: 'Python and SQL.' }, a = answers) => answerFor({ label, kind, required: true }, { profile, answers: a, job, appliedHere: false });
+  assert.deepEqual(ask('Are you subject to a non-competition or other agreement, or aware of other circumstances, that would preclude or restrict your employment with PwC? If yes, describe the conditions.', 'textarea'), { yes: false });
+  assert.equal(ask('Are you subject to a non-competition or other agreement, or aware of other circumstances, that would preclude your employment?', 'textarea', undefined, { restrictive_covenants: false }), undefined);
+  assert.deepEqual(ask('Do you have any commitments / bond with previous employer?'), { yes: false });
+  assert.deepEqual(ask('Are you currently or have you been in the last five years serving as a government official, either domestic or foreign?'), { yes: false });
+  assert.deepEqual(ask('Please select your date of birth:', 'date'), { date: { year: 2003, month: 5, day: 14 } });
+  assert.deepEqual(ask('Do you permit Labcorp to process your data to consider you for future job openings using Artificial Intelligence (AI) tools ?'), { yes: true });
+  assert.deepEqual(ask('I agree to have my personal data processed by PwC for the purpose of recruitment for other positions than the one I have initially applied for'), { yes: true });
+  assert.deepEqual(ask('Have you ever applied, interviewed, received an offer, or been employed with PwC or its predecessor firms? If yes, please provide firm name.', 'textarea', undefined, { ...answers, previously_interviewed: false }), { yes: false });
+  assert.deepEqual(ask('Are you currently working, or have you worked, as third party labor or an independent contractor to PwC?', 'dropdown', undefined, { ...answers, prior_relationship_with_employer: false }), { yes: false });
+  assert.deepEqual(ask('What are your salary expectations? (Per Annum)', 'text'), { text: '700000' });
+  assert.ok(ask('Currency (Salary Expectations)').option[0].test('INR'));
+  assert.ok(ask('Do you hold the professional certifications and/or clearance as outlined in the job description?').option.some((re) => re.test('Yes')));
+  assert.equal(ask('Do you hold the professional certifications and/or clearance as outlined in the job description?', 'dropdown', { company: 'X', description: 'AWS certification required.' }), undefined);
+  assert.ok(ask('What Industry do you specialize in ?').option[0].test('Data & Analytics'));
+  const in45days = new Date(Date.now() + 45 * 864e5).toISOString().slice(0, 10);
+  const soon = ask('How soon you can join us?', 'dropdown', undefined, { earliest_joining_date: in45days }).option[0];
+  assert.ok(soon.test('Within 60 days') && soon.test('1-2 months') && !soon.test('Within 30 days') && !soon.test('Immediately'));
+});
+
+test('an open question is drafted from the job and profile only; a draft with an unknown number is dropped', async () => {
+  const { openDb } = await import('../lib/db.mjs');
+  const { draftAnswer } = await import('../lib/compose.mjs');
+  const db = await openDb({ url: ':memory:' });
+  const reply = (answer) => async () => new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ answer }) } }] }), { status: 200 });
+  const profile = { name: 'A', headline: 'MSc student', education: [], experience: [], projects: [], skills: { languages: ['Python'] } };
+  const job = { title: 'AI Engineer', company: 'Acme', description: 'Build GenAI systems with Python.' };
+  const ask = (answer, question) => draftAnswer(db, { profile, job, question }, undefined, { env: { GROQ_API_KEY: 'g' }, fetchImpl: reply(answer) });
+  assert.equal(await ask('Acme builds GenAI systems, and I work in Python.', 'Top 3 reasons to join us.'), 'Acme builds GenAI systems, and I work in Python.');
+  assert.equal(await ask('I have 5 years of Python experience.', 'Why Acme?'), null);
+  assert.equal(await ask(null, 'Why do you want to join?'), null);
 });
 
 test('blocking questions are counted across applications, most blocking first', async () => {

@@ -88,6 +88,33 @@ export function followUpEmail({ profile, job, contactName }) {
   };
 }
 
+// An open question on an application form ("Top 3 reasons to join us"), answered as the candidate from
+// the job and their verified facts only. null when the question needs a fact the profile lacks, when the
+// draft states a number found in neither, or when no AI provider is available: the application then
+// waits for the candidate.
+export async function draftAnswer(db, { profile, job, question }, settings, ai = {}) {
+  try {
+    const draft = await aiJson(db, {
+      name: 'form-answer',
+      dataClass: 'profile',
+      system: [
+        'You answer one open question on a job application form, as the candidate, in the first person.',
+        'Use ONLY facts from CANDIDATE FACTS and JOB. Never invent skills, experience, numbers, dates, achievements, or claims about the company that the JOB text does not make.',
+        'If answering needs a fact that CANDIDATE FACTS does not contain, reply {"answer": null}.',
+        'Plain text, 50-120 words, no placeholders or brackets. Reply with JSON: {"answer": string or null}.',
+      ].join(' '),
+      user: `QUESTION: ${question}\n\nJOB: ${job.title} at ${job.company}\n${(job.description ?? '').slice(0, 3500)}\n\nCANDIDATE FACTS:\n${profileFacts(profile)}`,
+      maxTokens: 700,
+    }, { settings, ...ai });
+    const answer = typeof draft.answer === 'string' ? draft.answer.trim() : '';
+    if (!answer || /\[|\{|lorem|your name/i.test(answer) || answer.length > 1500) return null;
+    return unverifiedNumbers(answer, factCorpus(profile, `${job.title} ${job.company} ${job.description ?? ''} ${question}`)).length ? null : answer;
+  } catch (err) {
+    if (err instanceof AiUnavailable) return null;
+    throw err;
+  }
+}
+
 export async function composeEmail(db, { profile, job, kind, contactName }, settings) {
   const fallback = templateEmail({ profile, job, kind, contactName });
   try {
