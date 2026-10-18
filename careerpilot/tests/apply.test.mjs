@@ -39,6 +39,13 @@ test('employer questions are answered only from the profile, in the unit they as
   assert.deepEqual(answerFor({ label: 'If your desired pay rate is higher than the amount the position pays, do you still want to be considered for the position?', kind: 'dropdown', required: true },
     { profile, answers: { ...answers, consider_if_pay_below_expectation: true }, job: { company: 'Lnw' }, inIndia: true }), { yes: true });
   assert.deepEqual(ask('Did you work for KPMG?'), { yes: false });
+  assert.deepEqual(ask('Do you require a visa to work in the country where this role is based?'), { yes: false });
+  assert.deepEqual(answerFor({ label: 'Do you have an Indian nationality?', kind: 'radio', required: true }, { profile, answers: { citizenship: 'India' }, job: { company: 'Rbs' } }), { yes: true });
+  assert.deepEqual(answerFor({ label: 'Are you a US citizen?', kind: 'radio', required: true }, { profile, answers: { citizenship: 'India' }, job: { company: 'X' } }), { yes: false });
+  assert.deepEqual(ask('Have you been made redundant by NatWest Group or any of its subsidiary companies within the last 12 months?'), { yes: false });
+  assert.deepEqual(ask('Have you previously had your employment terminated for misconduct by NatWest Group or any of its subsidiary companies?'), { yes: false });
+  assert.ok(ask('Do you hold the professional certifications and/or clearance as outlined in the job description?', 'dropdown',
+    { company: 'Pwc', description: 'Certifications (if blank, certifications not specified) Required Skills Python. Government Clearance Required? No' }).option.some((re) => re.test('Not Applicable')));
   assert.deepEqual(ask('Have you worked for Haleon in the past?'), { yes: false });
   assert.deepEqual(ask('Have you worked for Acme Labs in the past?'), { yes: true });
   assert.deepEqual(ask('I have read the Privacy Notice', 'checkbox'), { yes: true });

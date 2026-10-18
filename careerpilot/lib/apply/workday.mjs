@@ -294,13 +294,15 @@ async function choose(page, field, wants, scope = page) {
   const texts = (await options.allInnerTexts()).map((t) => t.replace(/\s+/g, ' ').trim());
   const i = best(texts, wants);
   debug('choose', field, { current, offered: texts.length, pick: texts[i] ?? null });
-  if (i < 0 || texts[i] === current) { await page.keyboard.press('Escape'); return i < 0 ? { options: texts } : { chosen: current, options: texts }; }
+  // The field can show the choice with different spacing ("Second-Degree(ISCED 7" for "Second-Degree (ISCED 7").
+  const same = (a, b) => String(a).replace(/\s+/g, '') === String(b).replace(/\s+/g, '');
+  if (i < 0 || same(texts[i], current)) { await page.keyboard.press('Escape'); return i < 0 ? { options: texts } : { chosen: current, options: texts }; }
   await options.nth(i).scrollIntoViewIfNeeded();
   await options.nth(i).click();
   await page.waitForTimeout(400);
   const now = (await button.innerText()).trim();
   debug('choose', field, 'now shows', now);
-  return now === texts[i] ? { chosen: texts[i], options: texts } : { options: texts, note: `clicked "${texts[i]}" but the field shows "${now}"` };
+  return same(now, texts[i]) ? { chosen: texts[i], options: texts } : { options: texts, note: `clicked "${texts[i]}" but the field shows "${now}"` };
 }
 
 // Removes a selected value from a search box (its chip's delete control).
@@ -743,7 +745,7 @@ const affirms = (c) => (c.answers.may_certify_accuracy && ['checkbox', 'dropdown
 // "no", and unknown otherwise. Employment comes from the profile's full history, the rest from the
 // candidate's standing answers.
 const RELATIVE = /\b(friend|relative|family member|related to)\b|\bpersonal relationship\b|relationship with (any|a) (current )?employee|\brelations? working (with|at|for)\b/i;
-const PAST_TIE = new RegExp(`${RELATIVE.source}|\\binterviewed\\b|\\binterviews?\\b.{0,15}\\bbefore\\b|\\b(have|did|do) you (ever )?(work|worked|been employed) (for|at|with)\\b|\\b(ever|previously|already) applied\\b|\\breceived an offer\\b|\\bindependent contractor\\b|third.party labou?r|\\b(ever|previously|formerly|currently|already)\\b.{0,20}\\b(worked|employed|work|employee)\\b|\\bformer (employee|intern|contractor)\\b|collaborated with|\\b(client|partner|vendor|supplier)\\b.{0,40}\\bcapacity|contractor or consultant|consultant roles?\\b`, 'i');
+const PAST_TIE = new RegExp(`${RELATIVE.source}|\\bmade redundant\\b|\\b(employment (was |been )?)?terminated (for misconduct )?by\\b|\\binterviewed\\b|\\binterviews?\\b.{0,15}\\bbefore\\b|\\b(have|did|do) you (ever )?(work|worked|been employed) (for|at|with)\\b|\\b(ever|previously|already) applied\\b|\\breceived an offer\\b|\\bindependent contractor\\b|third.party labou?r|\\b(ever|previously|formerly|currently|already)\\b.{0,20}\\b(worked|employed|work|employee)\\b|\\bformer (employee|intern|contractor)\\b|collaborated with|\\b(client|partner|vendor|supplier)\\b.{0,40}\\bcapacity|contractor or consultant|consultant roles?\\b`, 'i');
 function pastTies(c) {
   const facts = [
     [RELATIVE, c.answers.relatives_at_employer],
@@ -751,7 +753,8 @@ function pastTies(c) {
     // No application, no offer: both follow from whether the candidate applied here before.
     [/\bapplied\b|\breceived an offer\b/i, c.appliedHere],
     // This employer, or any company the question names ("Did you work for KPMG?"): the full work history says.
-    [/\b(work|worked|employed|employee|intern)\b/i, workedAt(c.profile, c.job.company) || namesPastEmployer(c.profile, c.label)],
+    // (Made redundant or dismissed by the employer is employment there too.)
+    [/\b(work|worked|employed|employment|employee|intern|redundant|terminated)\b/i, workedAt(c.profile, c.job.company) || namesPastEmployer(c.profile, c.label)],
     // A contract may not be in the history, even when named in passing ("Employee, Intern or Contractor").
     [/collaborat|\b(client|partner|vendor|supplier|contractor|consultant)s?\b/i, c.answers.prior_relationship_with_employer],
   ].filter(([re]) => re.test(c.label)).map(([, fact]) => yes(fact)?.yes);
@@ -801,7 +804,7 @@ function restrictions(c) {
 // [pattern on the question, answer(ctx)]: the first matching pattern decides; undefined = not known.
 const QUESTION_RULES = [
   [/\b(at least|over|above|older than)\b.{0,15}\b18\b|\b18 years\b|age of 18|legal age/i, (c) => yes(c.answers.age_18_or_older)],
-  [/\bsponsor/i, (c) => (c.inIndia ? yes(c.answers.needs_visa_sponsorship) : undefined)],
+  [/\bsponsor|\b(require|need) (a )?visa\b/i, (c) => (c.inIndia ? yes(c.answers.needs_visa_sponsorship) : undefined)],
   [/(legal|lawful)\w* (right|authori[sz]\w*|eligib\w*|permi\w*) to work|authori[sz]ed to work|work authori[sz]ation|eligible to work|right to work|\bwork permit\b/i,
     (c) => (c.inIndia ? yes(c.answers.indian_work_authorization) : undefined)],
   [/relocat/i, (c) => yes(c.answers.willing_to_relocate)],
@@ -849,6 +852,12 @@ const QUESTION_RULES = [
   [/citizen or national of the united states|permanent resident|export control/i, (c) => yes(c.answers.us_person)],
   [/^(primary |country of )?(citizenship|nationality)\b/i, (c) => (c.answers.citizenship
     ? { option: [new RegExp(`^${escapeRe(c.answers.citizenship)}`, 'i'), /^indian?$/i], search: c.answers.citizenship } : undefined)],
+  // "Do you have an Indian nationality?" / "Are you a US citizen?": whether it is the candidate's own.
+  [/\bdo you (have|hold) an? \w+ (nationality|citizenship)\b|\bare you an? \w+ (national|citizen)\b/i, (c) => {
+    const named = /\ban? (\w+) (?:nationality|citizenship|national|citizen)\b/i.exec(c.label)?.[1];
+    const own = String(c.answers.citizenship ?? '').toLowerCase();
+    return named && own.length >= 4 ? { yes: named.toLowerCase().startsWith(own.slice(0, 5)) } : undefined;
+  }],
   // An OCI/PIO card is for foreign citizens of Indian origin: an Indian citizen cannot hold one.
   [/\b(oci|pio)\b|overseas citizen(ship)? of india/i, (c) => (/^india/i.test(c.answers.citizenship ?? '') ? { yes: false } : undefined)],
   [PAST_TIE, pastTies], // after the export-control questions, which can mention employment too
@@ -887,7 +896,9 @@ const QUESTION_RULES = [
       : { option: [/^no\b|^none\b|\bno active\b|^0\b/i], text: '0' })],
   // "Do you hold the certifications outlined in the job description?" when the description names none.
   [/certifications?\b.{0,60}\b(outlined|listed|required|mentioned|specified) in the job description/i, (c) =>
-    (/\b(certif\w*|clearance)\b/i.test(c.job.description ?? '') ? undefined
+    // PwC's template names the headings even when empty: "Certifications (if blank, certifications not
+    // specified)", "Government Clearance Required? No".
+    (/\b(certif\w*|clearance)\b/i.test(String(c.job.description ?? '').replace(/certifications \(if blank, certifications not specified\)|government clearance required\? no/gi, '')) ? undefined
       : { option: [/not applicable|n\/a|^none/i, /^yes\b/i], text: 'Not applicable: the job description lists none' })],
   [/\byears of (relevant |total |work |professional |prior )?experience\b|\bexperience \(?in years\)?/i, (c) => {
     if (/\b(with|in|using|on) [A-Z]/.test(c.label)) return undefined;
