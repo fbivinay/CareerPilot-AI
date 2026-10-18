@@ -277,8 +277,14 @@ async function choose(page, field, wants, scope = page) {
   // Only the list this button opened: closed lists stay in the page with their old options.
   const list = await button.getAttribute('aria-controls');
   const options = page.locator(list ? `[id="${list}"] [role="option"]` : '[role="listbox"]:visible [role="option"]');
-  // Options load after the list opens; until then it holds only the "Select One" placeholder.
-  for (let i = 0; i < 20 && (await options.count()) < 2; i++) await page.waitForTimeout(500);
+  // Options load after the list opens, sometimes a few at a time (Visa's degrees): wait until the count is
+  // past the "Select One" placeholder and has stopped growing.
+  for (let i = 0, last = -1; i < 25; i++) {
+    const n = await options.count();
+    if (n >= 2 && n === last) break;
+    last = n;
+    await page.waitForTimeout(400);
+  }
   const texts = (await options.allInnerTexts()).map((t) => t.replace(/\s+/g, ' ').trim());
   const i = best(texts, wants);
   debug('choose', field, { current, offered: texts.length, pick: texts[i] ?? null });
@@ -500,9 +506,9 @@ const DEGREES = [
   // Most specific first; then the level's bucket naming the degree ("Master's or Equivalent (ISCED 7: MA,
   // MSc, …)"); then the plain level some portals list ("Masters (+2 or +3 yrs)", "Master's (M.A., M.S.,
   // M.B.A.)"). Never another degree at that level: "Master of Business Administration", "Bachelor of Arts".
-  [/^m\.?\s?sc\b|master of science/i, [/^master of science \(m\.?sc\)$/i, /^master of science\b/i, /^m\.?\s?sc\.?$/i, /^m\.?s\.?$/i,
+  [/^m\.?\s?sc\b|master of science/i, [/^master of science \(m\.?sc\)$/i, /^masters?('s)? of science\b/i, /^m\.?\s?sc\.?$/i, /^m\.?s\.?$/i,
     /\bISCED 7\b.*\bM\.?Sc\b/i, /^masters?('s)?( degree)?( or equivalent)?(\s*\(.*\))?$/i]],
-  [/^b\.?\s?sc\b|bachelor of science/i, [/^bachelor of science \(b\.?sc\)$/i, /^bachelor of science\b/i, /^b\.?\s?sc\.?$/i, /^b\.?s\.?$/i,
+  [/^b\.?\s?sc\b|bachelor of science/i, [/^bachelor of science \(b\.?sc\)$/i, /^bachelors?('s)? of science\b/i, /^b\.?\s?sc\.?$/i, /^b\.?s\.?$/i,
     /\bISCED 6\b.*\bB\.?Sc\b/i, /^bachelors?('s)?( degree)?( or equivalent)?(\s*\(.*\))?$/i]],
   [/^m\.?\s?tech\b|master of technology/i, [/^master of technology\b/i, /^m\.?\s?tech$/i]],
   [/^b\.?\s?tech\b|bachelor of technology/i, [/^bachelor of technology\b/i, /^b\.?\s?tech$/i]],

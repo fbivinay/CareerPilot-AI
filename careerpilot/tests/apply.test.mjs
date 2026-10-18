@@ -176,6 +176,9 @@ test('a degree is matched to its own entry or its level’s bucket, never to ano
   assert.equal(pick('MSc in Big Data Analytics', ['Master of Business Administration', 'Master of Arts']), null);
   assert.equal(pick('BSc in Statistics & Economics', ['Bachelor of Arts', 'Bachelor of Commerce']), null);
   assert.equal(pick('MSc in Big Data Analytics', ['Masters (+2 or +3 yrs)']), 'Masters (+2 or +3 yrs)');
+  const circles = ['Bachelor of Arts (BA)', 'Bachelor of Science (BS)', 'Masters of Arts (MA)', 'Masters of Science (MS)', 'Masters of Business Administration (MBA)'];
+  assert.equal(pick('MSc in Big Data Analytics', circles), 'Masters of Science (MS)');
+  assert.equal(pick('BSc in Statistics & Economics', circles), 'Bachelor of Science (BS)');
   assert.equal(pick('MSc in Big Data Analytics', ["Master's (M.A., M.S., M.B.A.)"]), "Master's (M.A., M.S., M.B.A.)");
 });
 
