@@ -290,6 +290,9 @@ test('Barclays, Mastercard, Maersk, ICF, US Bank, Mobility, PwC and RELX questio
   assert.deepEqual(ask('Please confirm if you have a valid PAN card.', 'dropdown', 'Maersk'), { yes: true });
   assert.deepEqual(ask('I confirm that I am 18+ years of age', 'dropdown', 'Maersk'), { yes: true });
   assert.deepEqual(ask('I agree that I will not disclose or use, while interviewing with or employed with GE Vernova and GE Vernova’s affiliate businesses, any confidential or proprietary information of others, including any former employer.', 'dropdown', 'GE Vernova'), { yes: true });
+  // A number that names the qualification is not the qualification.
+  assert.equal(answerFor({ label: 'Enter the Roll number/ Seat Number / Registration Number of your Highest Education Qualification', kind: 'textarea', required: true },
+    { profile: { name: 'A', education: [{ degree: 'MSc in X', institution: 'Y', dates: 'Aug 2025 - Jun 2099' }] }, answers: {}, job: { company: 'Fractal' } }), undefined);
   const relx = ['Bachelor’s Degree or Equivalent Degree', "Associate's Degree or 2-year Equivalent Degree", 'Master’s Degree or Equivalent Degree', 'Master’s in Business Administration (MBA)'];
   assert.equal(best(relx, degreeWants('MSc in Big Data Analytics')), 2);
   assert.equal(best(relx, degreeWants('BSc in Statistics')), 0);

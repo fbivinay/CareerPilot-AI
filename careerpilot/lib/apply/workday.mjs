@@ -1037,7 +1037,9 @@ const QUESTION_RULES = [
     return { option: [{ test: (t) => (optionDays(t) ?? -1) >= days }] };
   }],
   // The profile lists the most recent degree first.
-  [/\bhighest (level of )?(education|qualification|degree)\b/i, (c) => {
+  // Not a number or id that merely names the qualification (Fractal: "Roll number / Seat Number /
+  // Registration Number of your Highest Education Qualification").
+  [/^(?!.*\b(roll|seat|registration|enrol+ment|certificate|id|number)\b).*\bhighest (level of )?(education|qualification|degree)\b/i, (c) => {
     const [ed] = c.profile.education ?? [];
     if (!ed || (c.kind !== 'text' && c.kind !== 'textarea')) return undefined;
     return { text: `${ed.degree}, ${ed.institution}${studying(c.profile) ? ' (pursuing)' : ''}` };
