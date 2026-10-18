@@ -929,16 +929,18 @@ const QUESTION_RULES = [
     return { yes: c.answers.referred_at.some((n) => norm(n) === norm(c.job.company)) };
   }],
   // Hiring checks and disclosures, from the candidate's answers of 2026-10-18.
+  // Related to a "stakeholder" (Barclays: client firms' and suppliers' senior decision-makers, regulators,
+  // politically exposed persons): its own question, never the relatives-at-the-employer answer, and first,
+  // because its explanation mentions "pre-employment screening" too.
+  [/\bstakeholders?\b/i, (c) => yes(c.answers.related_to_stakeholder)],
   // Before the convictions rule: Barclays' "people screening … criminal records …, are you happy to continue?"
-  [/background (check|verification)|\bbgv\b|\b(people|pre.?employment) screening\b/i, (c) => yes(c.answers.willing_background_check)],
+  [/background (check|verification)|\bbgv\b|\b(people|pre.?employment) screening\b.{0,300}\b(happy to continue|willing|consent|agree)\b/i,
+    (c) => yes(c.answers.willing_background_check)],
   // The candidate's own record (answers of 2026-10-18; Barclays).
   [/\bcriminal (convictions?|records?|offen[cs]es?)\b|\bconvicted\b/i, (c) => yes(c.answers.criminal_record)],
   [/\b(investigat\w*|disciplined|cautioned|sanctioned)\b.{0,40}\bregulat\w*|\bregulat\w*\b.{0,40}\b(investigat\w*|disciplin\w*|caution\w*|sanction\w*)\b/i, (c) => yes(c.answers.regulatory_investigation)],
   // Without that answer, "terminated by NatWest" still follows from never having worked there.
   [/\b(dismissed|terminated|fired|discharged)\b.{0,80}\b(misconduct|disciplin\w*|for cause)\b/i, (c) => yes(c.answers.dismissed_for_misconduct) ?? pastTies(c)],
-  // Related to a "stakeholder" (Barclays: client firms' and suppliers' senior decision-makers, regulators,
-  // politically exposed persons): not the relatives-at-the-employer question, so never answered by it.
-  [/\bstakeholders?\b/i, (c) => yes(c.answers.related_to_stakeholder)],
   [/medical history/i, (c) => yes(c.answers.medical_history_to_declare)],
   [/medical (check|exam\w*|test)/i, (c) => yes(c.answers.willing_medical_check)],
   [/\bcourt cases?\b|\b(ongoing|pending) (legal|court) (cases?|proceedings?)/i, (c) => yes(c.answers.ongoing_court_cases)],
