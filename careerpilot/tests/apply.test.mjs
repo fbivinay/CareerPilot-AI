@@ -67,6 +67,8 @@ test('employer questions are answered only from the profile, in the unit they as
   assert.ok(ask('Veteran Status').option[0].test('I do not wish to self-identify'));
   assert.deepEqual(dateRange('May 2026 - Jun 2026'), [{ month: 5, year: 2026 }, { month: 6, year: 2026 }]);
   assert.ok(fieldWants('Big Data Analytics').test('Data Analytics') && !fieldWants('Big Data Analytics').test('Business Analytics'));
+  assert.ok(fieldWants('Statistics & Economics').test('Statistics, General') && !fieldWants('Statistics & Economics').test('Agricultural Economics'));
+  assert.ok(!fieldWants('Statistics & Economics').test('General'));
 });
 
 test('a statement is signed only when all it says is that the answers are true', async () => {

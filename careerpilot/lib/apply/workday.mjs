@@ -547,9 +547,9 @@ export const degreeWants = (degree) => DEGREES.find(([re]) => re.test(degree))?.
 export const studyField = (degree) => (/\bin\s+(.+)$/i.exec(degree)?.[1] ?? '').trim();
 
 // A Workday field-of-study option is acceptable only when all its words appear in the real field name:
-// "Data Analytics" or "Analytics" for "Big Data Analytics", "Statistics" for "Statistics & Economics",
-// never "Data Science". Searches go from the full name to its tail words.
-const words = (s) => String(s).toLowerCase().split(/[^a-z]+/).filter((w) => w && w !== 'and');
+// "Data Analytics" or "Analytics" for "Big Data Analytics", "Statistics" (or "Statistics, General") for
+// "Statistics & Economics", never "Data Science". Searches go from the full name to its tail words.
+const words = (s) => String(s).toLowerCase().split(/[^a-z]+/).filter((w) => w && w !== 'and' && w !== 'general');
 export function fieldWants(field) {
   const have = new Set(words(field));
   return { test: (option) => { const w = words(option); return w.length > 0 && w.every((x) => have.has(x)); } };
@@ -560,6 +560,14 @@ const fieldSearches = (field) => { const w = String(field).split(/\s*(?:&|,|\ban
 // is matched to a profile entry by what it holds (`same`), then an empty one (`empty`) is reused, and
 // only then is a new one added.
 const groupLabelled = (label) => `[role="group"][aria-labelledby="${label}"], [role="group"][aria-label="${label}"]`;
+// A repeatable section's name as this form spells it: the first of `names` the page has, also when its
+// heading says "(Optional)" (Dentsu: "Work-History-(Optional)-section"); names[0] when none shows.
+async function sectionName(page, names) {
+  for (const name of names) {
+    for (const s of [name, `${name}-(Optional)`]) if (await page.locator(groupLabelled(`${s}-section`)).count()) return s;
+  }
+  return names[0];
+}
 async function entryPanel(page, section, used, same, empty) {
   const all = [];
   for (let n = 1; n <= 12; n++) {
@@ -646,12 +654,44 @@ async function chooseSchool(page, scope, institution) {
   return { options: notListed.options ?? exact.options };
 }
 
-async function myExperience(page, { profile, answers, resumePath }) {
+// Skills for a form that requires them (Fractal): the profile's own, those the job description names first,
+// each added only where Workday lists it under the same name. Up to `max` chips, from at most 16 searches.
+async function addSkills(page, profile, description, max = 8) {
+  const group = page.locator(F('skills')).first();
+  const chips = async () => (await group.locator(A('selectedItem')).allInnerTexts()).map((t) => t.replace(/\s+/g, ' ').trim());
+  const all = [...new Set(Object.values(profile.skills ?? {}).flat().map((s) => String(s).replace(/\s*\(.*\)\s*$/, '').trim()).filter(Boolean))];
+  const named = (s) => new RegExp(`(^|[^a-z0-9])${escapeRe(s)}([^a-z0-9]|$)`, 'i').test(description ?? '');
+  const skills = [...all.filter(named), ...all.filter((s) => !named(s))].slice(0, 16);
+  const box = group.locator('input').first();
+  const options = page.locator(`${A('activeListContainer')} ${A('promptOption')}`);
+  for (const skill of skills) {
+    const have = await chips();
+    if (have.length >= max) break;
+    const same = (t) => t.toLowerCase() === skill.toLowerCase();
+    if (have.some(same)) continue;
+    await closePopup(page);
+    await centerClick(box);
+    await box.fill(skill);
+    await box.press('Enter');
+    await options.first().waitFor({ timeout: 8000 }).catch(() => {});
+    await page.waitForTimeout(600);
+    const now = await chips();
+    if (now.length > have.length) { // selected by itself on Enter: kept only when it is this very skill
+      if (!same(now.at(-1))) await group.locator(A('selectedItem')).nth(now.length - 1).locator(`${A('DELETE_charm')}, [role="button"], button`).first().click().catch(() => {});
+      continue;
+    }
+    const i = (await options.allInnerTexts()).map((t) => t.replace(/\s+/g, ' ').trim()).findIndex(same);
+    if (i >= 0) { await options.nth(i).click(); await page.waitForTimeout(500); }
+  }
+  await closePopup(page);
+  return chips();
+}
+
+async function myExperience(page, { profile, answers, job, resumePath }) {
   const filled = { experience: [], education: [] };
   const problems = [];
   const usedJobs = new Set();
-  let expSection = 'Professional-Experience';
-  for (const s of ['Work-Experience', 'Work-History']) if (await page.locator(groupLabelled(`${s}-section`)).count()) { expSection = s; break; } // Dentsu: Work History
+  const expSection = await sectionName(page, ['Professional-Experience', 'Work-Experience', 'Work-History']); // Dentsu: Work History
   for (const e of profile.experience ?? []) {
     const panel = await entryPanel(page, expSection, usedJobs,
       async (p) => (await inputValue(p, 'jobTitle')).toLowerCase() === e.title.toLowerCase(),
@@ -670,8 +710,9 @@ async function myExperience(page, { profile, answers, resumePath }) {
     filled.experience.push(`${e.title} at ${company}`);
   }
   const usedSchools = new Set();
+  const eduSection = await sectionName(page, ['Education']);
   for (const ed of profile.education ?? []) {
-    const panel = await entryPanel(page, 'Education', usedSchools,
+    const panel = await entryPanel(page, eduSection, usedSchools,
       async (p) => best([await buttonText(p, 'degree')], degreeWants(ed.degree)) === 0,
       async (p) => /^(select one)?$/i.test(await buttonText(p, 'degree')));
     if (!panel) break; // no education section on this employer's form; if one were required, Workday's own check says so on Save
@@ -685,6 +726,8 @@ async function myExperience(page, { profile, answers, resumePath }) {
       const approved = (answers.field_of_study_choices ?? {})[field] ?? [];
       const tries = [...fieldSearches(field).map((q) => [q, fieldWants(field)]), ...approved.map((name) => [name, new RegExp(`^${escapeRe(name)}$`, 'i')])];
       for (const [q, wants] of tries) { study = await pick(page, 'fieldOfStudy', q, wants, panel); if (study.chosen) break; }
+      // An optional field left empty is a true answer (GE Vernova); a near-match never is.
+      if (!study.chosen && !/\*\s*$/.test(await panel.locator(`${F('fieldOfStudy')} label`).first().innerText().catch(() => ''))) study = { missing: true };
     }
     const gpa = /(\d+(?:\.\d+)?)/.exec(ed.grade ?? '')?.[1];
     if (gpa) await setText(page, 'gradeAverage', gpa, panel);
@@ -696,6 +739,11 @@ async function myExperience(page, { profile, answers, resumePath }) {
       if (u) problems.push(u);
     }
     filled.education.push({ degree: ed.degree, school: school.chosen, as: degree.chosen, field: study.chosen });
+  }
+  const skills = page.locator(F('skills')).first();
+  if ((await skills.count()) && /\*\s*$/.test(await skills.locator('label').first().innerText().catch(() => ''))) {
+    filled.skills = await addSkills(page, profile, job?.description);
+    if (!filled.skills.length) problems.push("Skills (none of the profile's skills is in Workday's list)");
   }
   const upload = page.locator(`input${A('file-upload-input-ref')}`).first();
   if (resumePath && (await upload.count())) {
