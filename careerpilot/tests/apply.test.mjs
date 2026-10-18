@@ -314,6 +314,12 @@ test('Barclays, Mastercard, Maersk, ICF, US Bank, Mobility, PwC and RELX questio
   answers.family_government_employment = false;
   assert.deepEqual(ask(govFamily, 'dropdown', 'GE Vernova'), { yes: false });
   assert.deepEqual(ask('Are you related to anyone who is an employee of a government office or agency that has oversight over Mastercard?', 'dropdown', 'Mastercard'), { yes: false });
+  // Willing to relocate is not needing help to.
+  Object.assign(answers, { willing_to_relocate: true });
+  assert.equal(ask('If yes, do you require relocation assistance?', 'dropdown', 'Mobility'), undefined);
+  answers.needs_relocation_assistance = false;
+  assert.deepEqual(ask('If yes, do you require relocation assistance?', 'dropdown', 'Mobility'), { yes: false });
+  assert.deepEqual(ask('Are you willing to relocate for the position?', 'dropdown', 'Mobility'), { yes: true });
   // An expectations question that mentions current pay only to exclude it.
   Object.assign(answers, { current_ctc: 0, expected_ctc: 700000 });
   assert.equal(ask('What are your base compensation expectations for this role? (Please provide your expectations only. We are not requesting information about your current or past compensation.) Please specify the amount and currency.', 'textarea', 'TransUnion').text, 'INR 700000 per year');

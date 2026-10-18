@@ -920,6 +920,8 @@ const QUESTION_RULES = [
   [/\bcitizen\b.{0,40}\bcountry (where|in which)\b.{0,60}\b(role|job|position)\b/i, (c) => (c.inIndia && /^india/i.test(c.answers.citizenship ?? '') ? { yes: true } : undefined)],
   [/(legal|lawful)\w* (right|authori[sz]\w*|eligib\w*|permi\w*) to work|authori[sz]ed to work|work authori[sz]ation|eligible to work|right to work/i,
     (c) => (c.inIndia ? yes(c.answers.indian_work_authorization) : undefined)],
+  // Needing relocation help is its own question (Mobility: "do you require relocation assistance?").
+  [/relocat\w*\b.{0,30}\b(assistance|support|package|allowance|benefits?|reimburs\w*|expenses?)\b/i, (c) => yes(c.answers.needs_relocation_assistance)],
   [/relocat|\bwilling to work (from|at|in) the (job('s)? )?locations?\b/i, (c) => yes(c.answers.willing_to_relocate)], // US Bank: "from the location(s) posted"
   [/reasonable (adjustment|accommodation)s?|accommodations? (during|in|for) the (recruit|interview|hiring|application)|\b(adjustment|accommodation)s?\b.{0,60}\b(recruit\w*|interview|hiring|application|selection) process/i,
     (c) => yes(c.answers.needs_accommodation)],
