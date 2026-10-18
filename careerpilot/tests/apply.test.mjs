@@ -28,9 +28,18 @@ test('employer questions are answered only from the profile, in the unit they as
   assert.equal(ask('Signature and Date', 'textarea'), undefined);
   assert.deepEqual(ask('After graduation and if hired, when would you be able to start in a full-time role?', 'date'), { date: { year: 2026, month: 11, day: 10 } });
   // Pay in the unit the question names.
-  assert.deepEqual(ask('Expected CTC (in LPA)', 'text'), { text: '7' });
-  assert.deepEqual(ask('Expected CTC (in LPA)', 'text', { company: 'X', employment_type: 'internship' }), { text: '4.8' });
-  assert.deepEqual(ask('Expected stipend per month', 'text', { company: 'X', employment_type: 'internship' }), { text: '40000' });
+  assert.equal(ask('Expected CTC (in LPA)', 'text').text, '7');
+  assert.equal(ask('Expected CTC (in LPA)', 'text', { company: 'X', employment_type: 'internship' }).text, '4.8');
+  assert.equal(ask('Expected stipend per month', 'text', { company: 'X', employment_type: 'internship' }).text, '40000');
+  // A list of pay ranges: the range the figure falls in (Light & Wonder).
+  const ranges = ['Up to INR 6,00,000', 'INR 6,00,000 - INR10,00,000', 'INR 10,00,000 - INR 20,00,000', 'INR 50,00,000 - above'];
+  assert.deepEqual(ranges.filter((o) => ask('What is your desired base salary?').option[0].test(o)), ['INR 6,00,000 - INR10,00,000']);
+  // Past ties named in the question, and required acknowledgements.
+  assert.deepEqual(ask('Did you work for KPMG?'), { yes: false });
+  assert.deepEqual(ask('Have you worked for Haleon in the past?'), { yes: false });
+  assert.deepEqual(ask('Have you worked for Acme Labs in the past?'), { yes: true });
+  assert.deepEqual(ask('I have read the Privacy Notice', 'checkbox'), { yes: true });
+  assert.deepEqual(ask('Logitech uses an automated scheduling system to support you during the recruitment process. Your consent is required to proceed.'), { yes: true });
   // Consent yes, marketing never, self-identification declined.
   assert.deepEqual(ask('Yes, I have read and consent to the terms and conditions', 'checkbox'), { yes: true });
   assert.equal(ask('I agree to receive job alerts and marketing emails', 'checkbox'), undefined);
@@ -117,7 +126,7 @@ test('restrictions, consents and pay questions follow the standing answers', asy
   assert.deepEqual(ask('I agree to have my personal data processed by PwC for the purpose of recruitment for other positions than the one I have initially applied for'), { yes: true });
   assert.deepEqual(ask('Have you ever applied, interviewed, received an offer, or been employed with PwC or its predecessor firms? If yes, please provide firm name.', 'textarea', undefined, { ...answers, previously_interviewed: false }), { yes: false });
   assert.deepEqual(ask('Are you currently working, or have you worked, as third party labor or an independent contractor to PwC?', 'dropdown', undefined, { ...answers, prior_relationship_with_employer: false }), { yes: false });
-  assert.deepEqual(ask('What are your salary expectations? (Per Annum)', 'text'), { text: '700000' });
+  assert.equal(ask('What are your salary expectations? (Per Annum)', 'text').text, '700000');
   assert.ok(ask('Currency (Salary Expectations)').option[0].test('INR'));
   assert.ok(ask('Do you hold the professional certifications and/or clearance as outlined in the job description?').option.some((re) => re.test('Yes')));
   assert.equal(ask('Do you hold the professional certifications and/or clearance as outlined in the job description?', 'dropdown', { company: 'X', description: 'AWS certification required.' }), undefined);
@@ -152,6 +161,19 @@ test('an open question is drafted from the job and profile only; a draft with an
   assert.equal(await ask('Acme builds GenAI systems, and I work in Python.', 'Top 3 reasons to join us.'), 'Acme builds GenAI systems, and I work in Python.');
   assert.equal(await ask('I have 5 years of Python experience.', 'Why Acme?'), null);
   assert.equal(await ask(null, 'Why do you want to join?'), null);
+});
+
+test('a degree is matched to its own entry or its level’s bucket, never to another degree at that level', async () => {
+  const { degreeWants } = await import('../lib/apply/workday.mjs');
+  const pick = (degree, options) => { for (const re of degreeWants(degree)) { const o = options.find((t) => re.test(t.replace(/’/g, "'"))); if (o) return o; } return null; };
+  const visa = ['Bachelor’s or Equivalent First-Degree (ISCED 6: BA, BSc, BEng, LLB, etc.)', 'Master of Business Administration - MBA ( (ISCED 7)',
+    'Master’s or Equivalent Second-Degree (ISCED 7: MA, MSc, MEng, MPhil, professional licentiate)'];
+  assert.equal(pick('MSc in Big Data Analytics', visa), visa[2]);
+  assert.equal(pick('BSc in Statistics & Economics', visa), visa[0]);
+  assert.equal(pick('MSc in Big Data Analytics', ['Master of Business Administration', 'Master of Arts']), null);
+  assert.equal(pick('BSc in Statistics & Economics', ['Bachelor of Arts', 'Bachelor of Commerce']), null);
+  assert.equal(pick('MSc in Big Data Analytics', ['Masters (+2 or +3 yrs)']), 'Masters (+2 or +3 yrs)');
+  assert.equal(pick('MSc in Big Data Analytics', ["Master's (M.A., M.S., M.B.A.)"]), "Master's (M.A., M.S., M.B.A.)");
 });
 
 test('blocking questions are counted across applications, most blocking first', async () => {

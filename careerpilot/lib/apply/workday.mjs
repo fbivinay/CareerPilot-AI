@@ -119,7 +119,7 @@ async function verificationLink(gmail, sinceMs, host) {
 
 // Workday asks some new accounts to confirm their email ("An email has been sent to you. Please verify
 // your account."): open the link from Gmail, then sign in again (the caller starts over).
-const VERIFY_TEXT = /verify (your )?(candidate )?(account|email)|email has been sent|activate your account/i;
+const VERIFY_TEXT = /verify (your )?(candidate )?(account|email)|email has been sent|activate your account|not (yet )?(been )?(activated|verified)/i;
 async function verifyByEmail(page, { db, gmail, host, account, log }) {
   log('workday: email verification requested');
   const link = gmail && await verificationLink(gmail, new Date(account.createdAt).getTime(), host);
@@ -346,6 +346,9 @@ const sourceWants = (employerNames) => [
   new RegExp(`^(${employerNames.filter(Boolean).map(escapeRe).join('|')})\\b.*\\b(web ?site|careers?( site| page)?|job board)$`, 'i'),
   /^(the )?(company|corporate|employer|organi[sz]ation)('s)?( careers?)? (web)?site$/i,
   /\b(company|corporate|employer|official)\b[^,]*\b(web)?site\b/i, /\bcareers? (web ?site|site|page|portal)\b/i];
+// Only when the list has no site of the employer's own (Circles: "Websites"; NatWest offers only search
+// engines and job boards): the nearest true answer.
+const SOURCE_FALLBACK = [/^(company )?(careers? )?web ?sites?$/i, /^other$/i];
 // The employer's names as its options may say them: the company, the portal's tenant, and the Workday
 // site's name ("ag" tenant, "airbus" site) unless that is a generic word.
 const GENERIC_SITES = /^(external|careers?|jobs?|careersite|search|en|apply|global|ext|candidate|recruiting|opportunities|.*_site|.*careers?_site)$/i;
@@ -437,11 +440,16 @@ async function myInformation(page, ctx) {
   // employer's own board never claims a job board.
   const viaListings = job.source === 'aggregator';
   const wants = [...sourceWants(names), ...(viaListings ? [/^other job ?board$/i, /^(online )?job ?board$/i] : [])];
-  let source = await choose(page, 'source', wants);
-  if (source.missing) { // a search box instead of a dropdown: the employer's own name finds its site first
-    for (const q of [...names, 'career', 'website', ...(viaListings ? ['other job board', 'job board'] : [])]) {
+  let source = await choose(page, 'source', [...wants, ...SOURCE_FALLBACK]); // a list shows everything at once
+  if (source.missing) { // a search box instead of a dropdown: its top level first (HPE lists "HPE Career site"
+    // only there), then the employer's own name, which finds its site
+    for (const q of ['', ...names, 'career', 'website', ...(viaListings ? ['other job board', 'job board'] : [])]) {
       source = await pick(page, 'source', q, wants);
       if (source.chosen || source.missing) break;
+    }
+    for (const q of ['', 'website', 'other']) {
+      if (source.chosen || source.missing) break;
+      source = await pick(page, 'source', q, SOURCE_FALLBACK);
     }
   }
   const filled = { source, country: await choose(page, 'country', /^india$/i) };
@@ -489,9 +497,13 @@ const splitPlace = (s) => { const t = String(s ?? ''); const i = t.lastIndexOf('
 
 // Degree names as Workday lists them, most specific first.
 const DEGREES = [
-  // Most specific first; then the plain degree level some portals list ("Masters (+2 or +3 yrs)", "MS").
-  [/^m\.?\s?sc\b|master of science/i, [/^master of science \(m\.?sc\)$/i, /^master of science\b/i, /^m\.?\s?sc\.?$/i, /^m\.?s\.?$/i, /^masters?('s)?\b/i]],
-  [/^b\.?\s?sc\b|bachelor of science/i, [/^bachelor of science \(b\.?sc\)$/i, /^bachelor of science\b/i, /^b\.?\s?sc\.?$/i, /^b\.?s\.?$/i, /^bachelors?('s)?\b/i]],
+  // Most specific first; then the level's bucket naming the degree ("Master's or Equivalent (ISCED 7: MA,
+  // MSc, …)"); then the plain level some portals list ("Masters (+2 or +3 yrs)", "Master's (M.A., M.S.,
+  // M.B.A.)"). Never another degree at that level: "Master of Business Administration", "Bachelor of Arts".
+  [/^m\.?\s?sc\b|master of science/i, [/^master of science \(m\.?sc\)$/i, /^master of science\b/i, /^m\.?\s?sc\.?$/i, /^m\.?s\.?$/i,
+    /\bISCED 7\b.*\bM\.?Sc\b/i, /^masters?('s)?( degree)?( or equivalent)?(\s*\(.*\))?$/i]],
+  [/^b\.?\s?sc\b|bachelor of science/i, [/^bachelor of science \(b\.?sc\)$/i, /^bachelor of science\b/i, /^b\.?\s?sc\.?$/i, /^b\.?s\.?$/i,
+    /\bISCED 6\b.*\bB\.?Sc\b/i, /^bachelors?('s)?( degree)?( or equivalent)?(\s*\(.*\))?$/i]],
   [/^m\.?\s?tech\b|master of technology/i, [/^master of technology\b/i, /^m\.?\s?tech$/i]],
   [/^b\.?\s?tech\b|bachelor of technology/i, [/^bachelor of technology\b/i, /^b\.?\s?tech$/i]],
   [/^b\.?\s?e\b|bachelor of engineering/i, [/^bachelor of engineering\b/i]],
@@ -680,6 +692,10 @@ const yes = (v) => (v == null ? undefined : { yes: v === true || /^(yes|true)$/i
 const norm = (s) => String(s ?? '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 // Whether the candidate's own experience includes this employer: the profile lists their full history.
 const workedAt = (profile, company) => (profile.experience ?? []).some((e) => norm(splitPlace(e.company)[0]).includes(norm(company)) && norm(company).length > 2);
+const namesPastEmployer = (profile, label) => (profile.experience ?? []).some((e) => {
+  const name = norm(splitPlace(e.company)[0]);
+  return name.length > 2 && ` ${norm(label)} `.includes(` ${name} `);
+});
 const lpa = (inr) => Math.round((inr / 1e5) * 100) / 100;
 
 // A statement the candidate signs by typing their name. Their standing permission (answers.may_e_sign)
@@ -705,14 +721,15 @@ function signs(c) {
 // "no", and unknown otherwise. Employment comes from the profile's full history, the rest from the
 // candidate's standing answers.
 const RELATIVE = /\b(friend|relative|family member|related to)\b|\bpersonal relationship\b|relationship with (any|a) (current )?employee|\brelations? working (with|at|for)\b/i;
-const PAST_TIE = new RegExp(`${RELATIVE.source}|\\binterviewed\\b|\\binterviews?\\b.{0,15}\\bbefore\\b|\\b(ever|previously|already) applied\\b|\\breceived an offer\\b|\\bindependent contractor\\b|third.party labou?r|\\b(ever|previously|formerly|currently|already)\\b.{0,20}\\b(worked|employed|work|employee)\\b|\\bformer (employee|intern|contractor)\\b|collaborated with|\\b(client|partner|vendor|supplier)\\b.{0,40}\\bcapacity|contractor or consultant|consultant roles?\\b`, 'i');
+const PAST_TIE = new RegExp(`${RELATIVE.source}|\\binterviewed\\b|\\binterviews?\\b.{0,15}\\bbefore\\b|\\b(have|did|do) you (ever )?(work|worked|been employed) (for|at|with)\\b|\\b(ever|previously|already) applied\\b|\\breceived an offer\\b|\\bindependent contractor\\b|third.party labou?r|\\b(ever|previously|formerly|currently|already)\\b.{0,20}\\b(worked|employed|work|employee)\\b|\\bformer (employee|intern|contractor)\\b|collaborated with|\\b(client|partner|vendor|supplier)\\b.{0,40}\\bcapacity|contractor or consultant|consultant roles?\\b`, 'i');
 function pastTies(c) {
   const facts = [
     [RELATIVE, c.answers.relatives_at_employer],
     [/\binterview(ed|s)?\b/i, c.answers.previously_interviewed],
     // No application, no offer: both follow from whether the candidate applied here before.
     [/\bapplied\b|\breceived an offer\b/i, c.appliedHere],
-    [/\b(work|worked|employed|employee|intern)\b/i, workedAt(c.profile, c.job.company)],
+    // This employer, or any company the question names ("Did you work for KPMG?"): the full work history says.
+    [/\b(work|worked|employed|employee|intern)\b/i, workedAt(c.profile, c.job.company) || namesPastEmployer(c.profile, c.label)],
     // A contract may not be in the history, even when named in passing ("Employee, Intern or Contractor").
     [/collaborat|\b(client|partner|vendor|supplier|contractor|consultant)s?\b/i, c.answers.prior_relationship_with_employer],
   ].filter(([re]) => re.test(c.label)).map(([, fact]) => yes(fact)?.yes);
@@ -731,6 +748,17 @@ function workYears(profile) {
   return Math.floor(months / 12);
 }
 const longDate = ({ year, month, day }) => new Date(Date.UTC(year, month - 1, day)).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
+// The [low, high] rupees a pay-range option stands for: "INR 6,00,000 - INR10,00,000", "Up to INR 6,00,000",
+// "INR 50,00,000 - above", "6-10 LPA". null when it names no amount.
+function payRange(text) {
+  const t = String(text).toLowerCase().replace(/,/g, '');
+  const unit = /lpa|lakh/.test(t) ? 1e5 : 1;
+  const n = [...t.matchAll(/\d+(?:\.\d+)?/g)].map((m) => Number(m[0]) * unit);
+  if (!n.length) return null;
+  if (/\b(up ?to|below|under|less than)\b/.test(t)) return [0, n[0]];
+  if (n.length === 1 && /\babove\b|\bmore than\b|\bover\b|\+/.test(t)) return [n[0], Infinity];
+  return n.length >= 2 ? [n[0], n[1]] : null;
+}
 // The days an option like "Immediately", "15 days", "Within 1 month" or "1-2 months" stands for (its upper end).
 const optionDays = (text) => {
   if (/immediate|right away|\basap\b/i.test(text)) return 0;
@@ -855,17 +883,18 @@ const QUESTION_RULES = [
   [/\b(current|present)\b.{0,25}\b(ctc|salary|compensation|pay|bonus|benefits|allowances?|incentives?)\b/i, (c) => (c.answers.current_ctc == null ? undefined
     : { text: String(c.answers.current_ctc), option: [/^0\b|not applicable|n\/a|student|fresher/i] })],
   // The candidate's own figures (₹7 LPA full-time, ₹40,000 a month for internships), converted to the
-  // unit the question names; with no unit named, the unit is written out.
+  // unit the question names; with no unit named, the unit is written out. A list of pay ranges gets the
+  // range the figure falls in.
   [/\b(expected|desired)\b.{0,20}\b(ctc|salary|compensation|pay|stipend)\b|\b(salary|pay|compensation|ctc) expectations?\b/i, (c) => {
     const internship = c.job.employment_type === 'internship';
     const stipend = c.answers.expected_internship_stipend_monthly;
     const yearly = internship ? (stipend == null ? null : stipend * 12) : c.answers.expected_ctc;
     if (yearly == null) return undefined;
     const monthly = internship ? stipend : Math.round(yearly / 12);
-    if (/lpa|lakh/i.test(c.label)) return { text: String(lpa(yearly)) };
-    if (/month/i.test(c.label)) return { text: String(monthly) };
-    if (/annum|annual|year/i.test(c.label)) return { text: String(yearly) };
-    return { text: internship ? `${monthly} per month` : `${lpa(yearly)} LPA` };
+    const range = { test: (t) => { const r = payRange(t); const v = /month/i.test(`${t} ${c.label}`) ? monthly : yearly; return !!r && v >= r[0] && v <= r[1]; } };
+    const text = /lpa|lakh/i.test(c.label) ? String(lpa(yearly)) : /month/i.test(c.label) ? String(monthly)
+      : /annum|annual|year/i.test(c.label) ? String(yearly) : internship ? `${monthly} per month` : `${lpa(yearly)} LPA`;
+    return { text, option: [range] };
   }],
   [/^gender$|\bgender\b/i, (c) => (c.answers.gender ? { option: [new RegExp(`^${escapeRe(c.answers.gender)}$`, 'i')] } : undefined)],
   // Being considered for the employer's other open positions (the candidate said yes on 2026-10-18).
@@ -876,8 +905,10 @@ const QUESTION_RULES = [
   // on 2026-10-17).
   [/job alert|newsletter|marketing|talent (community|network)|future (opportunit|role|position)|contact me about|keep me (informed|updated)|receive (\w+ )?communications?\b.*\bevents?\b/i,
     (c) => (c.kind === 'dropdown' || c.kind === 'radio' ? { option: [/^(no|i do not|i don't|do not|disagree|decline)\b/i] } : undefined)],
-  [/\b(consent|agree|acknowledge|accept)\b.*\b(terms|conditions|privacy|policy|notice)\b|\b(terms|privacy)\b.*\b(consent|agree|accept)/i,
-    (c) => (c.kind === 'checkbox' && c.required ? { yes: true } : undefined)],
+  // Also a required "I have read the Privacy Notice" (Dentsu), and a required consent to the tool the employer
+  // runs its hiring process with (Logitech's automated interview scheduling).
+  [/\b(consent|agree|acknowledge|accept)\b.*\b(terms|conditions|privacy|policy|notice)\b|\b(terms|privacy)\b.*\b(consent|agree|accept)|\bhave read\b.*\b(privacy|terms|notice|policy)\b|automated (interview )?scheduling|scheduling (system|tool|assistant)/i,
+    (c) => (c.required && ['checkbox', 'dropdown', 'radio'].includes(c.kind) ? { yes: true } : undefined)],
   // Voluntary self-identification: declining is a true answer and the only one CareerPilot gives.
   [/\b(ethnic|race|racial|veteran|disabilit|hispanic|latino|sexual orientation|pronoun)/i,
     (c) => (c.required ? { option: [/decline|not wish|prefer not|do not want|choose not|rather not|not to (self.)?identify|not disclos/i] } : undefined)],
@@ -1053,7 +1084,10 @@ export async function applyWorkday({ page, job, profile, resumePath, db, gmail, 
   await shot('start');
   if (where === 'signed-out') {
     const created = await createAccount(page, { db, gmail, host, email: profile.email, log });
-    if (created?.reopen) where = await begin();
+    // Some portals (Logitech) send a new account back to sign-in until its email is verified: start over,
+    // signing in, which asks for the verification that verifyByEmail then completes.
+    const inForm = !created && (await page.waitForSelector(A('progressBar'), { timeout: 15000 }).then(() => true, () => false));
+    if (created?.reopen || (!created && !inForm)) where = await begin();
     else if (created) { await shot('account-stopped'); return created; }
   }
   if (where?.stop) { await shot('signin-stopped'); return where; }
