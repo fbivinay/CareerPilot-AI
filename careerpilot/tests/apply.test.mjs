@@ -69,6 +69,25 @@ test('a past tie to the employer is "no" only when every tie the question names 
   assert.deepEqual(ask('Do you have a relative employed at Marvell?', { relatives_at_employer: false }), { yes: false });
 });
 
+test('questions answered by deriving from the profile, and opt-ins declined', async () => {
+  const { answerFor } = await import('../lib/apply/workday.mjs');
+  const profile = { name: 'A Candidate', education: [{ degree: 'MSc in Data', institution: 'Some University', dates: 'Aug 2025 - Jun 2099' }],
+    experience: [{ company: 'Acme', dates: 'May 2026 - Jun 2026' }, { company: 'Beta', dates: 'May 2024 - Jun 2024' }] };
+  const answers = { citizenship: 'India', earliest_joining_date: '2026-11-10', relatives_at_employer: false };
+  const ask = (label, kind = 'dropdown') => answerFor({ label, kind, required: true }, { profile, answers, job: { company: 'Northern Trust' } });
+  assert.deepEqual(ask('Do you hold an OCI/PIO card?'), { yes: false });
+  assert.deepEqual(ask('Have you ever been an employee of either Northern Trust or any affiliates of Northern Trust?'), { yes: false });
+  assert.deepEqual(ask('Do you currently have a personal relationship (including marital or other committed relationship) with a Northern Trust employee?'), { yes: false });
+  assert.equal(ask('How many years of Relevant Experience do you have?', 'text').text, '0'); // two 2-month internships
+  assert.equal(ask('How many years of experience do you have with Python?', 'text'), undefined);
+  assert.deepEqual(ask('How soon you can join us?', 'text'), { text: 'From 10 November 2026' });
+  assert.deepEqual(ask('What is your highest education and in which stream?', 'text'), { text: 'MSc in Data, Some University (pursuing)' });
+  assert.equal(ask('Do you require Northern Trust to make reasonable adjustments in order to participate in the recruiting process?'), undefined);
+  const decline = ask('I consent to receive communication, including electronic communication, from entities within the PwC network about job related events');
+  assert.ok(decline.option[0].test('No') && !decline.option[0].test('Yes'));
+  assert.ok(ask('I agree to have my personal data processed by PwC for the purpose of recruitment for other positions than the one I have initially applied for', 'radio').option[0].test('I do not agree'));
+});
+
 test('blocking questions are counted across applications, most blocking first', async () => {
   const { blockingQuestions } = await import('../lib/queries.mjs');
   assert.deepEqual(blockingQuestions([

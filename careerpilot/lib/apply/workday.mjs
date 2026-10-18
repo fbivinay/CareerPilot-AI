@@ -322,10 +322,11 @@ async function pick(page, field, search, wants, scope = page) {
   selected = await chips();
   if (selected.length) { // auto-selected on Enter
     debug('pick', field, `"${search}" auto-selected`, selected);
-    if (best(selected, wants) >= 0) return { chosen: selected[best(selected, wants)] };
-    await unselect(group);
+    const kept = best(selected, wants) >= 0;
+    if (!kept) await unselect(group);
+    // The results list can stay open either way, and an open list swallows the next click on the page.
     await closePopup(page);
-    return { options: selected };
+    return kept ? { chosen: selected[best(selected, wants)] } : { options: selected };
   }
   const texts = (await options.allInnerTexts()).map((t) => t.replace(/\s+/g, ' ').trim());
   const i = best(texts, wants);
@@ -592,8 +593,12 @@ async function chooseSchool(page, scope, institution) {
   const same = { test: (option) => norm(option.split(',')[0].replace(/\(.*?\)/g, '')) === norm(name) };
   const exact = await pick(page, 'school', name, same, scope);
   if (exact.chosen) return exact;
-  const notListed = await pick(page, 'school', 'School not in list', /not (in|on) (the )?list|not listed/i, scope);
-  return notListed.chosen ? { ...notListed, note: `"${name}" is not in Workday's list` } : { options: notListed.options ?? exact.options };
+  let notListed = {};
+  for (const q of ['School not in list', 'School Not Listed']) { // tenants name it either way (PwC: the second)
+    notListed = await pick(page, 'school', q, /not (in|on) (the )?list|not listed/i, scope);
+    if (notListed.chosen) return { ...notListed, note: `"${name}" is not in Workday's list` };
+  }
+  return { options: notListed.options ?? exact.options };
 }
 
 async function myExperience(page, { profile, answers, resumePath }) {
@@ -696,8 +701,8 @@ function signs(c) {
 // contractor"): it is "yes" when any tie it names is, "no" only when every tie it names is known to be
 // "no", and unknown otherwise. Employment comes from the profile's full history, the rest from the
 // candidate's standing answers.
-const RELATIVE = /\b(friend|relative|family member|related to)\b|personal relationship with any|relationship with (any|a) (current )?employee/i;
-const PAST_TIE = new RegExp(`${RELATIVE.source}|\\binterviewed\\b|\\b(ever|previously|formerly|currently|already)\\b.{0,20}\\b(worked|employed|work)\\b|\\bformer (employee|intern|contractor)\\b|collaborated with|\\b(client|partner|vendor|supplier)\\b.{0,40}\\bcapacity|contractor or consultant|consultant roles?\\b`, 'i');
+const RELATIVE = /\b(friend|relative|family member|related to)\b|\bpersonal relationship\b|relationship with (any|a) (current )?employee/i;
+const PAST_TIE = new RegExp(`${RELATIVE.source}|\\binterviewed\\b|\\b(ever|previously|formerly|currently|already)\\b.{0,20}\\b(worked|employed|work|employee)\\b|\\bformer (employee|intern|contractor)\\b|collaborated with|\\b(client|partner|vendor|supplier)\\b.{0,40}\\bcapacity|contractor or consultant|consultant roles?\\b`, 'i');
 function pastTies(c) {
   const facts = [
     [RELATIVE, c.answers.relatives_at_employer],
@@ -710,6 +715,18 @@ function pastTies(c) {
   return !facts.length || facts.includes(undefined) ? undefined : { yes: false };
 }
 
+// Whole years of work in the profile's history: internships are counted in months, so a candidate with
+// only internships has 0.
+function workYears(profile) {
+  const months = (profile.experience ?? []).reduce((sum, e) => {
+    const [from, to] = dateRange(e.dates);
+    const end = to ?? (() => { const d = new Date(); return { year: d.getFullYear(), month: d.getMonth() + 1 }; })();
+    return from ? sum + Math.max(0, (end.year - from.year) * 12 + end.month - from.month + 1) : sum;
+  }, 0);
+  return Math.floor(months / 12);
+}
+const longDate = ({ year, month, day }) => new Date(Date.UTC(year, month - 1, day)).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
+
 // [pattern on the question, answer(ctx)]: the first matching pattern decides; undefined = not known.
 const QUESTION_RULES = [
   [/\b(at least|over|above|older than)\b.{0,15}\b18\b|\b18 years\b|age of 18|legal age/i, (c) => yes(c.answers.age_18_or_older)],
@@ -717,6 +734,7 @@ const QUESTION_RULES = [
   [/(legal|lawful)\w* (right|authori[sz]\w*|eligib\w*|permi\w*) to work|authori[sz]ed to work|work authori[sz]ation|eligible to work|right to work/i,
     (c) => (c.inIndia ? yes(c.answers.indian_work_authorization) : undefined)],
   [/relocat/i, (c) => yes(c.answers.willing_to_relocate)],
+  [/reasonable (adjustment|accommodation)s?|accommodations? (during|in|for) the (recruit|interview|hiring|application)/i, (c) => yes(c.answers.needs_accommodation)],
   [/restrictive covenant|non-?compete|non-?solicit/i, (c) => yes(c.answers.restrictive_covenants)],
   // A statement to sign, and its date (only with the candidate's permission).
   [/by signing (below|this)|attestation|i hereby attest|\bsignature\b/i, signs],
@@ -732,12 +750,30 @@ const QUESTION_RULES = [
     (c) => (c.answers.citizenship ? { option: [new RegExp(`^${escapeRe(c.answers.citizenship)}$`, 'i')], search: c.answers.citizenship } : undefined)],
   [/citizen or national of the united states|permanent resident|export control/i, (c) => yes(c.answers.us_person)],
   [/^(country of )?(citizenship|nationality)\b/i, (c) => (c.answers.citizenship ? { option: [new RegExp(`^${escapeRe(c.answers.citizenship)}`, 'i'), /^indian?$/i] } : undefined)],
+  // An OCI/PIO card is for foreign citizens of Indian origin: an Indian citizen cannot hold one.
+  [/\b(oci|pio)\b|overseas citizen(ship)? of india/i, (c) => (/^india/i.test(c.answers.citizenship ?? '') ? { yes: false } : undefined)],
   [PAST_TIE, pastTies], // after the export-control questions, which can mention employment too
-  [/\b(start|joining|join)\b.{0,15}\bdate\b|\bavailab\w* to (start|join)\b|\bearliest\b.{0,15}\b(start|join)|\bwhen\b.{0,30}\b(start|join)\b/i, (c) => {
-    if (c.kind !== 'date') return undefined;
+  [/\b(start|joining|join)\b.{0,15}\bdate\b|\bavailab\w* to (start|join)\b|\bearliest\b.{0,15}\b(start|join)|\bwhen\b.{0,30}\b(start|join)\b|\bhow soon\b.{0,20}\b(start|join)\b/i, (c) => {
     const when = isoDate(/full.?time/i.test(c.label) ? c.answers.earliest_full_time_start
       : c.job.employment_type === 'internship' ? c.answers.internship_available_from : c.answers.earliest_joining_date);
-    return when?.day ? { date: when } : undefined;
+    if (!when?.day) return undefined;
+    if (c.kind === 'date') return { date: when };
+    return c.kind === 'text' || c.kind === 'textarea' ? { text: `From ${longDate(when)}` } : undefined;
+  }],
+  // The profile lists the most recent degree first.
+  [/\bhighest (level of )?(education|qualification|degree)\b/i, (c) => {
+    const [ed] = c.profile.education ?? [];
+    if (!ed || (c.kind !== 'text' && c.kind !== 'textarea')) return undefined;
+    const end = dateRange(ed.dates)[1];
+    const now = new Date();
+    const pursuing = end && (end.year > now.getFullYear() || (end.year === now.getFullYear() && end.month > now.getMonth() + 1));
+    return { text: `${ed.degree}, ${ed.institution}${pursuing ? ' (pursuing)' : ''}` };
+  }],
+  // Total work experience in years; a question about one skill or tool ("with Python") is not this one.
+  [/\byears of (relevant |total |work |professional )?experience\b|\bexperience \(?in years\)?/i, (c) => {
+    if (/\b(with|in|using|on) [A-Z]/.test(c.label)) return undefined;
+    const years = workYears(c.profile);
+    return { text: String(years), option: years ? [new RegExp(`^${years}\\b`)] : [/^0\b|fresher|less than (1|one)|< ?1|no experience|^none/i] };
   }],
   [/\bgraduat\w*\b.{0,15}\b(date|year|month)\b|\b(date|year|month)\b.{0,10}\bgraduat|\bwhen\b.{0,25}\bgraduat/i, (c) => {
     const d = isoDate(c.answers.graduation_date ?? c.answers.graduation_month);
@@ -764,9 +800,11 @@ const QUESTION_RULES = [
     return { text: internship ? `${monthly} per month` : `${lpa(yearly)} LPA` };
   }],
   [/^gender$|\bgender\b/i, (c) => (c.answers.gender ? { option: [new RegExp(`^${escapeRe(c.answers.gender)}$`, 'i')] } : undefined)],
-  // Marketing opt-ins are never ticked; a required consent to the employer's terms or privacy notice is
-  // (the candidate authorized this on 2026-10-17).
-  [/job alert|newsletter|marketing|talent (community|network|pool)|future (opportunit|role|position)|contact me about|keep me (informed|updated)/i, () => undefined],
+  // Marketing and talent-pool opt-ins are never given: a tick box stays unticked and a required yes/no is
+  // answered no. A required consent to the employer's terms or privacy notice is ticked (the candidate
+  // authorized both on 2026-10-17).
+  [/job alert|newsletter|marketing|talent (community|network|pool)|future (opportunit|role|position)|(other|additional) (positions|roles|vacancies|opportunities) than|considered for other (positions|roles)|contact me about|keep me (informed|updated)|receive (\w+ )?communications?\b.*\bevents?\b/i,
+    (c) => (c.kind === 'dropdown' || c.kind === 'radio' ? { option: [/^(no|i do not|i don't|do not|disagree|decline)\b/i] } : undefined)],
   [/\b(consent|agree|acknowledge|accept)\b.*\b(terms|conditions|privacy|policy|notice)\b|\b(terms|privacy)\b.*\b(consent|agree|accept)/i,
     (c) => (c.kind === 'checkbox' && c.required ? { yes: true } : undefined)],
   // Voluntary self-identification: declining is a true answer and the only one CareerPilot gives.
