@@ -348,9 +348,18 @@ async function pick(page, field, search, wants, scope = page) {
   debug('pick', field, `"${search}"`, { offered: texts.slice(0, 8), pick: texts[i] ?? null });
   if (i < 0) { await closePopup(page); return { options: texts.slice(0, 15) }; }
   await options.nth(i).click();
-  await page.waitForTimeout(500);
+  await page.waitForTimeout(800);
+  // A category opens its own list instead of being chosen (HPE: "HPE Career site" holds only "HPE Careers
+  // webpage"): choose inside it, the entry that matches or the only one there.
+  if (!(await chips()).length) {
+    const inner = (await options.allInnerTexts()).map((t) => t.replace(/\s+/g, ' ').trim());
+    const k = inner.length && !inner.includes(texts[i]) ? (best(inner, wants) >= 0 ? best(inner, wants) : inner.length === 1 ? 0 : -1) : -1;
+    debug('pick', field, `"${texts[i]}" opened`, inner.slice(0, 8), 'pick', inner[k] ?? null);
+    if (k >= 0) { await options.nth(k).click(); await page.waitForTimeout(800); }
+  }
   await closePopup(page);
-  return (await chips()).includes(texts[i]) ? { chosen: texts[i] } : { options: texts.slice(0, 15), note: `"${texts[i]}" did not stick` };
+  const now = await chips();
+  return now.length ? { chosen: now[0] } : { options: texts.slice(0, 15), note: `"${texts[i]}" did not stick` };
 }
 
 // "How did you hear about us": the employer's own site is where CareerPilot finds postings ("Marvell
@@ -843,6 +852,9 @@ const QUESTION_RULES = [
   [/\bcareer break\b|\bbreak from (your )?(career|work)\b|\bgap in (your )?(employment|career)\b/i, (c) => yes(c.answers.career_break)],
   [/government official|public official|politically exposed/i, (c) => yes(/\b(related|relative|family|spouse)\b/i.test(c.label)
     ? c.answers.related_to_government_official : c.answers.government_official)],
+  // Outside work, financial interests or dealings that would conflict with the job (HPE's policy question);
+  // after the government-official questions, which also speak of "a conflict of interest".
+  [/conflicts?(\(s\))? of interest/i, (c) => yes(c.answers.conflicts_of_interest)],
   [/restrictive covenant|non-?compet(e|ition)|non-?solicit|(agreement|obligation)s?\b.{0,80}\brestricts?\b|\bbond\b.{0,40}\b(employer|company)\b|commitments? ?\/ ?bond|service (bond|agreement)/i, restrictions],
   [/date of birth|\bdob\b|\bbirth ?date\b/i, (c) => {
     const d = isoDate(c.answers.date_of_birth);
@@ -1029,7 +1041,9 @@ async function applyAnswer(page, q, a) {
     case 'text': case 'textarea': {
       // A yes/no question in a text box: "No" as it is; a "yes" there usually owes details ("If yes, please
       // provide..."), so it is typed only when the question asks for none.
-      const text = a.text ?? (a.yes === false ? 'No' : a.yes === true && !/\bif (yes|so)\b/i.test(q.label) ? 'Yes' : null);
+      // A question that says how to answer "none" ("…indicate not applicable (N/A)") gets that.
+      const none = /\b(indicate|enter|write|type)\b[^.]{0,30}\bn\/a\b/i.test(q.label) ? 'N/A' : 'No';
+      const text = a.text ?? (a.yes === false ? none : a.yes === true && !/\bif (yes|so)\b/i.test(q.label) ? 'Yes' : null);
       if (text == null) return {};
       return { chosen: (await setText(page, q.field, text)) ? text : undefined };
     }

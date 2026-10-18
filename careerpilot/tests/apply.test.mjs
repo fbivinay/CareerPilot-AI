@@ -147,6 +147,9 @@ test('restrictions, consents and pay questions follow the standing answers', asy
   assert.deepEqual(ask('Do you have any commitments / bond with previous employer?'), { yes: false });
   assert.deepEqual(ask('Are you currently or have you been in the last five years serving as a government official, either domestic or foreign?'), { yes: false });
   assert.equal(ask('Are you related to a government official, either domestic or foreign?'), undefined); // a different fact
+  const coi = 'HPE Policy prohibits employees from engaging in activities that pose a conflict(s) of interest for HPE such as: Outside employment with or receiving compensation from a customer, business partner, supplier, or competitor; Significant financial interest in a customer held by you or a family member; Close personal relationships between employees in the same organization. Please advise if you would be engaging in any of the above.';
+  assert.equal(ask(coi), undefined); // not covered by the relatives or past-ties answers
+  assert.deepEqual(answerFor({ label: coi, kind: 'dropdown', required: true }, { profile, answers: { conflicts_of_interest: false }, job: { company: 'Hpe' } }), { yes: false });
   assert.deepEqual(ask('Please select your date of birth:', 'date'), { date: { year: 2003, month: 5, day: 14 } });
   assert.deepEqual(ask('Do you permit Labcorp to process your data to consider you for future job openings using Artificial Intelligence (AI) tools ?'), { yes: true });
   assert.deepEqual(ask('I agree to have my personal data processed by PwC for the purpose of recruitment for other positions than the one I have initially applied for'), { yes: true });
