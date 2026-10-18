@@ -623,7 +623,7 @@ async function myExperience(page, { profile, answers, resumePath }) {
     const panel = await entryPanel(page, 'Education', usedSchools,
       async (p) => best([await buttonText(p, 'degree')], degreeWants(ed.degree)) === 0,
       async (p) => /^(select one)?$/i.test(await buttonText(p, 'degree')));
-    if (!panel) { problems.push('education section'); break; }
+    if (!panel) break; // no education section on this employer's form; if one were required, Workday's own check says so on Save
     const school = await chooseSchool(page, panel, ed.institution);
     const degree = await choose(page, 'degree', degreeWants(ed.degree), panel);
     const field = studyField(ed.degree);
@@ -680,7 +680,8 @@ const QUESTION_RULES = [
   [/(legal|lawful)\w* (right|authori[sz]\w*|eligib\w*|permi\w*) to work|authori[sz]ed to work|work authori[sz]ation|eligible to work|right to work/i,
     (c) => (c.inIndia ? yes(c.answers.indian_work_authorization) : undefined)],
   [/relocat/i, (c) => yes(c.answers.willing_to_relocate)],
-  [/\b(friend|relative|family member|related to)\b/i, (c) => yes(c.answers.relatives_at_employer)],
+  [/\b(friend|relative|family member|related to)\b|personal relationship with any|relationship with (any|a) (current )?employee/i, (c) => yes(c.answers.relatives_at_employer)],
+  [/restrictive covenant|non-?compete|non-?solicit/i, (c) => yes(c.answers.restrictive_covenants)],
   [/\binterviewed\b/i, (c) => yes(c.answers.previously_interviewed)],
   [/^(name )?(prefix|salutation)$/i, (c) => (c.answers.name_prefix ? { option: [new RegExp(`^${escapeRe(String(c.answers.name_prefix).replace(/\.$/, ''))}\\.?$`, 'i')], text: c.answers.name_prefix } : undefined)],
   [/\b(ever|previously|formerly|currently|already)\b.{0,20}\b(worked|employed|work)\b|\bformer (employee|intern|contractor)\b/i, (c) => ({ yes: workedAt(c.profile, c.job.company) })],
