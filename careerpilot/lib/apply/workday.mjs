@@ -824,6 +824,9 @@ const QUESTION_RULES = [
   [/disabilit\w*.{0,40}\b(interfere|affect|prevent|limit)\w*/i, (c) => yes(c.answers.disability_affects_job)], // before self-identification
   [/\b(cet|central european( time)?)\b.{0,20}\b(shift|hours)\b/i, (c) => yes(c.answers.willing_cet_shift)],
   [/\bwilling (and able )?to travel\b|\btravel\b.{0,40}\b(required|requirements|as needed)\b/i, (c) => yes(c.answers.willing_to_travel)],
+  [/\bverification of (your )?ident\w*|\bverify (your )?identity\b|\bproof of identity\b/i, (c) => yes(c.answers.can_verify_identity)],
+  // Texts about the application itself, not marketing (that rule comes later and stays "no").
+  [/\b(sms|text messages?)\b.{0,80}\b(application|candidate|recruit\w*|interview)/i, (c) => yes(c.answers.sms_updates)],
   [/\bcareer break\b|\bbreak from (your )?(career|work)\b|\bgap in (your )?(employment|career)\b/i, (c) => yes(c.answers.career_break)],
   [/government official|public official|politically exposed/i, (c) => yes(/\b(related|relative|family|spouse)\b/i.test(c.label)
     ? c.answers.related_to_government_official : c.answers.government_official)],
