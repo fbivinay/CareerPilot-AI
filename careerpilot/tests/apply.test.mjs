@@ -199,6 +199,8 @@ test('an account is verified only from Workday mail or the employer’s own doma
   assert.ok(!verificationSender('barclays.com.evil.io', host));
   assert.ok(!verificationSender('notbarclays.com', host));
   assert.ok(!verificationSender('hpe.com', host));
+  assert.ok(verificationSender('transunionapps.com', 'transunion.wd5.myworkdayjobs.com'));
+  assert.ok(verificationSender('ag.com', 'ag.wd3.myworkdayjobs.com') && !verificationSender('agency.com', 'ag.wd3.myworkdayjobs.com'));
 });
 
 test('AllianceBernstein, Amgen and Ashby questions follow the standing answers', async () => {

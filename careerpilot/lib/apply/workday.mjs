@@ -105,18 +105,21 @@ async function startApplication(page) {
 // sent from a Workday domain, received after the account was created (msg.date is Gmail's own receive
 // time), pointing at this same portal. Anyone can send mail that merely claims to come from Workday, and
 // another employer's verification link must not be opened for this one.
-// Some employers send it from their own domain, the portal's tenant name (Barclays: barclays.com for
-// barclays.wd3.myworkdayjobs.com).
+// Some employers send it from their own domain, named after the portal's tenant (Barclays: barclays.com for
+// barclays.wd3.myworkdayjobs.com; TransUnion: transunionapps.com). A short tenant ("ag") must be the whole
+// name. What protects the account is the link itself: https, on this very portal.
 const WORKDAY_SENDER = /(^|\.)(myworkday|workday|myworkdayjobs)\.com$/i;
 export const verificationSender = (domain, host) => {
   const d = String(domain ?? '').toLowerCase();
-  const own = `${host.split('.')[0]}.com`;
-  return WORKDAY_SENDER.test(d) || d === own || d.endsWith(`.${own}`);
+  const tenant = host.split('.')[0];
+  const name = d.split('.').slice(-2)[0] ?? '';
+  return WORKDAY_SENDER.test(d) || name === tenant || (tenant.length >= 4 && name.startsWith(tenant));
 };
 const onHost = (u, host) => { try { const x = new URL(u); return x.protocol === 'https:' && x.hostname.toLowerCase() === host; } catch { return false; } };
 async function verificationLink(gmail, sinceMs, host) {
   for (let i = 0; i < 18; i++) { // up to ~3 minutes
-    const ids = await gmail.listIds(`from:(myworkday.com OR workday.com OR myworkdayjobs.com OR ${host.split('.')[0]}.com) newer_than:1d`, 10);
+    // By subject: an employer's own sender domain can be anything named after it (transunionapps.com).
+    const ids = await gmail.listIds('newer_than:1d subject:(verify OR verification OR activate OR confirm)', 20);
     for (const id of ids) {
       const msg = await gmail.get(id);
       if (!msg.authenticated || !verificationSender(String(msg.fromAddr ?? '').split('@')[1], host)) continue;
