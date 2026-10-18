@@ -1061,10 +1061,15 @@ export async function applyWorkday({ page, job, profile, resumePath, db, gmail, 
       const submit = page.locator(`${A('pageFooterNextButton')}, ${A('bottom-navigation-next-button')}`).first();
       if (!/submit/i.test(await submit.innerText().catch(() => ''))) return { stop: 'blocked', step, reason: 'The Review page shows no Submit button', trail };
       await submit.click({ force: true });
-      // Workday confirms on the page ("Application Submitted", "Thank you for applying").
+      // Workday confirms on the page ("Application Submitted", "Thank you for applying"), sometimes only after a
+      // minute or more (Marvell): closing the page earlier abandons the submission.
       const CONFIRMED = /application (has been |was )?submitted|thank(s| you) for (applying|your application)|successfully submitted|you('ve| have) (successfully )?applied/i;
-      for (let i = 0; i < 60; i++) {
+      for (let i = 0; i < 150; i++) {
         await page.waitForTimeout(1000);
+        // A click that never registered leaves Submit active on the Review page: press it once more. (While
+        // Workday is submitting, the button is inactive; a second application is refused by Workday anyway.)
+        if (i === 20 && /review/i.test(await activeStep(page).catch(() => '')) && (await submit.isEnabled().catch(() => false))
+          && /submit/i.test(await submit.innerText().catch(() => ''))) await submit.click({ force: true });
         const body = await page.locator('body').innerText().catch(() => '');
         const hit = CONFIRMED.exec(body);
         if (hit) {
@@ -1075,7 +1080,7 @@ export async function applyWorkday({ page, job, profile, resumePath, db, gmail, 
         if (errors.length) { await shot('submit-errors'); return { stop: 'blocked', step, reason: `Submit: ${errors.join('; ')}`, trail }; }
       }
       await shot('submit-unconfirmed');
-      return { stop: 'unconfirmed', step, reason: 'Submit was clicked but Workday showed no confirmation within 60 s', trail };
+      return { stop: 'unconfirmed', step, reason: 'Submit was clicked but Workday showed no confirmation within 150 s', trail };
     }
     // The step title shows before its fields do.
     await page.waitForSelector('[data-automation-id^="formField-"]', { timeout: 30000 }).catch(() => {});
