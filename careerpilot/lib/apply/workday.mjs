@@ -820,6 +820,8 @@ const QUESTION_RULES = [
   [/\bcourt cases?\b|\b(ongoing|pending) (legal|court) (cases?|proceedings?)/i, (c) => yes(c.answers.ongoing_court_cases)],
   [/disabilit\w*.{0,40}\b(interfere|affect|prevent|limit)\w*/i, (c) => yes(c.answers.disability_affects_job)], // before self-identification
   [/\b(cet|central european( time)?)\b.{0,20}\b(shift|hours)\b/i, (c) => yes(c.answers.willing_cet_shift)],
+  [/\bwilling (and able )?to travel\b|\btravel\b.{0,40}\b(required|requirements|as needed)\b/i, (c) => yes(c.answers.willing_to_travel)],
+  [/\bcareer break\b|\bbreak from (your )?(career|work)\b|\bgap in (your )?(employment|career)\b/i, (c) => yes(c.answers.career_break)],
   [/government official|public official|politically exposed/i, (c) => yes(/\b(related|relative|family|spouse)\b/i.test(c.label)
     ? c.answers.related_to_government_official : c.answers.government_official)],
   [/restrictive covenant|non-?compet(e|ition)|non-?solicit|(agreement|obligation)s?\b.{0,80}\brestricts?\b|\bbond\b.{0,40}\b(employer|company)\b|commitments? ?\/ ?bond|service (bond|agreement)/i, restrictions],
