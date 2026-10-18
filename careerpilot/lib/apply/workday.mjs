@@ -1107,7 +1107,9 @@ const QUESTION_RULES = [
     : { text: String(c.answers.notice_period), option: [new RegExp(`^${c.answers.notice_period}\\b`), /immediate|^0\b|no notice|not applicable/i,
       ...(c.answers.notice_period === 0 ? [/^(less than|under|below|within|up ?to|<)\s*\d+/i] : [])] })], // Mobility: "Less than 30 days"
   // Every part of current pay (bonus, benefits) is part of the current CTC, which is 0 for a student.
-  [/\b(current|present)\b.{0,25}\b(ctc|salary|compensation|pay|bonus|benefits|allowances?|incentives?)\b/i, (c) => (c.answers.current_ctc == null ? undefined
+  // Not a question about expectations that only mentions current pay to exclude it (TransUnion: "base
+  // compensation expectations … not requesting information about your current or past compensation").
+  [/^(?!.*\b(expect\w*|desired)\b).*\b(current|present)\b.{0,25}\b(ctc|salary|compensation|pay|bonus|benefits|allowances?|incentives?)\b/i, (c) => (c.answers.current_ctc == null ? undefined
     : { text: `${c.kind === 'textarea' ? 'INR ' : ''}${c.answers.current_ctc}`, option: [/^0\b|not applicable|n\/a|student|fresher/i] })],
   // Before the pay figures, which would read "desired pay" here (the candidate said yes on 2026-10-18).
   [/(desired|expected) (pay|salary)( rate)? is higher than|still (want|wish|like) to be considered/i, (c) => yes(c.answers.consider_if_pay_below_expectation)],

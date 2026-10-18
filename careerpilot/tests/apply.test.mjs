@@ -314,6 +314,9 @@ test('Barclays, Mastercard, Maersk, ICF, US Bank, Mobility, PwC and RELX questio
   answers.family_government_employment = false;
   assert.deepEqual(ask(govFamily, 'dropdown', 'GE Vernova'), { yes: false });
   assert.deepEqual(ask('Are you related to anyone who is an employee of a government office or agency that has oversight over Mastercard?', 'dropdown', 'Mastercard'), { yes: false });
+  // An expectations question that mentions current pay only to exclude it.
+  Object.assign(answers, { current_ctc: 0, expected_ctc: 700000 });
+  assert.equal(ask('What are your base compensation expectations for this role? (Please provide your expectations only. We are not requesting information about your current or past compensation.) Please specify the amount and currency.', 'textarea', 'TransUnion').text, 'INR 700000 per year');
   // TransUnion's "working experience" and MSD's AI questions.
   assert.equal(best(['0 - 2 years', '3 - 4 years'], ask('What is the total number years of working experience, excluding internships?', 'dropdown', 'TransUnion').option), 0);
   Object.assign(answers, { allow_ai_screening: true, consider_for_other_roles: true });
