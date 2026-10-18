@@ -106,6 +106,8 @@ async function record(db, job, r, answersKey) {
   if (r.stop === 'submitted') {
     await transition(db, app, 'submitted', { evidence: { type: 'workday', ...r.evidence }, reason: 'submitted on the employer’s Workday site by CareerPilot' });
     if (answered.length) await audit(db, 'application', app.id, 'answers', { detail: { questions: answered } });
+  } else if (r.stop === 'expired') {
+    await transition(db, app, 'expired', { reason: r.reason });
   } else if (r.stop === 'review') {
     // A practice run that reaches Review clears an earlier block: nothing is left unanswered.
     if (app.status === 'blocked') await transition(db, app, 'ready', { reason: 'Filled up to Review in a practice run' });

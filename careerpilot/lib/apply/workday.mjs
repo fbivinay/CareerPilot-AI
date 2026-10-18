@@ -73,10 +73,16 @@ async function clickPrimary(page, buttonId) {
   else await button.click();
 }
 
-// The posting, with its Apply button ready.
+// The posting, with its Apply button ready: true, or false when the employer has taken it down.
+const CLOSED_TEXT = /page you are looking for doesn.t exist|no longer (available|accepting)|(job|posting|position) (is |has been )?(closed|filled|not available)/i;
 async function openPosting(page, url) {
   await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
-  await page.waitForSelector(A('adventureButton'), { timeout: 30000 });
+  for (let i = 0; i < 60; i++) {
+    if (await page.locator(A('adventureButton')).count()) return true;
+    if (CLOSED_TEXT.test(await page.locator('body').innerText().catch(() => ''))) return false;
+    await page.waitForTimeout(500);
+  }
+  throw new Error('The posting showed neither an Apply button nor a closed notice within 30 s');
 }
 
 // Apply → Apply Manually. Resolves 'signed-out' when the account form shows, 'in-form' when the first
@@ -626,7 +632,8 @@ async function myExperience(page, { profile, answers, resumePath }) {
   const filled = { experience: [], education: [] };
   const problems = [];
   const usedJobs = new Set();
-  const expSection = (await page.locator(groupLabelled('Work-Experience-section')).count()) ? 'Work-Experience' : 'Professional-Experience';
+  let expSection = 'Professional-Experience';
+  for (const s of ['Work-Experience', 'Work-History']) if (await page.locator(groupLabelled(`${s}-section`)).count()) { expSection = s; break; } // Dentsu: Work History
   for (const e of profile.experience ?? []) {
     const panel = await entryPanel(page, expSection, usedJobs,
       async (p) => (await inputValue(p, 'jobTitle')).toLowerCase() === e.title.toLowerCase(),
@@ -786,10 +793,13 @@ function restrictions(c) {
 const QUESTION_RULES = [
   [/\b(at least|over|above|older than)\b.{0,15}\b18\b|\b18 years\b|age of 18|legal age/i, (c) => yes(c.answers.age_18_or_older)],
   [/\bsponsor/i, (c) => (c.inIndia ? yes(c.answers.needs_visa_sponsorship) : undefined)],
-  [/(legal|lawful)\w* (right|authori[sz]\w*|eligib\w*|permi\w*) to work|authori[sz]ed to work|work authori[sz]ation|eligible to work|right to work/i,
+  [/(legal|lawful)\w* (right|authori[sz]\w*|eligib\w*|permi\w*) to work|authori[sz]ed to work|work authori[sz]ation|eligible to work|right to work|\bwork permit\b/i,
     (c) => (c.inIndia ? yes(c.answers.indian_work_authorization) : undefined)],
   [/relocat/i, (c) => yes(c.answers.willing_to_relocate)],
   [/reasonable (adjustment|accommodation)s?|accommodations? (during|in|for) the (recruit|interview|hiring|application)/i, (c) => yes(c.answers.needs_accommodation)],
+  // Government employment is in the full work history like any other (HPE asks about the U.S. one).
+  [/government (or public institution )?employment experience|(employed by|worked for) (a |the )?(government|public sector)/i,
+    (c) => ({ yes: (c.profile.experience ?? []).some((e) => /government|ministry|municipal|public sector|federal/i.test(e.company)) })],
   // Being an official, and being related to one, are separate facts (Northern Trust asks both).
   // Hiring checks and disclosures, from the candidate's answers of 2026-10-18.
   [/background (check|verification)|\bbgv\b/i, (c) => yes(c.answers.willing_background_check)],
@@ -900,8 +910,9 @@ const QUESTION_RULES = [
     if (yearly == null) return undefined;
     const monthly = internship ? stipend : Math.round(yearly / 12);
     const range = { test: (t) => { const r = payRange(t); const v = /month/i.test(`${t} ${c.label}`) ? monthly : yearly; return !!r && v >= r[0] && v <= r[1]; } };
+    // With no unit named, the full amount first: a number box keeps only the digits (Dentsu turned "7 LPA" into 7).
     const text = /lpa|lakh/i.test(c.label) ? String(lpa(yearly)) : /month/i.test(c.label) ? String(monthly)
-      : /annum|annual|year/i.test(c.label) ? String(yearly) : internship ? `${monthly} per month` : `${lpa(yearly)} LPA`;
+      : /annum|annual|year/i.test(c.label) ? String(yearly) : internship ? `${monthly} per month` : `${yearly} per year`;
     return { text, option: [range] };
   }],
   [/^gender$|\bgender\b/i, (c) => (c.answers.gender ? { option: [new RegExp(`^${escapeRe(c.answers.gender)}$`, 'i')] } : undefined)],
@@ -961,7 +972,7 @@ async function tick(box) {
 async function applyAnswer(page, q, a) {
   // Yes/no options also come worded as consent ("I agree" / "I do not agree").
   const wantsYesNo = a.yes === undefined ? null
-    : [a.yes ? /^(yes|i agree|agree|i consent|i accept|accept)\b/i : /^(no|i do not|i don't|do not|disagree|decline)\b/i];
+    : [a.yes ? /^(yes|i agree|agree|i consent|i accept|accept|i acknowledge|acknowledge)\b/i : /^(no|i do not|i don't|do not|disagree|decline|i will not)\b/i];
   switch (q.kind) {
     case 'dropdown': return choose(page, q.field, wantsYesNo ?? a.option ?? [new RegExp(`^${escapeRe(a.text ?? '')}$`, 'i')]);
     case 'date': return { chosen: (await setDate(page, page, q.field, a.date)) ? 'date set' : undefined };
@@ -1055,7 +1066,7 @@ const STEPS = [
 ];
 
 // Runs the application up to Review; submits only when dryRun is false. Returns
-// {stop: 'submitted'|'review'|'blocked'|'needs_you'|'explored', step, reason?, fields?, trail}.
+// {stop: 'submitted'|'review'|'blocked'|'needs_you'|'expired'|'explored', step, reason?, fields?, trail}.
 // explore: on a step with no filler yet, return its fields instead of a 'blocked' stop (development aid).
 // draft(question): an answer to an open question, or null (see OPEN_QUESTION).
 export async function applyWorkday({ page, job, profile, resumePath, db, gmail, dryRun = true, explore = false, draft = null, shot = async () => {}, log = () => {} }) {
@@ -1072,7 +1083,7 @@ export async function applyWorkday({ page, job, profile, resumePath, db, gmail, 
   const usable = (a) => a && (a.state === 'active' || a.state === 'unverified');
   // Signs in (when an account exists), then opens the application. Returns where it landed, or a stop.
   const begin = async () => {
-    await openPosting(page, job.url);
+    if (!(await openPosting(page, job.url))) return { stop: 'expired', reason: 'The employer has taken the posting down' };
     if (!onPortal(page, host)) return { stop: 'blocked', reason: `The posting redirected away from ${host}` };
     // A cookie banner (Labcorp's has Accept / Decline): decline, the choice that tracks least.
     const decline = page.getByRole('button', { name: /^(decline|reject all|reject)$/i });
