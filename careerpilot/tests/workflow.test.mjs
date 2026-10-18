@@ -92,6 +92,27 @@ test('gmail sync links a confirmation, transitions the application and records e
   assert.equal((await one(db, 'SELECT needs_review FROM emails WHERE id = ?', ['m2'])).needs_review, 1);
 });
 
+test('Workday mail changes a status only from @myworkday.com; a domain merely named like the tenant is reviewed', async () => {
+  const db = await openDb({ url: ':memory:' });
+  // The tenant ("lnwx") is not the company's name, as with Light & Wonder's lnw portal.
+  const { id } = await upsertJob(db, { url: 'https://lnwx.wd5.myworkdayjobs.com/jobs/job/B/Data-Analyst_R100001', title: 'Data Analyst', company: 'Light & Wonderex',
+    location: 'Bengaluru', description: 'Freshers' }, { source: 'workday', settings });
+  const app = await createApplication(db, id, { method: 'portal' });
+  await transition(db, app, 'submitted', { evidence: { type: 'workday' }, at: '2026-10-20T10:00:00.000Z' });
+  const base = { threadId: 't', fromName: 'x', snippet: '', html: '', authenticated: true, date: '2026-10-20T10:00:05.000Z' };
+  const status = async () => (await one(db, 'SELECT status FROM applications WHERE id = ?', [app.id])).status;
+  // Anyone can register lnwx.xyz and authenticate mail from it: linked for review, never acted on.
+  const fake = await processMessage(db, { ...base, id: 'f1', fromAddr: 'workday@lnwx.xyz', subject: 'Update',
+    text: 'We will not be moving forward with your application for Data Analyst.' }, settings, { ourThreadIds: new Set() });
+  assert.equal(fake.transitioned, false);
+  assert.equal(fake.review, true);
+  assert.equal(await status(), 'submitted');
+  const real = await processMessage(db, { ...base, id: 'r1', fromAddr: 'lnwx@myworkday.com', subject: 'Thank you for applying',
+    text: 'Thank you for applying for the Data Analyst position.' }, settings, { ourThreadIds: new Set() });
+  assert.equal(real.transitioned, true);
+  assert.equal(await status(), 'confirmed');
+});
+
 test('a confirmation for an application CareerPilot did not make is not tracked, even at a company where it applied', async () => {
   const db = await openDb({ url: ':memory:' });
   const { id } = await upsertJob(db, { url: 'https://jobs.lever.co/foo/1', title: 'Junior Data Analyst', company: 'Foo Labs', location: 'Bengaluru', description: 'Freshers' },

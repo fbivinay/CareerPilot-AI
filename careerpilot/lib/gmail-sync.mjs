@@ -55,7 +55,8 @@ function samePosting(job, stated) {
 // applications it is the one named by requisition id or exact title, the only one, or, for mail that
 // names neither (HPE's "Thank you for your online submission"), the one submitted just before it arrived.
 // Mail from Workday under another name of the employer (workday@sciplay.com for Light & Wonder's lnw
-// portal) needs the exact title and a submission just before it.
+// portal) needs the exact title and a submission just before it. Linking is not trust: a status changes
+// on its own only for mail from @myworkday.com or the company's own domain (see processMessage).
 const SUBMITTED = new Set(['submitted', 'confirmed', 'assessment', 'interview', 'offer', 'rejected']);
 const tenantOf = (url) => { const h = host(url) ?? ''; return /\.myworkdayjobs\.com$/i.test(h) ? h.split('.')[0].toLowerCase() : null; };
 const reqIdOf = (url) => { const m = /_([a-z]*-?\d[\w-]*)\/?$/i.exec(url ?? ''); return m && m[1].length >= 5 ? m[1].toLowerCase() : null; };
@@ -174,8 +175,9 @@ export async function processMessage(db, msg, settings, { ourThreadIds }) {
       // Status changes only from mail we can trust: a reply in a thread we started, or mail that passed
       // Gmail's DMARC/DKIM check and comes from a hiring platform or the company's own domain. Offers
       // are always confirmed by the candidate.
-      const trusted = link.how === 'thread' || (msg.authenticated && (platformSender(msg.fromAddr) || /^workday/.test(link.how)
-        || domainMatchesCompany(msg.fromAddr, app.company ?? link.company ?? '')));
+      // (Workday mail from @myworkday.com is a platform sender. Mail linked through a domain merely named like
+      // a tenant or brand — workday@sciplay.com — is linked, but only reviewed: anyone can register such a domain.)
+      const trusted = link.how === 'thread' || (msg.authenticated && (platformSender(msg.fromAddr) || domainMatchesCompany(msg.fromAddr, app.company ?? link.company ?? '')));
       if (trusted && target !== 'offer' && cls.confidence >= AUTO_CONFIDENCE && !link.ambiguous) {
         result.transitioned = await transition(db, app, target, {
           evidence: { type: 'email', emailId: msg.id, threadId: msg.threadId, subject: msg.subject, from: msg.fromAddr },
