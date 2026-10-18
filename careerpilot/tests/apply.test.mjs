@@ -305,6 +305,9 @@ test('Barclays, Mastercard, Maersk, ICF, US Bank, Mobility, PwC and RELX questio
     { profile, answers, job: { company: 'Fractal', title: 'Data Scientist (Computer Vision)' }, inIndia: true });
   assert.equal(best(['Data Engineer', 'Data Scientist', 'ML Engineer'], role.option), 1);
   assert.equal(best(['I am an Intern', 'I am an Apprentice', 'I am a Fresher', 'I am an Experienced Professional'], role.option), 2);
+  const where = (label) => answerFor({ label, kind: 'dropdown', required: true }, { profile: { ...profile, location: 'Bengaluru, Karnataka' }, answers, job: { company: 'Fractal' } });
+  assert.equal(best(['Pune', 'Chennai', 'Bengaluru'], where('What is your Location Preference 1?').option), 2);
+  assert.equal(where('What is your Location Preference 2?'), undefined);
   // TransUnion's "working experience" and MSD's AI questions.
   assert.equal(best(['0 - 2 years', '3 - 4 years'], ask('What is the total number years of working experience, excluding internships?', 'dropdown', 'TransUnion').option), 0);
   Object.assign(answers, { allow_ai_screening: true, consider_for_other_roles: true });

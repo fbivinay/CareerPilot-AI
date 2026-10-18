@@ -1190,7 +1190,8 @@ const QUESTION_RULES = [
   [/^local (family|last) name$|^local surname$/i, (c) => (c.answers.legal_family_name ? { text: c.answers.legal_family_name } : undefined)],
   [/^(current )?city( - local)?$/i, (c) => (c.profile.location ? { text: String(c.profile.location).split(',')[0].trim() } : undefined)],
   [/^(current )?location$/i, (c) => (c.profile.location ? { text: c.profile.location } : undefined)],
-  [/(desired|preferred) (work |job )?location/i, (c) => ({ option: [new RegExp(`\\b(${escapeRe(String(c.profile.location ?? '').split(',')[0])}|bengaluru|bangalore)\\b`, 'i')] })],
+  // The first preference only (Fractal: "Location Preference 1"); a second or third is the candidate's to name.
+  [/(desired|preferred) (work |job )?location|\blocation preference( 1)?\b(?! ?[2-9])/i, (c) => ({ option: [new RegExp(`\\b(${escapeRe(String(c.profile.location ?? '').split(',')[0])}|bengaluru|bangalore)\\b`, 'i')] })],
   // The profile's own links, wherever a form asks again (Artefact repeats LinkedIn and Website).
   [/^linked ?in( profile| url)?$/i, (c) => (c.profile.links?.linkedin ? { text: c.profile.links.linkedin } : undefined)],
   [/^github( profile| url)?$/i, (c) => (c.profile.links?.github ? { text: c.profile.links.github } : undefined)],
@@ -1332,8 +1333,9 @@ async function applicationQuestions(page, ctx) {
 // A field asking for the candidate's photo (Mobility Global's identity check): their own photo, uploaded
 // once. True when the step now holds it. ($$eval is Playwright's in-page query, not a string eval.)
 async function uploadPhoto(page, photoPath) {
+  // A questionnaire's label is rich text, not a <label> (Mobility Global).
   const i = await page.$$eval('[data-automation-id^="formField-"]', (gs) => gs.findIndex((g) =>
-    /\bphoto/i.test(g.querySelector('label, legend')?.innerText ?? '') && g.querySelector('input[type=file]')));
+    /\bphoto/i.test(g.querySelector('label, legend, [data-automation-id="richText"]')?.innerText ?? '') && g.querySelector('input[type=file]')));
   if (i < 0) return false;
   const group = page.locator('[data-automation-id^="formField-"]').nth(i);
   const file = photoPath.split(/[\\/]/).pop();
