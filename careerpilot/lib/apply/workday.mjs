@@ -1287,6 +1287,19 @@ async function applicationQuestions(page, ctx) {
   return unknown.size ? { filled, stop: 'blocked', reason: `Needs your answer: ${[...unknown.values()].map((u) => `"${u.slice(0, 300)}"`).join('; ')}` } : { filled };
 }
 
+// A field asking for the candidate's photo (Mobility Global's identity check): their own photo, uploaded
+// once. True when the step now holds it. ($$eval is Playwright's in-page query, not a string eval.)
+async function uploadPhoto(page, photoPath) {
+  const i = await page.$$eval('[data-automation-id^="formField-"]', (gs) => gs.findIndex((g) =>
+    /\bphoto/i.test(g.querySelector('label, legend')?.innerText ?? '') && g.querySelector('input[type=file]')));
+  if (i < 0) return false;
+  const group = page.locator('[data-automation-id^="formField-"]').nth(i);
+  const file = photoPath.split(/[\\/]/).pop();
+  if (await group.getByText(file, { exact: true }).count()) return true;
+  await group.locator('input[type=file]').first().setInputFiles(photoPath);
+  return group.getByText(/successfully uploaded/i).first().waitFor({ timeout: 60000 }).then(() => true, () => false);
+}
+
 const STEPS = [
   [/my information/i, myInformation],
   [/my experience/i, myExperience],
@@ -1312,7 +1325,7 @@ export async function askContext(db, job, profile) {
 // {stop: 'submitted'|'review'|'blocked'|'needs_you'|'expired'|'explored', step, reason?, fields?, trail}.
 // explore: on a step with no filler yet, return its fields instead of a 'blocked' stop (development aid).
 // draft(question): an answer to an open question, or null (see OPEN_QUESTION).
-export async function applyWorkday({ page, job, profile, resumePath, db, gmail, dryRun = true, explore = false, draft = null, shot = async () => {}, log = () => {} }) {
+export async function applyWorkday({ page, job, profile, resumePath, photoPath = null, db, gmail, dryRun = true, explore = false, draft = null, shot = async () => {}, log = () => {} }) {
   const host = portalHost(job.url);
   const answers = profile.answers ?? {};
   const trail = [];
@@ -1393,6 +1406,7 @@ export async function applyWorkday({ page, job, profile, resumePath, db, gmail, 
         : { stop: 'blocked', step, reason: `The "${step}" step is not automated yet`, trail };
     }
     const result = await fill(page, { profile, answers, job, host, resumePath, inIndia, draft, appliedHere });
+    if (photoPath && (await uploadPhoto(page, photoPath))) result.photo = true;
     trail.push({ step, ...result });
     await shot(`filled-${step}`);
     if (result.stop) return { ...result, step, trail };

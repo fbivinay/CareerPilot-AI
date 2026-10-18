@@ -5,7 +5,7 @@
 //                 candidate's answers change (answersKey), never on every run
 //   needs_you  -> 'blocked' too (a CAPTCHA): the candidate submits that one themselves
 import { createHash } from 'node:crypto';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { all, audit, kvGet, kvSet, now, one } from '../db.mjs';
@@ -46,6 +46,10 @@ export async function autoApply(db, settings, { launch, submit = false, limit = 
   const dir = mkdtempSync(path.join(tmpdir(), 'careerpilot-'));
   const resumePath = path.join(dir, `${profile.name.split(/\s+/).join('_')}_Resume.pdf`);
   writeFileSync(resumePath, resume);
+  // The candidate's photo, for a form that requires one (Mobility Global's identity check): only on a
+  // machine where they saved it (private/, gitignored; never in CI).
+  const photo = path.resolve(import.meta.dirname, '..', '..', 'private', 'photo.jpg');
+  const photoPath = existsSync(photo) ? photo : null;
   const browser = await launch();
   try {
     for (const job of candidates) {
@@ -76,7 +80,7 @@ export async function autoApply(db, settings, { launch, submit = false, limit = 
       try {
         // Open questions are drafted only with the candidate's say-so (answers.draft_open_answers).
         const draft = profile.answers?.draft_open_answers ? (question) => draftAnswer(db, { profile, job, question }, settings) : null;
-        r = await applyWorkday({ page, job, profile, resumePath, db, gmail, dryRun: !submit, draft, shot });
+        r = await applyWorkday({ page, job, profile, resumePath, photoPath, db, gmail, dryRun: !submit, draft, shot });
       } catch (err) {
         r = { stop: 'error', reason: String(err.message).split('\n')[0].slice(0, 300) };
         await shot?.('error');
