@@ -219,6 +219,16 @@ test('AllianceBernstein, Amgen and Ashby questions follow the standing answers',
   assert.equal(ask('Expected Annual Salary Package', 'text').text, '700000'); // a number box keeps only digits
   assert.deepEqual(ask('Did you get recommended by someone we know? (recommendations are the best)', 'radio'), { yes: false });
   assert.equal(ask('Referred by (employee name)', 'text'), undefined);
+  const bms = 'Please acknowledge that the name and address you provide in your application matches exactly with the name on your Aadhaar card. If it doesn\'t, please go back to the My Information section to correct it.';
+  assert.equal(ask(bms), undefined);
+  answers.details_match_aadhaar = true;
+  assert.deepEqual(ask(bms), { yes: true });
+  // Barclays' local-script address copy.
+  const local = (label) => answerFor({ label, kind: 'text', required: true }, { profile: { ...profile, location: 'Bengaluru, Karnataka' },
+    answers: { address_line1: 'Central Street' }, job: { company: 'Barclays' }, inIndia: true });
+  assert.equal(local('Address Line 1 - Local').text, 'Central Street');
+  assert.equal(local('City - Local').text, 'Bengaluru');
+  assert.equal(local('Current location').text, 'Bengaluru, Karnataka');
   const amgen = ['Other', 'High School Degree / Diploma / A-Levels / GED', 'Bachelor’s / Undergraduate Degree (3-4 year degree equivalent e.g., BA, BS, LLB, etc.)',
     'Master’s / Graduate Degree (1-2 year degree equivalent, e.g., MA, MS, MBA, etc.)'];
   assert.equal(best(amgen, degreeWants('MSc in Big Data Analytics')), 3);

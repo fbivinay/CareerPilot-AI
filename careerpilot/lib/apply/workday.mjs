@@ -871,6 +871,8 @@ const QUESTION_RULES = [
   [/\b(cet|central european( time)?)\b.{0,20}\b(shift|hours)\b/i, (c) => yes(c.answers.willing_cet_shift)],
   [/\bwilling (and able )?to travel\b|\btravel\b.{0,40}\b(required|requirements|as needed)\b/i, (c) => yes(c.answers.willing_to_travel)],
   [/\bverification of (your )?ident\w*|\bverify (your )?identity\b|\bproof of identity\b/i, (c) => yes(c.answers.can_verify_identity)],
+  // The name and address given match the candidate's Aadhaar card (their answer of 2026-10-18; BMS).
+  [/\b(name|address)\b.{0,80}\bmatch\w*\b.{0,60}\b(aadhaa?r)\b/i, (c) => yes(c.answers.details_match_aadhaar)],
   // Texts about the application itself, not marketing (that rule comes later and stays "no").
   [/\b(sms|text messages?)\b.{0,80}\b(application|candidate|recruit\w*|interview)/i, (c) => yes(c.answers.sms_updates)],
   // No break from career or studies (the candidate's answer): no gaps, the studies filling the time.
@@ -1039,14 +1041,16 @@ const QUESTION_RULES = [
     (c) => (c.required ? { option: [/decline|not wish|prefer not|do not want|choose not|rather not|not to (self.)?identify|not disclos/i] } : undefined)],
   [/^e-?mail( address)?$/i, (c) => (c.profile.email ? { text: c.profile.email } : undefined)],
   // Where the candidate is and would work: Bengaluru per the profile (and willing to relocate).
-  [/^(current )?location$|^(current )?city$/i, (c) => (c.profile.location ? { text: c.profile.location } : undefined)],
+  // "City - Local", "Address Line 1 - Local": Workday's copy in the local script, the same text for India.
+  [/^(current )?city( - local)?$/i, (c) => (c.profile.location ? { text: String(c.profile.location).split(',')[0].trim() } : undefined)],
+  [/^(current )?location$/i, (c) => (c.profile.location ? { text: c.profile.location } : undefined)],
   [/(desired|preferred) (work |job )?location/i, (c) => ({ option: [new RegExp(`\\b(${escapeRe(String(c.profile.location ?? '').split(',')[0])}|bengaluru|bangalore)\\b`, 'i')] })],
   // The profile's own links, wherever a form asks again (Artefact repeats LinkedIn and Website).
   [/^linked ?in( profile| url)?$/i, (c) => (c.profile.links?.linkedin ? { text: c.profile.links.linkedin } : undefined)],
   [/^github( profile| url)?$/i, (c) => (c.profile.links?.github ? { text: c.profile.links.github } : undefined)],
   [/^(website|portfolio|personal (website|site))( url)?$/i, (c) => (c.profile.links?.portfolio ? { text: c.profile.links.portfolio } : undefined)],
-  [/^address line 1$|^street address|^address$/i, (c) => (c.answers.address_line1 ? { text: c.answers.address_line1 } : undefined)],
-  [/^address line 2$/i, (c) => (c.answers.address_line2 ? { text: c.answers.address_line2 } : undefined)],
+  [/^address line 1( - local)?$|^street address|^address$/i, (c) => (c.answers.address_line1 ? { text: c.answers.address_line1 } : undefined)],
+  [/^address line 2( - local)?$/i, (c) => (c.answers.address_line2 ? { text: c.answers.address_line2 } : undefined)],
   [/postal code|\bpin ?code\b|\bzip\b/i, (c) => (c.answers.postal_code ? { text: String(c.answers.postal_code) } : undefined)],
 ];
 
