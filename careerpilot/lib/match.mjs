@@ -2,7 +2,7 @@
 // compensation. Every decision carries a human-readable reason.
 
 // Bump when rules change so stored jobs are re-evaluated on the next run.
-export const RULES_VERSION = 7;
+export const RULES_VERSION = 8;
 
 // An AI fit score below this excludes a rule-qualified job (shown with its reason, reversible in the dashboard).
 export const AI_EXCLUDE_BELOW = 25;
@@ -43,7 +43,7 @@ const EXCLUDED_TITLES = [
   [/\b(sales|account (executive|manager)|business development|marketing manager|recruiter|talent acquisition|hr\b|customer success|support engineer|devrel|developer advocate)\b/, 'Not a target role family'],
 ];
 
-const SENIOR_TITLE = /\b(senior|sr\.?|lead|leader|leadership|principal|staff|manager|head|director|architect|vp|vice president|chief|expert|experienced|iii|iv)\b/;
+const SENIOR_TITLE = /\b(senior|sr\.?|lead|leader|leadership|principal|staff|manager|head|director|dir|architect|vp|avp|svp|evp|vice president|chief|expert|experienced|iii|iv)\b/;
 const MID_TITLE = /\b(ii|2|mid[\s-]?level)\b/;
 // Strong entry-level signals override seniority words; 'associate' alone does not ("Senior Associate" is 2-5 years).
 const JUNIOR_TITLE = /\b(junior|jr\.?|intern(ship)?|trainee|graduate|new grad|fresher|entry[\s-]?level|apprentice|campus|early career|0-1|0 ?- ?2)\b/;
