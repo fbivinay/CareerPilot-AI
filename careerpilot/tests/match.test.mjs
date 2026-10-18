@@ -104,6 +104,8 @@ test('exclusions keep a reason', () => {
 
 test('seniority beats "associate"; QA roles excluded; missing JD lowers score', () => {
   assert.match(evaluateJob(job({ title: 'Data Science - Senior Associate' }), S).exclusion_reason, /Senior/);
+  assert.match(evaluateJob(job({ title: 'IN_Senior Associate_ ML Engineer_GCC_Advisory_Bangalore' }), S).exclusion_reason, /Senior/);
+  assert.match(evaluateJob(job({ title: 'IN_Manager_GenAI and Agentic AI Engineer _GCC_Advisory_Bangalore' }), S).exclusion_reason, /Senior/);
   assert.equal(evaluateJob(job({ title: 'Associate Data Scientist', description: 'Freshers' }), S).status, 'qualified');
   assert.match(evaluateJob(job({ title: 'GenAI QA Automation Engineer' }), S).exclusion_reason, /QA/);
   const withJd = evaluateJob(job({ description: 'Freshers welcome' }), S).score;

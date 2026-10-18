@@ -2,7 +2,7 @@
 // compensation. Every decision carries a human-readable reason.
 
 // Bump when rules change so stored jobs are re-evaluated on the next run.
-export const RULES_VERSION = 6;
+export const RULES_VERSION = 7;
 
 // An AI fit score below this excludes a rule-qualified job (shown with its reason, reversible in the dashboard).
 export const AI_EXCLUDE_BELOW = 25;
@@ -51,7 +51,8 @@ const ASSOCIATE_TITLE = /\b(associate|analyst i|engineer i|scientist i)\b/;
 // "Trainee" roles in India are usually full-time entry jobs, so they are judged on CTC, not stipend.
 const INTERN_TITLE = /\b(intern(ship)?|apprentice(ship)?|co-?op)\b/;
 
-const lower = (s) => String(s ?? '').toLowerCase();
+// Some ATSs join title words with underscores ("IN_Senior Associate_..."), and \b does not split on them.
+const lower = (s) => String(s ?? '').toLowerCase().replace(/_/g, ' ');
 
 export function roleFamily(title) {
   const t = lower(title);
