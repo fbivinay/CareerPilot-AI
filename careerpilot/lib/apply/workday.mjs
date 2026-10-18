@@ -804,8 +804,11 @@ function restrictions(c) {
 // [pattern on the question, answer(ctx)]: the first matching pattern decides; undefined = not known.
 const QUESTION_RULES = [
   [/\b(at least|over|above|older than)\b.{0,15}\b18\b|\b18 years\b|age of 18|legal age/i, (c) => yes(c.answers.age_18_or_older)],
+  // A work or residency permit is for foreign nationals: a citizen of the job's country needs neither.
+  [/\b(work|residency|residence) permit\b/i, (c) => (c.inIndia && /^india/i.test(c.answers.citizenship ?? '')
+    ? { option: [/not applicable|^n\/?a$/i, /^yes\b/i] } : undefined)],
   [/\bsponsor|\b(require|need) (a )?visa\b/i, (c) => (c.inIndia ? yes(c.answers.needs_visa_sponsorship) : undefined)],
-  [/(legal|lawful)\w* (right|authori[sz]\w*|eligib\w*|permi\w*) to work|authori[sz]ed to work|work authori[sz]ation|eligible to work|right to work|\bwork permit\b/i,
+  [/(legal|lawful)\w* (right|authori[sz]\w*|eligib\w*|permi\w*) to work|authori[sz]ed to work|work authori[sz]ation|eligible to work|right to work/i,
     (c) => (c.inIndia ? yes(c.answers.indian_work_authorization) : undefined)],
   [/relocat/i, (c) => yes(c.answers.willing_to_relocate)],
   [/reasonable (adjustment|accommodation)s?|accommodations? (during|in|for) the (recruit|interview|hiring|application)/i, (c) => yes(c.answers.needs_accommodation)],
@@ -833,7 +836,7 @@ const QUESTION_RULES = [
   }],
   // Letting the employer use AI tools on the application (allowed by the candidate on 2026-10-18); one
   // about future openings also needs their wish to be considered for other roles.
-  [/\b(ai|artificial intelligence)\b\)?.{0,15}\btools?\b/i, (c) => {
+  [/\b(ai|artificial intelligence)\b\)?.{0,15}\btools?\b|\btools? such as ai\b/i, (c) => {
     const facts = [yes(c.answers.allow_ai_screening)?.yes];
     if (/future (job )?(openings|roles|positions|opportunities)|other (positions|roles)/i.test(c.label)) facts.push(yes(c.answers.consider_for_other_roles)?.yes);
     return facts.includes(undefined) ? undefined : { yes: facts.every(Boolean) };
@@ -852,7 +855,7 @@ const QUESTION_RULES = [
   [/countries in which you (currently )?hold citizenship|select (all )?(the )?countr(y|ies) of (your )?citizenship/i,
     (c) => (c.answers.citizenship ? { option: [new RegExp(`^${escapeRe(c.answers.citizenship)}$`, 'i')], search: c.answers.citizenship } : undefined)],
   [/citizen or national of the united states|permanent resident|export control/i, (c) => yes(c.answers.us_person)],
-  [/^(primary |country of )?(citizenship|nationality)\b/i, (c) => (c.answers.citizenship
+  [/^(what is your )?(primary |country of )?(citizenship|nationality)\b|\bprimary nationality\b/i, (c) => (c.answers.citizenship
     ? { option: [new RegExp(`^${escapeRe(c.answers.citizenship)}`, 'i'), /^indian?$/i], search: c.answers.citizenship } : undefined)],
   // "Do you have an Indian nationality?" / "Are you a US citizen?": whether it is the candidate's own.
   [/\bdo you (have|hold) an? \w+ (nationality|citizenship)\b|\bare you an? \w+ (national|citizen)\b/i, (c) => {
@@ -949,7 +952,7 @@ const QUESTION_RULES = [
     (c) => (c.kind === 'dropdown' || c.kind === 'radio' ? { option: [/^(no|i do not|i don't|do not|disagree|decline)\b/i] } : undefined)],
   // Also a required "I have read the Privacy Notice" (Dentsu), and a required consent to the tool the employer
   // runs its hiring process with (Logitech's automated interview scheduling).
-  [/\b(consent|agree|acknowledge|accept)\b.*\b(terms|conditions|privacy|policy|notice)\b|\b(terms|privacy)\b.*\b(consent|agree|accept)|\bhave read\b.*\b(privacy|terms|notice|policy)\b|automated (interview )?scheduling|scheduling (system|tool|assistant)/i,
+  [/\b(consent|agree|acknowledge|accept)\b.*\b(terms|conditions|privacy|policy|notice)\b|\b(terms|privacy)\b.*\b(consent|agree|accept)|\b(have read|reading|read and understood)\b.*\b(privacy|terms|notice|policy)\b|automated (interview )?scheduling|scheduling (system|tool|assistant)/i,
     (c) => (c.required && ['checkbox', 'dropdown', 'radio'].includes(c.kind) ? { yes: true } : undefined)],
   // Voluntary self-identification: declining is a true answer and the only one CareerPilot gives.
   [/\b(ethnic|race|racial|veteran|disabilit|hispanic|latino|sexual orientation|pronoun)/i,
@@ -995,7 +998,7 @@ async function tick(box) {
 async function applyAnswer(page, q, a) {
   // Yes/no options also come worded as consent ("I agree" / "I do not agree").
   const wantsYesNo = a.yes === undefined ? null
-    : [a.yes ? /^(yes|i agree|agree|i consent|i accept|accept|i acknowledge|acknowledge)\b/i : /^(no|i do not|i don't|do not|disagree|decline|i will not)\b/i];
+    : [a.yes ? /^(yes|i agree|agree|i consent|i accept|accept|i acknowledge|acknowledge|opt-?in)\b/i : /^(no|i do not|i don't|do not|disagree|decline|i will not|opt-?out)\b/i];
   switch (q.kind) {
     case 'dropdown': return choose(page, q.field, wantsYesNo ?? a.option ?? [new RegExp(`^${escapeRe(a.text ?? '')}$`, 'i')]);
     case 'date': return { chosen: (await setDate(page, page, q.field, a.date)) ? 'date set' : undefined };

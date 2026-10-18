@@ -40,6 +40,16 @@ test('employer questions are answered only from the profile, in the unit they as
     { profile, answers: { ...answers, consider_if_pay_below_expectation: true }, job: { company: 'Lnw' }, inIndia: true }), { yes: true });
   assert.deepEqual(ask('Did you work for KPMG?'), { yes: false });
   assert.deepEqual(ask('Do you require a visa to work in the country where this role is based?'), { yes: false });
+  const permit = answerFor({ label: 'Do you possess a valid residency permit in the country for which the position resides?', kind: 'dropdown', required: true },
+    { profile, answers: { citizenship: 'India' }, job: { company: 'Hpe' }, inIndia: true });
+  // Preference order, as the engine's best() applies it.
+  const first = (wants, options) => { for (const re of wants) { const o = options.find((t) => re.test(t)); if (o) return o; } return null; };
+  assert.equal(first(permit.option, ['Yes', 'No', 'Not Applicable']), 'Not Applicable');
+  assert.equal(first(permit.option, ['Yes', 'No']), 'Yes');
+  assert.ok(answerFor({ label: 'What is your Primary Nationality?', kind: 'prompt', required: true }, { profile, answers: { citizenship: 'India' }, job: { company: 'Rbs' } }).option[0].test('India'));
+  assert.deepEqual(ask('Ticking in confirmation of reception and reading the privacy notice.', 'checkbox'), { yes: true });
+  assert.deepEqual(answerFor({ label: 'Visa may use automated tools such as AI to support review of your application for this role, and if applicable, match you with relevant existing and future open roles.', kind: 'dropdown', required: true },
+    { profile, answers: { allow_ai_screening: true, consider_for_other_roles: true }, job: { company: 'Visa' } }), { yes: true });
   assert.deepEqual(answerFor({ label: 'Do you have an Indian nationality?', kind: 'radio', required: true }, { profile, answers: { citizenship: 'India' }, job: { company: 'Rbs' } }), { yes: true });
   assert.deepEqual(answerFor({ label: 'Are you a US citizen?', kind: 'radio', required: true }, { profile, answers: { citizenship: 'India' }, job: { company: 'X' } }), { yes: false });
   assert.deepEqual(ask('Have you been made redundant by NatWest Group or any of its subsidiary companies within the last 12 months?'), { yes: false });
