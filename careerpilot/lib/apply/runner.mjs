@@ -8,9 +8,11 @@ import { createHash } from 'node:crypto';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { all, audit, kvGet, kvSet, now, one } from '../db.mjs';
+import { all, audit, kvGet, kvSet, now, one, run } from '../db.mjs';
 import { getApplication, transition } from '../applications.mjs';
 import { draftAnswer } from '../compose.mjs';
+import { applyEvaluation } from '../evaluate.mjs';
+import { fetchJdViaKnownApi } from '../../../browser-extract.mjs';
 import { loadProfile, loadResumePdf } from '../profile.mjs';
 import { log } from '../log.mjs';
 import { applyWorkday, portalHost } from './workday.mjs';
@@ -30,7 +32,8 @@ export async function autoApply(db, settings, { launch, submit = false, limit = 
 
   const sentToday = Number((await one(db, `SELECT count(*) n FROM applications WHERE method = 'portal' AND submitted_at >= ?`, [todayIST()])).n);
   const budget = Math.min(limit, Math.max(0, settings.limits.portalApplicationsPerDay - sentToday));
-  const stats = { considered: 0, attempted: 0, submitted: 0, review: 0, blocked: 0, needsYou: 0, errors: 0, skippedCompanyCap: 0, budget };
+  const stats = { considered: 0, attempted: 0, submitted: 0, review: 0, blocked: 0, needsYou: 0, errors: 0, skippedCompanyCap: 0,
+    skippedNoDescription: 0, requalifiedOut: 0, budget };
   if (!budget) return { ...stats, skipped: 'daily limit reached' };
 
   const candidates = await all(db, `SELECT a.id app_id, a.status app_status, a.blocked_reason, j.* FROM applications a JOIN jobs j ON j.id = a.job_id
@@ -55,6 +58,17 @@ export async function autoApply(db, settings, { launch, submit = false, limit = 
       if (!retry && last && last.answersKey === answersKey && ['blocked', 'needs_you', 'unconfirmed'].includes(last.stop)) continue;
       const key = companyKey(job.company);
       if ((applied.get(key) ?? 0) >= PER_COMPANY) { stats.skippedCompanyCap++; continue; }
+      // Workday listings carry no description, so such a job was qualified with its experience and pay
+      // requirements unchecked: read the description from Workday's API and judge the job again first.
+      if (!job.description) {
+        const jd = (await fetchJdViaKnownApi(job.url).catch(() => null))?.text;
+        if (!jd) { stats.skippedNoDescription++; continue; }
+        await run(db, 'UPDATE jobs SET description = ? WHERE id = ?', [jd, job.id]);
+        await applyEvaluation(db, { ...job, description: jd }, settings);
+        const judged = await one(db, 'SELECT status, score FROM jobs WHERE id = ?', [job.id]);
+        if (judged.status !== 'qualified' || judged.score < settings.matching.autoActionScore) { stats.requalifiedOut++; continue; }
+        job.description = jd;
+      }
 
       stats.attempted++;
       const context = await browser.newContext({ viewport: { width: 1280, height: 1000 }, locale: 'en-US' });

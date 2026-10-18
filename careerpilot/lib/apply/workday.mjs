@@ -239,8 +239,9 @@ async function setText(page, field, value, scope = page) {
   const isArea = (await area.count()) > 0;
   const input = isArea ? area.first() : group.locator('input:not([type="checkbox"]):not([type="radio"]):not([type="file"])').first();
   if (value == null || value === '' || !(await input.count())) return false;
-  if (isArea) {
-    // Workday's text areas only register real typing: fill() changes the box but not the form's state.
+  if (isArea || /^\d+([.,]\d+)?$/.test(String(value))) {
+    // Workday's text areas and number boxes only register real typing: fill() changes the box but not the
+    // form's state (PwC's "current annual fixed compensation" stayed "required" after fill('0')).
     await input.click();
     await input.press('Control+A');
     await input.press('Delete');
@@ -342,7 +343,7 @@ async function pick(page, field, search, wants, scope = page) {
 // Website", "Company Website"). Job-board names that merely contain "career" (Career Builder) never match.
 const escapeRe = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const sourceWants = (employerNames) => [
-  new RegExp(`^(${employerNames.filter(Boolean).map(escapeRe).join('|')})\\b.*\\b(web ?site|careers?( site| page)?)$`, 'i'),
+  new RegExp(`^(${employerNames.filter(Boolean).map(escapeRe).join('|')})\\b.*\\b(web ?site|careers?( site| page)?|job board)$`, 'i'),
   /^(the )?(company|corporate|employer|organi[sz]ation)('s)?( careers?)? (web)?site$/i,
   /\b(company|corporate|employer|official)\b[^,]*\b(web)?site\b/i, /\bcareers? (web ?site|site|page|portal)\b/i];
 // The employer's names as its options may say them: the company, the portal's tenant, and the Workday
@@ -594,8 +595,10 @@ async function chooseSchool(page, scope, institution) {
   const exact = await pick(page, 'school', name, same, scope);
   if (exact.chosen) return exact;
   let notListed = {};
-  for (const q of ['School not in list', 'School Not Listed']) { // tenants name it either way (PwC: the second)
-    notListed = await pick(page, 'school', q, /not (in|on) (the )?list|not listed/i, scope);
+  // Workday's own entry for a school missing from its list, as tenants name it (PwC: "School Not Listed";
+  // Airbus: "Other / Autre / Sonstige / Otras"). Never a similarly named school.
+  for (const [q, want] of [['School not in list', /not (in|on) (the )?list|not listed/i], ['School Not Listed', /not listed/i], ['Other', /^other\b/i]]) {
+    notListed = await pick(page, 'school', q, want, scope);
     if (notListed.chosen) return { ...notListed, note: `"${name}" is not in Workday's list` };
   }
   return { options: notListed.options ?? exact.options };
@@ -805,8 +808,19 @@ const QUESTION_RULES = [
     return { text: `${ed.degree}, ${ed.institution}${pursuing ? ' (pursuing)' : ''}` };
   }],
   // Total work experience in years; a question about one skill or tool ("with Python") is not this one.
+  // The candidate's own field; a list of industries without it gets "Others" (Philips: Healthcare,
+  // Medtech, Automotive, Manufacturing, Others).
   [/\bindustry\b.{0,30}\bspeciali[sz]/i, (c) => (c.answers.industry_specialization
-    ? { text: c.answers.industry_specialization, option: [/\bdata\b|analytics/i, /\b(ai|artificial intelligence|machine learning)\b/i] } : undefined)],
+    ? { text: c.answers.industry_specialization, option: [/\bdata\b|analytics/i, /\b(ai|artificial intelligence|machine learning)\b/i, /^others?$/i] } : undefined)],
+  // Standing answers for internships, given by the candidate on 2026-10-18.
+  [/where will you be in your academic|academic (year|stage|standing) (at|when|during)/i, (c) => (c.answers.academic_stage_at_internship
+    ? { option: [new RegExp(`^${escapeRe(c.answers.academic_stage_at_internship)}$`, 'i')], text: c.answers.academic_stage_at_internship } : undefined)],
+  [/\bnoc\b|no objection certificate/i, (c) => yes(c.answers.can_provide_noc)],
+  [/\bin.person\b.{0,60}\b(full|entire) duration|available to (complete|work|do)\b.{0,40}\bin.person/i, (c) => yes(c.answers.available_in_person)],
+  [/plans? to pursue (higher|further) (education|studies)|\bhigher studies\b/i, (c) => yes(c.answers.higher_education_plans)],
+  [/\b(active|pending) backlogs?\b|\bbacklogs? in (your|the) (current )?(degree|course|program)|\barrears?\b/i, (c) => (c.answers.active_backlogs == null ? undefined
+    : c.answers.active_backlogs ? undefined // how many, and when they clear, is the candidate's to say
+      : { option: [/^no\b|^none\b|\bno active\b|^0\b/i], text: '0' })],
   // "Do you hold the certifications outlined in the job description?" when the description names none.
   [/certifications?\b.{0,60}\b(outlined|listed|required|mentioned|specified) in the job description/i, (c) =>
     (/\b(certif\w*|clearance)\b/i.test(c.job.description ?? '') ? undefined
@@ -831,7 +845,7 @@ const QUESTION_RULES = [
     : { text: String(c.answers.current_ctc), option: [/^0\b|not applicable|n\/a|student|fresher/i] })],
   // The candidate's own figures (₹7 LPA full-time, ₹40,000 a month for internships), converted to the
   // unit the question names; with no unit named, the unit is written out.
-  [/\bexpected\b.{0,10}\b(ctc|salary|compensation|pay|stipend)\b|\b(salary|pay|compensation|ctc) expectations?\b/i, (c) => {
+  [/\b(expected|desired)\b.{0,20}\b(ctc|salary|compensation|pay|stipend)\b|\b(salary|pay|compensation|ctc) expectations?\b/i, (c) => {
     const internship = c.job.employment_type === 'internship';
     const stipend = c.answers.expected_internship_stipend_monthly;
     const yearly = internship ? (stipend == null ? null : stipend * 12) : c.answers.expected_ctc;
@@ -940,6 +954,7 @@ async function applyAnswer(page, q, a) {
 // (ctx.draft, the candidate's choice of 2026-10-18); a disclosure never does: only the candidate knows it.
 const OPEN_QUESTION = /\b(why|reasons?|motivat\w*|interest(s|ed)?|tell us|describe|explain|what (excites|attracts|appeals|makes you))\b/i;
 const DISCLOSURE = /conflict|disclos|relationship|relative|criminal|convict|offen[cs]e|lawsuit|litigation|terminat|dismiss|disciplin|visa|citizen|health|disabilit/i;
+const offered = (r) => (r.options ? ` (offered: ${r.options.filter((o) => !/^select one$/i.test(o)).slice(0, 8).join(', ')})` : '');
 
 // Answers every question it can. Some answers reveal follow-up questions, so the page is read again
 // until nothing new appears.
@@ -960,12 +975,14 @@ async function applicationQuestions(page, ctx) {
         if (text) { a = { text }; drafted.set(q.field, a); }
       }
       if (a === undefined) {
-        if (q.required) unknown.set(q.field, q.label);
+        // The choices on offer (nothing is picked), so the candidate can answer from the Pending page.
+        const r = q.required && (q.kind === 'dropdown' || q.kind === 'radio') ? await applyAnswer(page, q, { option: [] }) : {};
+        if (q.required) unknown.set(q.field, `${q.label}${offered(r)}`);
         continue;
       }
       const r = await applyAnswer(page, q, a);
       filled.push({ question: q.label.slice(0, 120), answer: r.chosen ?? null });
-      if (q.required && !r.chosen) unknown.set(q.field, `${q.label}${r.options ? ` (offered: ${r.options.filter((o) => !/^select one$/i.test(o)).slice(0, 8).join(', ')})` : ''}`);
+      if (q.required && !r.chosen) unknown.set(q.field, `${q.label}${offered(r)}`);
     }
     await page.waitForTimeout(1500);
   }
@@ -977,7 +994,7 @@ async function applicationQuestions(page, ctx) {
     const a = drafted.get(q.field) ?? answerFor(q, ctx);
     if (a !== undefined) { debug('re-answering', q.label.slice(0, 60)); await applyAnswer(page, q, a); }
   }
-  return unknown.size ? { filled, stop: 'blocked', reason: `Needs your answer: ${[...unknown.values()].map((u) => `"${u.slice(0, 200)}"`).join('; ')}` } : { filled };
+  return unknown.size ? { filled, stop: 'blocked', reason: `Needs your answer: ${[...unknown.values()].map((u) => `"${u.slice(0, 300)}"`).join('; ')}` } : { filled };
 }
 
 const STEPS = [

@@ -113,6 +113,20 @@ test('restrictions, consents and pay questions follow the standing answers', asy
   assert.ok(soon.test('Within 60 days') && soon.test('1-2 months') && !soon.test('Within 30 days') && !soon.test('Immediately'));
 });
 
+test('internship questions use the standing answers, with the options the form offers', async () => {
+  const { answerFor } = await import('../lib/apply/workday.mjs');
+  const answers = { academic_stage_at_internship: 'Final year', can_provide_noc: true, available_in_person: true, higher_education_plans: false,
+    active_backlogs: 0, industry_specialization: 'Data analytics and AI' };
+  const ask = (label) => answerFor({ label, kind: 'dropdown', required: true }, { profile: { name: 'A' }, answers, job: { company: 'Airbus' } });
+  const pick = (label, options) => options.find((o) => ask(label).option.some((re) => re.test(o)));
+  assert.equal(pick('At the start of your internship, where will you be in your academic journey?', ['Final year', 'Pre-Final year', 'Already graduated']), 'Final year');
+  assert.deepEqual(ask('Can you provide a mandatory NOC [No objection certificate] from your college/university for the entire duration of this internship?'), { yes: true });
+  assert.deepEqual(ask('Are you available to complete this internship in-person for the full duration as specified in the Job Description (JD)?'), { yes: true });
+  assert.deepEqual(ask('Do you have plans to pursue higher education?'), { yes: false });
+  assert.equal(pick('Do you have any active backlogs in your current degree program?', ['1 active backlog', 'No active backlogs']), 'No active backlogs');
+  assert.equal(pick('What Industry do you specialize in ?', ['Healthcare', 'Medtech', 'Automotive', 'Manufacturing', 'Others']), 'Others');
+});
+
 test('an open question is drafted from the job and profile only; a draft with an unknown number is dropped', async () => {
   const { openDb } = await import('../lib/db.mjs');
   const { draftAnswer } = await import('../lib/compose.mjs');
