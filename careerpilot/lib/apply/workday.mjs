@@ -682,7 +682,8 @@ async function addSkills(page, profile, description, max = 8) {
   for (const skill of skills) {
     const have = await chips();
     if (have.length >= max) break;
-    const same = (t) => t.toLowerCase() === skill.toLowerCase();
+    // The same skill, also with Workday's qualifier: "Python (Programming Language)" for "Python".
+    const same = (t) => [t, t.replace(/\s*\([^)]*\)\s*$/, '')].some((x) => x.trim().toLowerCase() === skill.toLowerCase());
     if (have.some(same)) continue;
     await closePopup(page);
     try { await centerClick(field, { timeout: 5000 }); } catch { break; } // keep the skills added so far
