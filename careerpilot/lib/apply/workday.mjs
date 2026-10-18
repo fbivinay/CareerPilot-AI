@@ -1198,6 +1198,11 @@ const QUESTION_RULES = [
   [/^local (family|last) name$|^local surname$/i, (c) => (c.answers.legal_family_name ? { text: c.answers.legal_family_name } : undefined)],
   [/^(current )?city( - local)?$/i, (c) => (c.profile.location ? { text: String(c.profile.location).split(',')[0].trim() } : undefined)],
   [/^(current )?location$/i, (c) => (c.profile.location ? { text: c.profile.location } : undefined)],
+  // A second or third location preference: the candidate's own order (Fractal; Bengaluru, Pune, Chennai).
+  [/\blocation preference\s*[2-9]\b/i, (c) => {
+    const city = (c.answers.location_preferences ?? [])[Number(/preference\s*([2-9])/i.exec(c.label)[1]) - 1];
+    return city ? { text: city, option: [new RegExp(`^${escapeRe(city)}\\b`, 'i')] } : undefined;
+  }],
   // The first preference only (Fractal: "Location Preference 1"); a second or third is the candidate's to name.
   [/(desired|preferred) (work |job )?location|\blocation preference( 1)?\b(?! ?[2-9])/i, (c) => ({ option: [new RegExp(`\\b(${escapeRe(String(c.profile.location ?? '').split(',')[0])}|bengaluru|bangalore)\\b`, 'i')] })],
   // The profile's own links, wherever a form asks again (Artefact repeats LinkedIn and Website).

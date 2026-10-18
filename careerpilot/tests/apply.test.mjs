@@ -308,6 +308,9 @@ test('Barclays, Mastercard, Maersk, ICF, US Bank, Mobility, PwC and RELX questio
   const where = (label) => answerFor({ label, kind: 'dropdown', required: true }, { profile: { ...profile, location: 'Bengaluru, Karnataka' }, answers, job: { company: 'Fractal' } });
   assert.equal(best(['Pune', 'Chennai', 'Bengaluru'], where('What is your Location Preference 1?').option), 2);
   assert.equal(where('What is your Location Preference 2?'), undefined);
+  answers.location_preferences = ['Bengaluru', 'Pune', 'Chennai'];
+  assert.equal(best(['Pune', 'Chennai', 'Bengaluru'], where('What is your Location Preference 2?').option), 0);
+  assert.equal(best(['Pune', 'Chennai', 'Bengaluru'], where('What is your Location Preference 3?').option), 1);
   // Family in government: the candidate's own answer, never their work history or the relatives answer.
   const govFamily = 'Have your immediate family member(s) (spouse, parent, sibling or child) or business partner(s) ever been employed by any Government?';
   assert.equal(ask(govFamily, 'dropdown', 'GE Vernova'), undefined);
