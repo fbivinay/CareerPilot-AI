@@ -64,6 +64,12 @@ test('a statement is signed only when all it says is that the answers are true',
   assert.equal(ask(promise, 'text', { may_e_sign: true }), undefined);
   assert.equal(ask('By signing below, I certify that I have never worked for Marvell.', 'text', { may_e_sign: true }), undefined);
   assert.equal(ask('Signature', 'text', { may_e_sign: true }), undefined);
+  // Accuracy plus its consequences, as a yes/no, with the standing permission (Haleon); nothing more.
+  const haleon = 'I acknowledge that my responses are accurate and complete. I acknowledge that if I make an inaccurate or incomplete representation then I will be ineligible to be considered for employment and, if inaccuracy or incompleteness is discovered after an offer is extended to me or accepted, then I may have disciplinary consequences up to and including separation of employment in accordance with local policies, procedures, or laws.';
+  assert.deepEqual(ask(haleon, 'dropdown', { may_certify_accuracy: true }), { yes: true });
+  assert.equal(ask(haleon, 'dropdown', {}), undefined);
+  assert.equal(ask(`${haleon} I agree to resolve any dispute by binding arbitration.`, 'dropdown', { may_certify_accuracy: true }), undefined);
+  assert.equal(ask('I acknowledge that my responses are accurate and complete. I acknowledge that if they are incomplete, I waive any claim and my offer may be terminated.', 'checkbox', { may_certify_accuracy: true }), undefined);
 });
 
 test('a past tie to the employer is "no" only when every tie the question names is known to be "no"', async () => {

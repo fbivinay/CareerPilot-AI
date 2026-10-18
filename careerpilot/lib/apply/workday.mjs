@@ -716,18 +716,27 @@ const lpa = (inr) => Math.round((inr / 1e5) * 100) / 100;
 // a statement with any other sentence in it (a promise, a waiver, a consent) waits for the candidate to
 // approve it (answers.custom), and a tick box or yes/no is never signed this way.
 const CERTIFIES = [
-  /^(i (hereby )?)?(certify|attest|declare|confirm|affirm) that (all )?(of )?(the )?(foregoing |above |preceding )?(information|answers|statements|responses)\b[^?]*?\b(is|are) (true|correct|accurate|complete)(,? (and )?(true|correct|accurate|complete))*( to the best of my knowledge( and belief)?)?$/i,
+  /^(i (hereby )?)?(certify|attest|declare|confirm|affirm|acknowledge)( and agree)? that (all )?(of )?(the |my )?(foregoing |above |preceding )?(information|answers|statements|responses)\b[^?]*?\b(is|are) (true|correct|accurate|complete)(,? (and )?(true|correct|accurate|complete))*( to the best of my knowledge( and belief)?)?$/i,
   /^i understand that (?!.*\b(i|me|my)\b)[^?]{1,60}? reserves the right to (inquire|verify|investigate)\b[^?]*$/i,
 ];
-function signs(c) {
-  if (!c.answers.may_e_sign || (c.kind !== 'text' && c.kind !== 'textarea')) return undefined;
-  const sentences = c.label
+// What follows if the answers are not true (answers.may_certify_accuracy, given by the candidate on
+// 2026-10-18): ineligibility, a withdrawn offer, dismissal. Never a waiver, release or further consent.
+const CONSEQUENCE = /^(?!.*\b(arbitrat|waive|release|indemnif|consent to|authori[sz]e)\w*)(i (hereby )?)?(acknowledge|understand)( and agree)? that\b.*\b(false|untrue|inaccura\w*|incomplete\w*|misleading|misrepresent\w*|omissions?|falsif\w*)\b.*\b(ineligib\w*|disqualif\w*|reject\w*|terminat\w*|dismiss\w*|rescin\w*|rescission|separation|disciplinary|eliminat\w*|revocation|removal)\b/i;
+// Whether every sentence of a statement is one the candidate has allowed CareerPilot to affirm.
+function onlySays(label, answers) {
+  const allowed = [...CERTIFIES, ...(answers.may_certify_accuracy ? [CONSEQUENCE] : [])];
+  const sentences = label
     .replace(/\b(attestation|acknowledge?ment)( and (attestation|acknowledge?ment))?( statement)?\b|\bby signing (below|this)\b,?( i hereby)?|\bsignature( and date)?\b/gi, '.')
     .split(/[.;:]/).map((s) => s.trim()).filter(Boolean);
-  if (!sentences.length || !sentences.every((s) => CERTIFIES.some((re) => re.test(s)))) return undefined;
+  return sentences.length > 0 && sentences.every((s) => allowed.some((re) => re.test(s)));
+}
+function signs(c) {
+  if (!c.answers.may_e_sign || (c.kind !== 'text' && c.kind !== 'textarea') || !onlySays(c.label, c.answers)) return undefined;
   const date = new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Asia/Kolkata' });
   return { text: /\bdate\b/i.test(c.label) ? `${c.profile.name}, ${date}` : c.profile.name };
 }
+// The same statements as a tick box or yes/no (Haleon), with the candidate's standing permission.
+const affirms = (c) => (c.answers.may_certify_accuracy && ['checkbox', 'dropdown', 'radio'].includes(c.kind) && onlySays(c.label, c.answers) ? { yes: true } : undefined);
 
 // Past ties to this employer. One question can name several ("worked here as an employee or
 // contractor"): it is "yes" when any tie it names is, "no" only when every tie it names is known to be
@@ -826,6 +835,7 @@ const QUESTION_RULES = [
   }],
   // A statement to sign, and its date (only with the candidate's permission).
   [/by signing (below|this)|attestation|i hereby attest|\bsignature\b/i, signs],
+  [/\b(acknowledge|certify|attest|declare)\b.{0,40}\b(accurate|true|correct|complete)\b/i, affirms],
   [/^date\s*:?$/i, (c) => {
     if (!c.answers.may_e_sign) return undefined;
     const [year, month, day] = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }).split('-').map(Number);
