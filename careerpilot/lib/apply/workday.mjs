@@ -531,9 +531,9 @@ const DEGREES = [
   // MSc, …)"); then the plain level some portals list ("Masters (+2 or +3 yrs)", "Master's (M.A., M.S.,
   // M.B.A.)"). Never another degree at that level: "Master of Business Administration", "Bachelor of Arts".
   [/^m\.?\s?sc\b|master of science/i, [/^master of science \(m\.?sc\)$/i, /^masters?('s)? of science\b/i, /^m\.?\s?sc\.?$/i, /^m\.?s\.?$/i,
-    /\bISCED 7\b.*\bM\.?Sc\b/i, /^masters?('s)?( degree)?( or equivalent)?(\s*\(.*\))?$/i, /^masters?('s)?( degree)?\s*\/\s*graduate( degree)?\b/i]],
+    /\bISCED 7\b.*\bM\.?Sc\b/i, /^masters?('s)?( degree)?( or equivalent( degree)?)?(\s*\(.*\))?$/i, /^masters?('s)?( degree)?\s*\/\s*graduate( degree)?\b/i]],
   [/^b\.?\s?sc\b|bachelor of science/i, [/^bachelor of science \(b\.?sc\)$/i, /^bachelors?('s)? of science\b/i, /^b\.?\s?sc\.?$/i, /^b\.?s\.?$/i,
-    /\bISCED 6\b.*\bB\.?Sc\b/i, /^bachelors?('s)?( degree)?( or equivalent)?(\s*\(.*\))?$/i, /^bachelors?('s)?( degree)?\s*\/\s*undergraduate( degree)?\b/i]],
+    /\bISCED 6\b.*\bB\.?Sc\b/i, /^bachelors?('s)?( degree)?( or equivalent( degree)?)?(\s*\(.*\))?$/i, /^bachelors?('s)?( degree)?\s*\/\s*undergraduate( degree)?\b/i]],
   [/^m\.?\s?tech\b|master of technology/i, [/^master of technology\b/i, /^m\.?\s?tech$/i]],
   [/^b\.?\s?tech\b|bachelor of technology/i, [/^bachelor of technology\b/i, /^b\.?\s?tech$/i]],
   [/^b\.?\s?e\b|bachelor of engineering/i, [/^bachelor of engineering\b/i]],
@@ -808,8 +808,8 @@ const affirms = (c) => (c.answers.may_certify_accuracy && ['checkbox', 'dropdown
 // contractor"): it is "yes" when any tie it names is, "no" only when every tie it names is known to be
 // "no", and unknown otherwise. Employment comes from the profile's full history, the rest from the
 // candidate's standing answers.
-const RELATIVE = /\b(friends?|relatives?|family members?|related to)\b|\bpersonal relationship\b|relationship with (any|a) (current )?employee|\brelations? working (with|at|for)\b/i;
-const PAST_TIE = new RegExp(`${RELATIVE.source}|\\bmade redundant\\b|\\b(employment (was |been )?)?terminated (for misconduct )?by\\b|\\binterviewed\\b|\\binterviews?\\b.{0,15}\\bbefore\\b|\\b(have|did|do) you (ever )?(work|worked|been employed) (for|at|with)\\b|\\b(ever|previously|already) applied\\b|\\breceived an offer\\b|\\bindependent contractor\\b|third.party labou?r|\\b(ever|previously|formerly|currently|already)\\b.{0,20}\\b(worked|employed|work|employee)\\b|\\bformer (employee|intern|contractor)\\b|collaborated with|\\b(client|partner|vendor|supplier)\\b.{0,40}\\bcapacity|contractor or consultant|consultant roles?\\b`, 'i');
+const RELATIVE = /\b(friends?|relatives?|family members?|related to)\b|\b(personal|family) relationships?\b|relationship with (any|a) (current )?employee|\brelations? working (with|at|for)\b/i;
+const PAST_TIE = new RegExp(`${RELATIVE.source}|\\bmade redundant\\b|\\b(employment (was |been )?)?terminated (for misconduct )?by\\b|\\binterviewed\\b|\\binterviews?\\b.{0,15}\\bbefore\\b|\\b(have|did|do) you (ever )?(work|worked|been employed) (for|at|with)\\b|\\b(ever|previously|already) applied\\b|\\bapplied\\b.{0,60}\\bbefore\\b|\\b(have|did|were) you (ever )?(been )?(employed|worked)\\b.{0,40}\\bby\\b|\\b(ever|previously|former|previous)\\b.{0,30}\\bconsultant\\b|\\breceived an offer\\b|\\bindependent contractor\\b|third.party labou?r|\\b(ever|previously|formerly|currently|already)\\b.{0,20}\\b(worked|employed|work|employee)\\b|\\bformer (employee|intern|contractor)\\b|collaborated with|\\b(client|partner|vendor|supplier)\\b.{0,40}\\bcapacity|contractor or consultant|consultant roles?\\b`, 'i');
 function pastTies(c) {
   const facts = [
     [RELATIVE, c.answers.relatives_at_employer],
@@ -901,9 +901,10 @@ const QUESTION_RULES = [
   [/(legal|lawful)\w* (right|authori[sz]\w*|eligib\w*|permi\w*) to work|authori[sz]ed to work|work authori[sz]ation|eligible to work|right to work/i,
     (c) => (c.inIndia ? yes(c.answers.indian_work_authorization) : undefined)],
   [/relocat/i, (c) => yes(c.answers.willing_to_relocate)],
-  [/reasonable (adjustment|accommodation)s?|accommodations? (during|in|for) the (recruit|interview|hiring|application)/i, (c) => yes(c.answers.needs_accommodation)],
+  [/reasonable (adjustment|accommodation)s?|accommodations? (during|in|for) the (recruit|interview|hiring|application)|\b(adjustment|accommodation)s?\b.{0,60}\b(recruit\w*|interview|hiring|application|selection) process/i,
+    (c) => yes(c.answers.needs_accommodation)],
   // Government employment is in the full work history like any other (HPE asks about the U.S. one).
-  [/government (or public institution )?employment experience|(employed by|worked for) (a |the )?(government|public sector)/i,
+  [/government (or public institution )?employment experience|(employed by|worked for) (a |the )?(government|public sector)|\bemployee of a government\b/i,
     (c) => ({ yes: (c.profile.experience ?? []).some((e) => /government|ministry|municipal|public sector|federal/i.test(e.company)) })],
   // Being an official, and being related to one, are separate facts (Northern Trust asks both).
   // "How did you hear about this job?" on other employers' forms (a Workday form's own source field is
@@ -918,7 +919,16 @@ const QUESTION_RULES = [
     return { yes: c.answers.referred_at.some((n) => norm(n) === norm(c.job.company)) };
   }],
   // Hiring checks and disclosures, from the candidate's answers of 2026-10-18.
-  [/background (check|verification)|\bbgv\b/i, (c) => yes(c.answers.willing_background_check)],
+  // Before the convictions rule: Barclays' "people screening … criminal records …, are you happy to continue?"
+  [/background (check|verification)|\bbgv\b|\b(people|pre.?employment) screening\b/i, (c) => yes(c.answers.willing_background_check)],
+  // The candidate's own record (answers of 2026-10-18; Barclays).
+  [/\bcriminal (convictions?|records?|offen[cs]es?)\b|\bconvicted\b/i, (c) => yes(c.answers.criminal_record)],
+  [/\b(investigat\w*|disciplined|cautioned|sanctioned)\b.{0,40}\bregulat\w*|\bregulat\w*\b.{0,40}\b(investigat\w*|disciplin\w*|caution\w*|sanction\w*)\b/i, (c) => yes(c.answers.regulatory_investigation)],
+  // Without that answer, "terminated by NatWest" still follows from never having worked there.
+  [/\b(dismissed|terminated|fired|discharged)\b.{0,80}\b(misconduct|disciplin\w*|for cause)\b/i, (c) => yes(c.answers.dismissed_for_misconduct) ?? pastTies(c)],
+  // Related to a "stakeholder" (Barclays: client firms' and suppliers' senior decision-makers, regulators,
+  // politically exposed persons): not the relatives-at-the-employer question, so never answered by it.
+  [/\bstakeholders?\b/i, (c) => yes(c.answers.related_to_stakeholder)],
   [/medical history/i, (c) => yes(c.answers.medical_history_to_declare)],
   [/medical (check|exam\w*|test)/i, (c) => yes(c.answers.willing_medical_check)],
   [/\bcourt cases?\b|\b(ongoing|pending) (legal|court) (cases?|proceedings?)/i, (c) => yes(c.answers.ongoing_court_cases)],
@@ -944,7 +954,7 @@ const QUESTION_RULES = [
     return { text: `Not applicable: I am not currently employed${degree ? ` (${degree} student)` : ''}.` };
   }],
   // Questions for someone in a job (CNX: "notified your current manager", "on a Performance Improvement Plan").
-  [/performance improvement plan|\bpip\b|notified (your )?(current )?(manager|supervisor)|\bmanager('s)? (approval|consent|permission)\b/i,
+  [/performance improvement plan|\bpip\b|notified (your )?(current )?(manager|supervisor)|\bmanager('s)? (approval|consent|permission)\b|\bin your current (role|position|job)\b/i,
     (c) => (employed(c) === false ? { yes: false } : undefined)],
   [/\blicensed representative\b|\bresponsible officer\b|\bregistered representative\b/i, (c) => yes(c.answers.regulatory_licensed_role)],
   [/government official|public official|politically exposed/i, (c) => yes(/\b(related|relatives?|family|spouse)\b/i.test(c.label)
@@ -1056,7 +1066,8 @@ const QUESTION_RULES = [
   // Before the pay questions: "Currency (Salary Expectations)" names one.
   [/^currency\b|\bcurrency \(/i, () => ({ option: [/\binr\b|indian rupee/i], text: 'INR' })], // the profile's figures are in rupees
   [/notice period|\bhow much notice\b/i, (c) => (c.answers.notice_period == null ? undefined
-    : { text: String(c.answers.notice_period), option: [new RegExp(`^${c.answers.notice_period}\\b`), /immediate|^0\b|no notice|not applicable/i] })],
+    : { text: String(c.answers.notice_period), option: [new RegExp(`^${c.answers.notice_period}\\b`), /immediate|^0\b|no notice|not applicable/i,
+      ...(c.answers.notice_period === 0 ? [/^(less than|under|below|within|up ?to|<)\s*\d+/i] : [])] })], // Mobility: "Less than 30 days"
   // Every part of current pay (bonus, benefits) is part of the current CTC, which is 0 for a student.
   [/\b(current|present)\b.{0,25}\b(ctc|salary|compensation|pay|bonus|benefits|allowances?|incentives?)\b/i, (c) => (c.answers.current_ctc == null ? undefined
     : { text: `${c.kind === 'textarea' ? 'INR ' : ''}${c.answers.current_ctc}`, option: [/^0\b|not applicable|n\/a|student|fresher/i] })],
@@ -1093,6 +1104,17 @@ const QUESTION_RULES = [
   // (Logitech's automated interview scheduling).
   [/\b(consent|agree|acknowledge|accept)\b.*\b(terms|conditions|privacy|policy|notice)\b|\b(terms|privacy)\b.*\b(consent|agree|accept)|\b(have read|reading|read and understood)\b.*\b(privacy|terms|notice|policy)\b|\bhow (my|your) (personal )?(information|data) (will be|is|are) (processed|used|handled)\b|automated (interview )?scheduling|scheduling (system|tool|assistant)/i,
     (c) => (c.required && ['checkbox', 'dropdown', 'radio'].includes(c.kind) ? { yes: true } : undefined)],
+  // Consent to share the application with the employer itself (AllianceBernstein, under its Terms and
+  // Conditions); never with third parties, partners or for marketing.
+  [/^(?!.*\b(third.part\w*|partners?|affiliates?|vendors?|advertis\w*|marketing)\b).*\bconsent\b.{0,20}\bshar(e|ing)\b.{0,30}\b(information|data)\b.{0,10}\bwith\b/i,
+    (c) => (c.required && ['checkbox', 'dropdown', 'radio'].includes(c.kind) ? { yes: true } : undefined)],
+  // The work arrangements the candidate accepts (all three, 2026-10-18; Mobility).
+  [/\b(schedules?|work (arrangements?|modes?|models?|set.?ups?))\b.{0,30}\bwilling\b|\bwilling to work (on.?site|in.?office|hybrid|remote)/i, (c) => {
+    const re = { onsite: /on.?site|in.?office/i, hybrid: /hybrid/i, remote: /remote|from home/i };
+    const ok = (c.answers.work_arrangements ?? []).map((k) => re[String(k).toLowerCase()]).filter(Boolean);
+    return ok.length ? { option: ok } : undefined;
+  }],
+  [/\bexpected to work (in|from) india\b/i, (c) => (c.inIndia ? { yes: true } : undefined)], // PwC: the job is in India
   // Voluntary self-identification: declining is a true answer and the only one CareerPilot gives.
   [/\b(ethnic|race|racial|veteran|disabilit|hispanic|latino|sexual orientation|pronoun)/i,
     (c) => (c.required ? { option: [/decline|not wish|prefer not|do not want|choose not|rather not|not to (self.)?identify|not disclos/i] } : undefined)],

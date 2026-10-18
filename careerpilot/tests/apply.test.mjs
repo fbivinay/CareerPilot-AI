@@ -242,6 +242,39 @@ test('AllianceBernstein, Amgen and Ashby questions follow the standing answers',
   assert.equal(best(amgen, degreeWants('BSc in Statistics')), 2);
 });
 
+test('Barclays, Mastercard, Maersk, ICF, US Bank, Mobility, PwC and RELX questions', async () => {
+  const { answerFor, best, degreeWants } = await import('../lib/apply/workday.mjs');
+  const profile = { name: 'A Candidate', experience: [{ company: 'Acme Labs, Bengaluru', dates: 'May 2026 - Jun 2026' }] };
+  const answers = { relatives_at_employer: false, prior_relationship_with_employer: false, needs_accommodation: false, willing_background_check: true,
+    criminal_record: false, regulatory_investigation: false, dismissed_for_misconduct: false, related_to_stakeholder: false, current_ctc: 0,
+    notice_period: 0, work_arrangements: ['Onsite', 'Hybrid', 'Remote'], applied_before: [] };
+  const ask = (label, kind = 'dropdown', company = 'Barclays') => answerFor({ label, kind, required: true },
+    { profile, answers, job: { company }, inIndia: true, appliedHere: false });
+  const pick = (label, options, kind) => options.filter((o) => (ask(label, kind).option ?? []).some((re) => re.test(o)));
+  assert.deepEqual(ask('Have you been employed within the last 24 months by the Barclays Group Statutory Auditor, KPMG? (Please do not include insights programmes, or internships unless working specifically on the Barclays account)'), { yes: false });
+  assert.deepEqual(ask('Barclays welcomes applications from all candidates and is committed to ensuring its recruitment processes are fair and inclusive. Please indicate if you require an adjustment (accommodation) at any time during the recruitment process. Please note there is no requirement to disclose any medical information as part of this process.'), { yes: false });
+  assert.deepEqual(ask('Do you have any criminal convictions, cautions, reprimands or final warnings (including traffic offences) in any country?'), { yes: false });
+  assert.deepEqual(ask('Have you ever been subject to investigation by or disciplined/cautioned by a regulatory body?'), { yes: false });
+  assert.deepEqual(ask('Have you ever been dismissed by a previous employer(s) for gross misconduct or as part of disciplinary action?'), { yes: false });
+  assert.deepEqual(ask('If your application is successful Barclays undertakes people screening as part of its recruitment process, these include; criminal records, address verification, academic qualifications, employment dates and employer references — are you happy to continue with your application?'), { yes: true });
+  assert.deepEqual(ask('To the best of your knowledge and understanding, are you related to a Barclays Stakeholder? (Please note that a Barclays employee is not considered a Barclays Stakeholder)'), { yes: false });
+  assert.equal(answerFor({ label: 'Are you related to a Barclays Stakeholder?', kind: 'dropdown', required: true },
+    { profile, answers: { relatives_at_employer: false }, job: { company: 'Barclays' }, inIndia: true }), undefined); // not the relatives answer
+  assert.deepEqual(ask('In your current role, do you engage with Mastercard employees to negotiate, influence and/or sign commercial contracts or government contracts?'), { yes: false });
+  assert.deepEqual(ask('Are you or were you recently (in the last six months) an employee of a government office or agency that has oversight of Mastercard?'), { yes: false });
+  assert.deepEqual(ask('Have you applied to A.P. Moller Maersk Group before?', 'dropdown', 'Maersk'), { yes: false });
+  assert.deepEqual(ask('Have you ever been a previous ICF Independent Consultant?', 'dropdown', 'ICF'), { yes: false });
+  assert.deepEqual(ask('Do you have an immediate family relationship (parent, grandparent, child, sibling, first cousin, aunt/uncle, niece/nephew, spouse, brother or sister, in law or step) with anyone who may be in the same reporting structure of the position for which you have applied?', 'dropdown', 'US Bank'), { yes: false });
+  assert.deepEqual(pick('What is your notice period?', ['Less than 30 days', '30 to 59 days', '60 to 89 days', '90 or more days']).slice(0, 1), ['Less than 30 days']);
+  assert.deepEqual(pick('What types of schedules you are willing to work?', ['Onsite/In-Office', 'Hybrid', 'Fully Remote'], 'checkbox'), ['Onsite/In-Office', 'Hybrid', 'Fully Remote']);
+  assert.deepEqual(ask('I am aware that I am expected to work in India, even if I am deployed on a project which has flexibility to work from home', 'dropdown', 'PwC'), { yes: true });
+  assert.deepEqual(ask('By checking this box you consent to sharing information with AllianceBernstein.', 'checkbox', 'Abglobal'), { yes: true });
+  assert.equal(ask('I consent to sharing my information with third parties and partners.', 'checkbox', 'Abglobal'), undefined);
+  const relx = ['Bachelor’s Degree or Equivalent Degree', "Associate's Degree or 2-year Equivalent Degree", 'Master’s Degree or Equivalent Degree', 'Master’s in Business Administration (MBA)'];
+  assert.equal(best(relx, degreeWants('MSc in Big Data Analytics')), 2);
+  assert.equal(best(relx, degreeWants('BSc in Statistics')), 0);
+});
+
 test('the answer pack names a current company only for a job still going', async () => {
   const { answerPack } = await import('../lib/prepare.mjs');
   const company = (dates) => answerPack({ name: 'A Candidate', experience: [{ company: 'Acme Labs, Bengaluru', dates }] }, {}).fields.current_company;
