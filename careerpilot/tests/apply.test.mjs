@@ -82,6 +82,15 @@ test('questions answered by deriving from the profile, and opt-ins declined', as
   assert.deepEqual(answerFor({ label: 'Have you participated in any Airbus interviews before ?', kind: 'radio', required: true },
     { profile, answers: { ...answers, previously_interviewed: false }, job: { company: 'Ag' } }), { yes: false });
   assert.ok(ask('Primary Nationality').option.some((re) => re.test('India')));
+  const checks = { willing_background_check: true, willing_medical_check: true, medical_history_to_declare: false, ongoing_court_cases: false,
+    disability_affects_job: false, willing_cet_shift: true };
+  const ask2 = (label) => answerFor({ label, kind: 'dropdown', required: true }, { profile, answers: checks, job: { company: 'Synechron' } });
+  assert.deepEqual(ask2('Are you willing to undergo a background check as part of this hiring process? "BGV is a mandatory requirement"'), { yes: true });
+  assert.deepEqual(ask2('Are you willing to undergo medical check as part of this hiring process?'), { yes: true });
+  assert.deepEqual(ask2('Do you have any medical History that needs to be informed prior?'), { yes: false });
+  assert.deepEqual(ask2('Do you have any ongoing court cases?'), { yes: false });
+  assert.deepEqual(ask2('Do you have a disability that would interfere with your ability to perform this job?'), { yes: false });
+  assert.deepEqual(ask2('Are you willing to work in Central European Time shift hours ?'), { yes: true });
   assert.equal(ask('How many years of Relevant Experience do you have?', 'text').text, '0'); // two 2-month internships
   assert.equal(ask('How many years of experience do you have with Python?', 'text'), undefined);
   assert.deepEqual(ask('How soon you can join us?', 'text'), { text: 'From 10 November 2026' });

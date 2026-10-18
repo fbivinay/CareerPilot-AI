@@ -757,6 +757,13 @@ const QUESTION_RULES = [
   [/relocat/i, (c) => yes(c.answers.willing_to_relocate)],
   [/reasonable (adjustment|accommodation)s?|accommodations? (during|in|for) the (recruit|interview|hiring|application)/i, (c) => yes(c.answers.needs_accommodation)],
   // Being an official, and being related to one, are separate facts (Northern Trust asks both).
+  // Hiring checks and disclosures, from the candidate's answers of 2026-10-18.
+  [/background (check|verification)|\bbgv\b/i, (c) => yes(c.answers.willing_background_check)],
+  [/medical history/i, (c) => yes(c.answers.medical_history_to_declare)],
+  [/medical (check|exam\w*|test)/i, (c) => yes(c.answers.willing_medical_check)],
+  [/\bcourt cases?\b|\b(ongoing|pending) (legal|court) (cases?|proceedings?)/i, (c) => yes(c.answers.ongoing_court_cases)],
+  [/disabilit\w*.{0,40}\b(interfere|affect|prevent|limit)\w*/i, (c) => yes(c.answers.disability_affects_job)], // before self-identification
+  [/\b(cet|central european( time)?)\b.{0,20}\b(shift|hours)\b/i, (c) => yes(c.answers.willing_cet_shift)],
   [/government official|public official|politically exposed/i, (c) => yes(/\b(related|relative|family|spouse)\b/i.test(c.label)
     ? c.answers.related_to_government_official : c.answers.government_official)],
   [/restrictive covenant|non-?compet(e|ition)|non-?solicit|(agreement|obligation)s?\b.{0,80}\brestricts?\b|\bbond\b.{0,40}\b(employer|company)\b|commitments? ?\/ ?bond|service (bond|agreement)/i, restrictions],
