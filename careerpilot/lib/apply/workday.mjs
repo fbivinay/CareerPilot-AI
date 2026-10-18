@@ -545,9 +545,9 @@ const DEGREES = [
   // MSc, …)"); then the plain level some portals list ("Masters (+2 or +3 yrs)", "Master's (M.A., M.S.,
   // M.B.A.)"). Never another degree at that level: "Master of Business Administration", "Bachelor of Arts".
   [/^m\.?\s?sc\b|master of science/i, [/^master of science \(m\.?sc\)$/i, /^masters?('s)? of science\b/i, /^m\.?\s?sc\.?$/i, /^m\.?s\.?$/i,
-    /\bISCED 7\b.*\bM\.?Sc\b/i, /^masters?('s)?( degree)?( or equivalent( degree)?)?(\s*\(.*\))?$/i, /^masters?('s)?( degree)?\s*\/\s*graduate( degree)?\b/i]],
+    /\bISCED 7\b.*\bM\.?Sc\b/i, /^masters?('s)?( degree)?( or equivalent( degree)?)?(\s*\(.*\))?$/i, /^masters?('s)?( degree)?\s*\/\s*graduate( degree)?\b/i, /^masters?('s)? degree\s*\/\s*int'?l\.? equiv/i]],
   [/^b\.?\s?sc\b|bachelor of science/i, [/^bachelor of science \(b\.?sc\)$/i, /^bachelors?('s)? of science\b/i, /^b\.?\s?sc\.?$/i, /^b\.?s\.?$/i,
-    /\bISCED 6\b.*\bB\.?Sc\b/i, /^bachelors?('s)?( degree)?( or equivalent( degree)?)?(\s*\(.*\))?$/i, /^bachelors?('s)?( degree)?\s*\/\s*undergraduate( degree)?\b/i]],
+    /\bISCED 6\b.*\bB\.?Sc\b/i, /^bachelors?('s)?( degree)?( or equivalent( degree)?)?(\s*\(.*\))?$/i, /^bachelors?('s)?( degree)?\s*\/\s*undergraduate( degree)?\b/i, /^bachelors?('s)? degree\s*\/\s*int'?l\.? equiv/i]],
   [/^m\.?\s?tech\b|master of technology/i, [/^master of technology\b/i, /^m\.?\s?tech$/i]],
   [/^b\.?\s?tech\b|bachelor of technology/i, [/^bachelor of technology\b/i, /^b\.?\s?tech$/i]],
   [/^b\.?\s?e\b|bachelor of engineering/i, [/^bachelor of engineering\b/i]],
@@ -916,7 +916,7 @@ const QUESTION_RULES = [
   [/\bcitizen\b.{0,40}\bcountry (where|in which)\b.{0,60}\b(role|job|position)\b/i, (c) => (c.inIndia && /^india/i.test(c.answers.citizenship ?? '') ? { yes: true } : undefined)],
   [/(legal|lawful)\w* (right|authori[sz]\w*|eligib\w*|permi\w*) to work|authori[sz]ed to work|work authori[sz]ation|eligible to work|right to work/i,
     (c) => (c.inIndia ? yes(c.answers.indian_work_authorization) : undefined)],
-  [/relocat/i, (c) => yes(c.answers.willing_to_relocate)],
+  [/relocat|\bwilling to work (from|at|in) the (job('s)? )?locations?\b/i, (c) => yes(c.answers.willing_to_relocate)], // US Bank: "from the location(s) posted"
   [/reasonable (adjustment|accommodation)s?|accommodations? (during|in|for) the (recruit|interview|hiring|application)|\b(adjustment|accommodation)s?\b.{0,60}\b(recruit\w*|interview|hiring|application|selection) process/i,
     (c) => yes(c.answers.needs_accommodation)],
   // Government employment is in the full work history like any other (HPE asks about the U.S. one).
