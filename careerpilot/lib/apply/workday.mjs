@@ -629,10 +629,11 @@ async function myExperience(page, { profile, answers, resumePath }) {
     const field = studyField(ed.degree);
     let study = { missing: true };
     if (field && (await panel.locator(F('fieldOfStudy')).count())) {
-      // Options the candidate approved for a field Workday does not list (answers.field_of_study_choices).
+      // The real field first, searched from its full name to its tail words; only then the substitutes
+      // the candidate approved for a field Workday does not list (answers.field_of_study_choices), in order.
       const approved = (answers.field_of_study_choices ?? {})[field] ?? [];
-      const wants = [fieldWants(field), ...approved.map((name) => new RegExp(`^${escapeRe(name)}$`, 'i'))];
-      for (const q of [...fieldSearches(field), ...approved]) { study = await pick(page, 'fieldOfStudy', q, wants, panel); if (study.chosen) break; }
+      const tries = [...fieldSearches(field).map((q) => [q, fieldWants(field)]), ...approved.map((name) => [name, new RegExp(`^${escapeRe(name)}$`, 'i')])];
+      for (const [q, wants] of tries) { study = await pick(page, 'fieldOfStudy', q, wants, panel); if (study.chosen) break; }
     }
     const gpa = /(\d+(?:\.\d+)?)/.exec(ed.grade ?? '')?.[1];
     if (gpa) await setText(page, 'gradeAverage', gpa, panel);
