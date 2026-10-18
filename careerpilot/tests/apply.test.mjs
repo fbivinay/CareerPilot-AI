@@ -188,6 +188,43 @@ test('internship questions use the standing answers, with the options the form o
   assert.deepEqual(ask('As part of the hiring process, as the first step, Mactores conducts Aptitude Test and relevant Technical Test for your Job Role. These tests help us reduce our time to decisions and help you analyze your skills and expertise. Please confirm if you will be willing to take these tests before the initial interview?'), { yes: true });
 });
 
+test('an account is verified only from Workday mail or the employer’s own domain', async () => {
+  const { verificationSender } = await import('../lib/apply/workday.mjs');
+  const host = 'barclays.wd3.myworkdayjobs.com';
+  assert.ok(verificationSender('barclays.com', host));
+  assert.ok(verificationSender('otp.workday.com', host));
+  assert.ok(verificationSender('mail.barclays.com', host));
+  assert.ok(!verificationSender('barclays.com.evil.io', host));
+  assert.ok(!verificationSender('notbarclays.com', host));
+  assert.ok(!verificationSender('hpe.com', host));
+});
+
+test('AllianceBernstein, Amgen and Ashby questions follow the standing answers', async () => {
+  const { answerFor, best, degreeWants } = await import('../lib/apply/workday.mjs');
+  const profile = { name: 'A Candidate', experience: [{ company: 'Acme, Bengaluru', dates: 'May 2026 - Jun 2026' }],
+    education: [{ degree: 'MSc in Big Data Analytics', dates: 'Aug 2025 - Jun 2099' }, { degree: 'BSc in Statistics', dates: 'Aug 2022 - Jun 2025' }] };
+  const answers = { relatives_at_employer: false, citizenship: 'India', career_break: false, current_ctc: 0, expected_ctc: 700000,
+    reason_for_leaving_last_role: 'Internship completed', regulatory_licensed_role: false, referred_at: [] };
+  const ask = (label, kind = 'dropdown') => answerFor({ label, kind, required: true },
+    { profile, answers, job: { company: 'AllianceBernstein', employment_type: 'full_time' }, inIndia: true, appliedHere: false });
+  assert.deepEqual(ask('Do you have any relatives, either directly or through marriage, that work at AllianceBernstein?'), { yes: false });
+  assert.deepEqual(ask('Are you a citizen or lawful resident of the country where the role you are applying for is located?'), { yes: true });
+  assert.equal(ask('Reason for leaving', 'textarea').text, 'Internship completed');
+  assert.equal(ask('Responsibilities for current job duties', 'textarea').text, 'Not applicable: I am not currently employed (MSc student).');
+  assert.equal(ask('Explain any gaps in employment (Do not include absences due to illness, injury, or other disability)', 'textarea').text,
+    'No gaps: I have been studying continuously (BSc, then MSc).');
+  assert.deepEqual(ask('Have you within the past three years been a licensed representative or responsible officer of any regulatory body?'), { yes: false });
+  assert.equal(ask('Expected Annual Salary Package', 'textarea').text, 'INR 700000');
+  assert.equal(ask('Current Annual Salary Package', 'textarea').text, 'INR 0');
+  assert.equal(ask('Expected Annual Salary Package', 'text').text, '700000'); // a number box keeps only digits
+  assert.deepEqual(ask('Did you get recommended by someone we know? (recommendations are the best)', 'radio'), { yes: false });
+  assert.equal(ask('Referred by (employee name)', 'text'), undefined);
+  const amgen = ['Other', 'High School Degree / Diploma / A-Levels / GED', 'Bachelor’s / Undergraduate Degree (3-4 year degree equivalent e.g., BA, BS, LLB, etc.)',
+    'Master’s / Graduate Degree (1-2 year degree equivalent, e.g., MA, MS, MBA, etc.)'];
+  assert.equal(best(amgen, degreeWants('MSc in Big Data Analytics')), 3);
+  assert.equal(best(amgen, degreeWants('BSc in Statistics')), 2);
+});
+
 test('the answer pack names a current company only for a job still going', async () => {
   const { answerPack } = await import('../lib/prepare.mjs');
   const company = (dates) => answerPack({ name: 'A Candidate', experience: [{ company: 'Acme Labs, Bengaluru', dates }] }, {}).fields.current_company;

@@ -70,6 +70,7 @@ function readQuestions() {
   const groups = new Map();
   let n = 0;
   for (const el of document.querySelectorAll('input:not([type=hidden]):not([type=file]):not([type=submit]):not([type=button]), textarea, select')) {
+    if (el.closest('[data-field-path]')?.querySelector('button[data-option]')) continue; // Ashby's yes/no buttons, read below
     // A styled option hides its own input and shows its label instead (Ashby).
     const optionLabel = (el.type === 'radio' || el.type === 'checkbox') && (el.closest('label') || (el.id && document.querySelector(`label[for="${CSS.escape(el.id)}"]`)));
     if (!shown(el) && !(optionLabel && shown(optionLabel))) continue;
@@ -90,6 +91,15 @@ function readQuestions() {
     el.dataset.cpQ = key;
     out.push({ key, kind, label: own(el) || groupOf(el), required, filled: kind === 'select' ? el.selectedIndex > 0 : !!el.value?.trim(),
       options: kind === 'select' ? [...el.options].map((o) => o.text.trim()).filter((t) => t && !/^(select|choose)\b/i.test(t)) : undefined });
+  }
+  // Ashby's yes/no question: buttons (data-option="yes" / "no") over a hidden tick box.
+  for (const box of document.querySelectorAll('[data-field-path]')) {
+    const buttons = [...box.querySelectorAll('button[data-option]')];
+    if (!buttons.length || !shown(buttons[0])) continue;
+    const key = `q${n++}`;
+    buttons.forEach((b, i) => { b.dataset.cpQ = key; b.dataset.cpOpt = String(i); });
+    out.push({ key, kind: 'buttons', label: text(box.querySelector('label')), required: !!box.querySelector('[required], [aria-required="true"]'),
+      filled: buttons.some((b) => b.getAttribute('aria-pressed') === 'true'), options: buttons.map(text) });
   }
   const clean = (s) => String(s ?? '').replace(/\s*[*✱]+\s*$/, '').trim();
   return out.map((q) => (q.inputs ? {
@@ -135,6 +145,12 @@ async function answerOne(page, q, a) {
       await choose(page.locator(`[data-cp-q="${q.key}"][data-cp-opt="${i}"]`));
       return true;
     }
+    case 'buttons': {
+      const i = best(q.options, wants);
+      if (i < 0) return false;
+      await page.locator(`[data-cp-q="${q.key}"][data-cp-opt="${i}"]`).click();
+      return true;
+    }
     case 'checkbox': {
       if (q.multi) {
         const picked = q.options.map((o, i) => (wants.some((re) => re.test(o)) ? i : -1)).filter((i) => i >= 0);
@@ -168,7 +184,7 @@ export async function answerQuestions(page, ctx) {
   const left = [];
   for (const q of await page.evaluate(readQuestions)) {
     if (q.filled || !q.label) continue;
-    const kind = q.kind === 'select' || q.kind === 'combobox' ? 'dropdown' : q.kind;
+    const kind = q.kind === 'select' || q.kind === 'combobox' ? 'dropdown' : q.kind === 'buttons' ? 'radio' : q.kind;
     let a = answerFor({ label: q.label, kind, required: q.required }, ctx);
     if (a === undefined && ctx.draft && draftable({ ...q, kind })) { const text = await ctx.draft(q.label); if (text) a = { text }; }
     const done = a !== undefined && await answerOne(page, q, a).catch(() => false);

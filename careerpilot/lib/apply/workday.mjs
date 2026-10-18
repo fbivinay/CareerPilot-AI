@@ -105,14 +105,21 @@ async function startApplication(page) {
 // sent from a Workday domain, received after the account was created (msg.date is Gmail's own receive
 // time), pointing at this same portal. Anyone can send mail that merely claims to come from Workday, and
 // another employer's verification link must not be opened for this one.
+// Some employers send it from their own domain, the portal's tenant name (Barclays: barclays.com for
+// barclays.wd3.myworkdayjobs.com).
 const WORKDAY_SENDER = /(^|\.)(myworkday|workday|myworkdayjobs)\.com$/i;
+export const verificationSender = (domain, host) => {
+  const d = String(domain ?? '').toLowerCase();
+  const own = `${host.split('.')[0]}.com`;
+  return WORKDAY_SENDER.test(d) || d === own || d.endsWith(`.${own}`);
+};
 const onHost = (u, host) => { try { const x = new URL(u); return x.protocol === 'https:' && x.hostname.toLowerCase() === host; } catch { return false; } };
 async function verificationLink(gmail, sinceMs, host) {
   for (let i = 0; i < 18; i++) { // up to ~3 minutes
-    const ids = await gmail.listIds(`from:(myworkday.com OR workday.com OR myworkdayjobs.com) newer_than:1d`, 10);
+    const ids = await gmail.listIds(`from:(myworkday.com OR workday.com OR myworkdayjobs.com OR ${host.split('.')[0]}.com) newer_than:1d`, 10);
     for (const id of ids) {
       const msg = await gmail.get(id);
-      if (!msg.authenticated || !WORKDAY_SENDER.test(String(msg.fromAddr ?? '').split('@')[1] ?? '')) continue;
+      if (!msg.authenticated || !verificationSender(String(msg.fromAddr ?? '').split('@')[1], host)) continue;
       if (!msg.date || new Date(msg.date).getTime() < sinceMs - 60_000) continue;
       const link = (msg.html.match(/https:\/\/[^"'\s<>]+/g) ?? []).concat(msg.text.match(/https:\/\/\S+/g) ?? [])
         .map((u) => u.replace(/&amp;/g, '&')).find((u) => /verif|activat|confirm/i.test(u) && onHost(u, host));
@@ -524,9 +531,9 @@ const DEGREES = [
   // MSc, …)"); then the plain level some portals list ("Masters (+2 or +3 yrs)", "Master's (M.A., M.S.,
   // M.B.A.)"). Never another degree at that level: "Master of Business Administration", "Bachelor of Arts".
   [/^m\.?\s?sc\b|master of science/i, [/^master of science \(m\.?sc\)$/i, /^masters?('s)? of science\b/i, /^m\.?\s?sc\.?$/i, /^m\.?s\.?$/i,
-    /\bISCED 7\b.*\bM\.?Sc\b/i, /^masters?('s)?( degree)?( or equivalent)?(\s*\(.*\))?$/i]],
+    /\bISCED 7\b.*\bM\.?Sc\b/i, /^masters?('s)?( degree)?( or equivalent)?(\s*\(.*\))?$/i, /^masters?('s)?( degree)?\s*\/\s*graduate( degree)?\b/i]],
   [/^b\.?\s?sc\b|bachelor of science/i, [/^bachelor of science \(b\.?sc\)$/i, /^bachelors?('s)? of science\b/i, /^b\.?\s?sc\.?$/i, /^b\.?s\.?$/i,
-    /\bISCED 6\b.*\bB\.?Sc\b/i, /^bachelors?('s)?( degree)?( or equivalent)?(\s*\(.*\))?$/i]],
+    /\bISCED 6\b.*\bB\.?Sc\b/i, /^bachelors?('s)?( degree)?( or equivalent)?(\s*\(.*\))?$/i, /^bachelors?('s)?( degree)?\s*\/\s*undergraduate( degree)?\b/i]],
   [/^m\.?\s?tech\b|master of technology/i, [/^master of technology\b/i, /^m\.?\s?tech$/i]],
   [/^b\.?\s?tech\b|bachelor of technology/i, [/^bachelor of technology\b/i, /^b\.?\s?tech$/i]],
   [/^b\.?\s?e\b|bachelor of engineering/i, [/^bachelor of engineering\b/i]],
@@ -753,7 +760,7 @@ const affirms = (c) => (c.answers.may_certify_accuracy && ['checkbox', 'dropdown
 // contractor"): it is "yes" when any tie it names is, "no" only when every tie it names is known to be
 // "no", and unknown otherwise. Employment comes from the profile's full history, the rest from the
 // candidate's standing answers.
-const RELATIVE = /\b(friend|relative|family member|related to)\b|\bpersonal relationship\b|relationship with (any|a) (current )?employee|\brelations? working (with|at|for)\b/i;
+const RELATIVE = /\b(friends?|relatives?|family members?|related to)\b|\bpersonal relationship\b|relationship with (any|a) (current )?employee|\brelations? working (with|at|for)\b/i;
 const PAST_TIE = new RegExp(`${RELATIVE.source}|\\bmade redundant\\b|\\b(employment (was |been )?)?terminated (for misconduct )?by\\b|\\binterviewed\\b|\\binterviews?\\b.{0,15}\\bbefore\\b|\\b(have|did|do) you (ever )?(work|worked|been employed) (for|at|with)\\b|\\b(ever|previously|already) applied\\b|\\breceived an offer\\b|\\bindependent contractor\\b|third.party labou?r|\\b(ever|previously|formerly|currently|already)\\b.{0,20}\\b(worked|employed|work|employee)\\b|\\bformer (employee|intern|contractor)\\b|collaborated with|\\b(client|partner|vendor|supplier)\\b.{0,40}\\bcapacity|contractor or consultant|consultant roles?\\b`, 'i');
 function pastTies(c) {
   const facts = [
@@ -818,6 +825,15 @@ function restrictions(c) {
   return facts.length && !facts.includes(undefined) ? { yes: false } : undefined;
 }
 
+// The degree in progress ("MSc"), or null: the profile lists the most recent degree first.
+function studying(profile) {
+  const [ed] = profile.education ?? [];
+  const end = ed && dateRange(ed.dates)[1];
+  const now = new Date();
+  return end && (end.year > now.getFullYear() || (end.year === now.getFullYear() && end.month > now.getMonth() + 1))
+    ? String(ed.degree).split(/\s+in\s+/)[0] : null;
+}
+
 // [pattern on the question, answer(ctx)]: the first matching pattern decides; undefined = not known.
 const QUESTION_RULES = [
   [/\b(at least|over|above|older than)\b.{0,15}\b18\b|\b18 years\b|age of 18|legal age/i, (c) => yes(c.answers.age_18_or_older)],
@@ -825,6 +841,8 @@ const QUESTION_RULES = [
   [/\b(work|residency|residence) permit\b/i, (c) => (c.inIndia && /^india/i.test(c.answers.citizenship ?? '')
     ? { option: [/not applicable|^n\/?a$/i, /^yes\b/i] } : undefined)],
   [/\bsponsor|\b(require|need) (a )?visa\b/i, (c) => (c.inIndia ? yes(c.answers.needs_visa_sponsorship) : undefined)],
+  // A citizen of the job's country: an Indian citizen, for a job in India (AllianceBernstein).
+  [/\bcitizen\b.{0,40}\bcountry (where|in which)\b.{0,60}\b(role|job|position)\b/i, (c) => (c.inIndia && /^india/i.test(c.answers.citizenship ?? '') ? { yes: true } : undefined)],
   [/(legal|lawful)\w* (right|authori[sz]\w*|eligib\w*|permi\w*) to work|authori[sz]ed to work|work authori[sz]ation|eligible to work|right to work/i,
     (c) => (c.inIndia ? yes(c.answers.indian_work_authorization) : undefined)],
   [/relocat/i, (c) => yes(c.answers.willing_to_relocate)],
@@ -838,6 +856,12 @@ const QUESTION_RULES = [
   [/how did you (hear|learn|find out)|where did you (hear|find|see) (about )?(this|the) (job|role|position|opening)/i, (c) => ({
     option: [...sourceWants([c.job.company].filter(Boolean)), ...(c.job.source === 'aggregator' ? [/^other job ?board$/i, /^(online )?job ?board$/i] : []), ...SOURCE_FALLBACK],
     search: '' })],
+  // Referred or recommended by someone at the employer: yes only where the candidate names the referral
+  // (answers.referred_at, companies; none on 2026-10-18). A box asking who referred them is theirs.
+  [/\b(referred|recommended)\b.{0,30}\b(by|from)\b|\bemployee referral\b|\breferral\?/i, (c) => {
+    if (c.kind === 'text' || c.kind === 'textarea' || !Array.isArray(c.answers.referred_at)) return undefined;
+    return { yes: c.answers.referred_at.some((n) => norm(n) === norm(c.job.company)) };
+  }],
   // Hiring checks and disclosures, from the candidate's answers of 2026-10-18.
   [/background (check|verification)|\bbgv\b/i, (c) => yes(c.answers.willing_background_check)],
   [/medical history/i, (c) => yes(c.answers.medical_history_to_declare)],
@@ -849,8 +873,22 @@ const QUESTION_RULES = [
   [/\bverification of (your )?ident\w*|\bverify (your )?identity\b|\bproof of identity\b/i, (c) => yes(c.answers.can_verify_identity)],
   // Texts about the application itself, not marketing (that rule comes later and stays "no").
   [/\b(sms|text messages?)\b.{0,80}\b(application|candidate|recruit\w*|interview)/i, (c) => yes(c.answers.sms_updates)],
-  [/\bcareer break\b|\bbreak from (your )?(career|work)\b|\bgap in (your )?(employment|career)\b/i, (c) => yes(c.answers.career_break)],
-  [/government official|public official|politically exposed/i, (c) => yes(/\b(related|relative|family|spouse)\b/i.test(c.label)
+  // No break from career or studies (the candidate's answer): no gaps, the studies filling the time.
+  [/\bcareer break\b|\bbreak from (your )?(career|work)\b|\bgaps? in (your )?(employment|career|work history)\b/i, (c) => {
+    if (c.answers.career_break !== false) return yes(c.answers.career_break);
+    const studies = (c.profile.education ?? []).map((e) => String(e.degree).split(/\s+in\s+/)[0]).reverse();
+    return { yes: false, text: studies.length ? `No gaps: I have been studying continuously (${studies.join(', then ')}).` : 'No gaps.' };
+  }],
+  // The candidate's last role, and no current one (answers of 2026-10-18).
+  [/^reasons? for leaving\b|\bwhy (did|are) you (leave|leaving)\b/i, (c) => (c.answers.reason_for_leaving_last_role ? { text: c.answers.reason_for_leaving_last_role } : undefined)],
+  [/\b(responsibilities|duties)\b.{0,30}\bcurrent (job|role|position|employment)\b|\bcurrent (job|role|position)\b.{0,20}\b(responsibilities|duties)\b/i, (c) => {
+    // No job runs to "Present" and the current pay is 0: there is nothing to describe.
+    if ((c.profile.experience ?? []).some((e) => /[-–]\s*(present|current|now)\b/i.test(e.dates ?? '')) || c.answers.current_ctc !== 0) return undefined;
+    const degree = studying(c.profile);
+    return { text: `Not applicable: I am not currently employed${degree ? ` (${degree} student)` : ''}.` };
+  }],
+  [/\blicensed representative\b|\bresponsible officer\b|\bregistered representative\b/i, (c) => yes(c.answers.regulatory_licensed_role)],
+  [/government official|public official|politically exposed/i, (c) => yes(/\b(related|relatives?|family|spouse)\b/i.test(c.label)
     ? c.answers.related_to_government_official : c.answers.government_official)],
   // Outside work, financial interests or dealings that would conflict with the job (HPE's policy question);
   // after the government-official questions, which also speak of "a conflict of interest".
@@ -908,10 +946,7 @@ const QUESTION_RULES = [
   [/\bhighest (level of )?(education|qualification|degree)\b/i, (c) => {
     const [ed] = c.profile.education ?? [];
     if (!ed || (c.kind !== 'text' && c.kind !== 'textarea')) return undefined;
-    const end = dateRange(ed.dates)[1];
-    const now = new Date();
-    const pursuing = end && (end.year > now.getFullYear() || (end.year === now.getFullYear() && end.month > now.getMonth() + 1));
-    return { text: `${ed.degree}, ${ed.institution}${pursuing ? ' (pursuing)' : ''}` };
+    return { text: `${ed.degree}, ${ed.institution}${studying(c.profile) ? ' (pursuing)' : ''}` };
   }],
   // Total work experience in years; a question about one skill or tool ("with Python") is not this one.
   // The candidate's own field; a list of industries without it gets "Others" (Philips: Healthcare,
@@ -965,7 +1000,7 @@ const QUESTION_RULES = [
     : { text: String(c.answers.notice_period), option: [new RegExp(`^${c.answers.notice_period}\\b`), /immediate|^0\b|no notice|not applicable/i] })],
   // Every part of current pay (bonus, benefits) is part of the current CTC, which is 0 for a student.
   [/\b(current|present)\b.{0,25}\b(ctc|salary|compensation|pay|bonus|benefits|allowances?|incentives?)\b/i, (c) => (c.answers.current_ctc == null ? undefined
-    : { text: String(c.answers.current_ctc), option: [/^0\b|not applicable|n\/a|student|fresher/i] })],
+    : { text: `${c.kind === 'textarea' ? 'INR ' : ''}${c.answers.current_ctc}`, option: [/^0\b|not applicable|n\/a|student|fresher/i] })],
   // Before the pay figures, which would read "desired pay" here (the candidate said yes on 2026-10-18).
   [/(desired|expected) (pay|salary)( rate)? is higher than|still (want|wish|like) to be considered/i, (c) => yes(c.answers.consider_if_pay_below_expectation)],
   // The candidate's own figures (₹7 LPA full-time, ₹40,000 a month for internships), converted to the
@@ -981,7 +1016,8 @@ const QUESTION_RULES = [
     // With no unit named, the full amount first: a number box keeps only the digits (Dentsu turned "7 LPA" into 7).
     const text = /lpa|lakh/i.test(c.label) ? String(lpa(yearly)) : /month/i.test(c.label) ? String(monthly)
       : /annum|annual|year/i.test(c.label) ? String(yearly) : internship ? `${monthly} per month` : `${yearly} per year`;
-    return { text, option: [range] };
+    // A text area takes the currency too (AllianceBernstein asks for it on every pay answer).
+    return { text: c.kind === 'textarea' ? `INR ${text}` : text, option: [range] };
   }],
   [/^gender$|\bgender\b/i, (c) => (c.answers.gender ? { option: [new RegExp(`^${escapeRe(c.answers.gender)}$`, 'i')] } : undefined)],
   // Being considered for the employer's other open positions, which means keeping the CV for that (the
