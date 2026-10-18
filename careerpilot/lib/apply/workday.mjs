@@ -985,7 +985,9 @@ const QUESTION_RULES = [
   // Outside work, financial interests or dealings that would conflict with the job (HPE's policy question);
   // after the government-official questions, which also speak of "a conflict of interest".
   [/conflicts?(\(s\))? of interest/i, (c) => yes(c.answers.conflicts_of_interest)],
-  [/restrictive covenant|non-?compet(e|ition)|non-?solicit|(agreement|obligation)s?\b.{0,80}\brestricts?\b|\bbond\b.{0,40}\b(employer|company)\b|commitments? ?\/ ?bond|service (bond|agreement)/i, restrictions],
+  // Outside paid work or money-making activity to keep after joining (Mastercard; none, 2026-10-18).
+  [/\boutside (employment|activit\w*|work|business)\b/i, (c) => yes(c.answers.outside_employment_to_continue)],
+  [/restrictive covenant|non-?compet(e|ition)|non-?solicit|(agreement|obligation)s?\b.{0,80}\brestricts?\b|\bbond\b.{0,40}\b(employer|company)\b|commitments? ?\/ ?bond|service (bond|agreement)|\b(commitments?|agreements?)\b.{0,40}\bwith (other|current|former|previous|prior) employers?\b.{0,60}\baffect/i, restrictions],
   [/date of birth|\bdob\b|\bbirth ?date\b/i, (c) => {
     const d = isoDate(c.answers.date_of_birth);
     if (!d?.day) return undefined;

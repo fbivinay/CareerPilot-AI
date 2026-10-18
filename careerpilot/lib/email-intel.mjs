@@ -60,7 +60,9 @@ const SIGNALS = [
     weak: [/\b(assessment|assignment|coding test)\b/],
   }],
   ['application_confirmation', {
-    strong: [/\b(thank you|thanks) for (applying|your application|submitting your application)\b/, /\b(we('ve| have)|has been) received your application\b/,
+    strong: [/\b(thank you|thanks)( again)? for (applying|your application|submitting your application|your (online )?submission)\b/,
+      /\b(we('ve| have)|has been) received your application\b/, /\bwe('ve| have) successfully received your (application|submission)\b/,
+      /\byour application will be (taken into (careful )?consideration|reviewed|considered)\b/,
       /\byour application (has been|was) (received|submitted|sent)\b/, /\byour application was sent to\b/,
       /\bapplication (received|submitted) successfully\b/, /\bsuccessfully (applied|submitted your application)\b/,
       /\bapplication successful\b/, /\byou['’]?ve applied to\b/, /\byou have (successfully )?applied (to|for)\b/,
@@ -100,12 +102,15 @@ export function stripQuoted(text) {
 }
 
 const sentences = (s) => s.split(/(?<=[.!?])\s+|\n+/).map((x) => x.trim()).filter(Boolean);
+// Plain-text mail is hard-wrapped mid-sentence, the next line indented ("We have\r\n received your
+// application", BMS): such lines are joined, so a phrase is not cut in two.
+export const unwrap = (t) => String(t ?? '').replace(/\r/g, '').replace(/\n[ \t]+(?=\S)/g, ' ');
 const JOB_LIST_SUBJECT = /\b(job alert|jobs? for you|new jobs?|recommended jobs?|jobs? matching|matching jobs?|\d+\+? (new )?(jobs?|openings|roles)|jobs? you may|top jobs?|job recommendations?|jobs? based on your)\b/i;
 
 export function classifyEmail(msg, { ourThreadIds = new Set() } = {}) {
   const subject = String(msg.subject ?? '');
   const fromAddr = String(msg.fromAddr ?? '');
-  const own = stripQuoted(msg.text).slice(0, 8000);
+  const own = unwrap(stripQuoted(msg.text)).slice(0, 8000);
   const parts = sentences(`${subject}\n${own}`.toLowerCase()).filter((p) => !DISCLAIMER.test(p));
   const inOurThread = ourThreadIds.has(msg.threadId);
   if (/^(mailer-daemon|postmaster)@/i.test(fromAddr)

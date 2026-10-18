@@ -6,7 +6,7 @@
 import { all, audit, kvGet, kvSet, now, one, run } from './db.mjs';
 import { aiJson, AiUnavailable } from './ai.mjs';
 import { CAREERPILOT_APP, transition } from './applications.mjs';
-import { alertPlatform, applicationDetails, classifyEmail, extractDetails, parseJobAlert, platformSender } from './email-intel.mjs';
+import { alertPlatform, applicationDetails, classifyEmail, extractDetails, parseJobAlert, platformSender, unwrap } from './email-intel.mjs';
 import { upsertJob } from './jobs.mjs';
 import { domainMatchesCompany, upsertContact } from './contacts.mjs';
 import { recordBounce } from './outreach.mjs';
@@ -50,14 +50,46 @@ function samePosting(job, stated) {
   return !stated.title || job.title.toLowerCase() === stated.title.toLowerCase();
 }
 
+// Workday mail names the employer's portal: <tenant>@myworkday.com (amgen@myworkday.com for
+// amgen.wd1.myworkdayjobs.com), or a domain named after the tenant. Among that portal's submitted
+// applications it is the one named by requisition id or exact title, the only one, or, for mail that
+// names neither (HPE's "Thank you for your online submission"), the one submitted just before it arrived.
+// Mail from Workday under another name of the employer (workday@sciplay.com for Light & Wonder's lnw
+// portal) needs the exact title and a submission just before it.
+const SUBMITTED = new Set(['submitted', 'confirmed', 'assessment', 'interview', 'offer', 'rejected']);
+const tenantOf = (url) => { const h = host(url) ?? ''; return /\.myworkdayjobs\.com$/i.test(h) ? h.split('.')[0].toLowerCase() : null; };
+const reqIdOf = (url) => { const m = /_([a-z]*-?\d[\w-]*)\/?$/i.exec(url ?? ''); return m && m[1].length >= 5 ? m[1].toLowerCase() : null; };
+export function workdayLink(apps, msg) {
+  const [local = '', domain = ''] = String(msg.fromAddr ?? '').toLowerCase().split('@');
+  const sender = domain === 'myworkday.com' ? local : domain.split('.').slice(-2)[0];
+  const submitted = apps.filter((a) => SUBMITTED.has(a.status) && tenantOf(a.url));
+  const hay = `${msg.subject ?? ''}\n${unwrap(msg.text)}`.toLowerCase();
+  const at = new Date(msg.date ?? 0).getTime();
+  const one = (list, how) => (list.length === 1 ? { ...list[0], how } : null);
+  // The longest title the mail names ("Data Scientist / Data Engineer" over "Data Scientist").
+  const titled = (list) => { const hit = list.filter((a) => hay.includes(a.title.toLowerCase())); const n = Math.max(0, ...hit.map((a) => a.title.length)); return hit.filter((a) => a.title.length === n); };
+  // The confirmation is sent once the submission is recorded: seconds after it, never before.
+  const justBefore = (list) => list.filter((a) => { const t = new Date(a.submitted_at ?? 0).getTime(); return t <= at + 5_000 && at - t <= 15 * 60_000; })
+    .sort((x, y) => new Date(y.submitted_at) - new Date(x.submitted_at)).slice(0, 1);
+  const mine = submitted.filter((a) => tenantOf(a.url) === sender);
+  if (mine.length) {
+    return one(mine.filter((a) => { const r = reqIdOf(a.url); return r && hay.includes(r); }), 'workday req id')
+      ?? one(titled(mine), 'workday title') ?? one(mine, 'workday portal') ?? one(justBefore(mine), 'workday time')
+      ?? { ambiguous: true, company: mine[0].company, how: 'several roles at portal' };
+  }
+  return domain === 'myworkday.com' || local === 'workday' ? one(justBefore(titled(submitted)), 'workday title+time') : null;
+}
+
 async function linkEmail(db, msg, { stated = applicationDetails(msg), strict = false } = {}) {
   const byThread = await one(db, `SELECT a.id app_id, a.job_id FROM applications a WHERE a.gmail_thread_id = ? AND ${CAREERPILOT_APP}`, [msg.threadId])
     ?? await one(db, `SELECT o.job_id, a.id app_id FROM outreach o LEFT JOIN applications a ON a.job_id = o.job_id
       WHERE o.gmail_thread_id = ? AND o.job_id IS NOT NULL LIMIT 1`, [msg.threadId]);
   if (byThread) return { ...byThread, how: 'thread' };
 
-  const apps = await all(db, `SELECT a.id app_id, a.job_id, j.company, j.title, j.url FROM applications a JOIN jobs j ON j.id = a.job_id
+  const apps = await all(db, `SELECT a.id app_id, a.job_id, a.status, a.submitted_at, j.company, j.title, j.url FROM applications a JOIN jobs j ON j.id = a.job_id
     WHERE a.status != 'withdrawn' AND ${CAREERPILOT_APP}`);
+  const byPortal = workdayLink(apps, msg);
+  if (byPortal) return byPortal;
   // A confirmation or invite that names its posting is matched on that, not on every company the body
   // mentions: foundit mails also advertise other employers' jobs.
   if (stated.company || stated.url) {
@@ -142,7 +174,8 @@ export async function processMessage(db, msg, settings, { ourThreadIds }) {
       // Status changes only from mail we can trust: a reply in a thread we started, or mail that passed
       // Gmail's DMARC/DKIM check and comes from a hiring platform or the company's own domain. Offers
       // are always confirmed by the candidate.
-      const trusted = link.how === 'thread' || (msg.authenticated && (platformSender(msg.fromAddr) || domainMatchesCompany(msg.fromAddr, app.company ?? link.company ?? '')));
+      const trusted = link.how === 'thread' || (msg.authenticated && (platformSender(msg.fromAddr) || /^workday/.test(link.how)
+        || domainMatchesCompany(msg.fromAddr, app.company ?? link.company ?? '')));
       if (trusted && target !== 'offer' && cls.confidence >= AUTO_CONFIDENCE && !link.ambiguous) {
         result.transitioned = await transition(db, app, target, {
           evidence: { type: 'email', emailId: msg.id, threadId: msg.threadId, subject: msg.subject, from: msg.fromAddr },

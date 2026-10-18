@@ -278,7 +278,10 @@ test('Barclays, Mastercard, Maersk, ICF, US Bank, Mobility, PwC and RELX questio
   const heard = ask('How did you hear about this job?', 'dropdown', 'AllianceBernstein').option;
   assert.equal(best(["School's Career Portal (i.e. Handshake/Symplicity)", 'Careers Page', 'Other'], heard), 1);
   assert.equal(best(["School's Career Portal (i.e. Handshake/Symplicity)", 'Other'], heard), 1);
-  Object.assign(answers, { age_18_or_older: true, has_aadhaar_card: true, has_pan_card: true, will_not_use_others_confidential_info: true });
+  Object.assign(answers, { age_18_or_older: true, has_aadhaar_card: true, has_pan_card: true, will_not_use_others_confidential_info: true, outside_employment_to_continue: false });
+  assert.deepEqual(ask('Are you currently engaged in any outside employment or activity that you would like to continue if you are hired by Mastercard?', 'dropdown', 'Mastercard'), { yes: false });
+  Object.assign(answers, { restrictive_covenants: false, employment_restrictions: false });
+  assert.deepEqual(ask('Do you have any commitments or agreements with other employers that might affect your employment with RELX, Inc. or any of its subsidiaries (LexisNexis, Elsevier, Reed Exhibitions, Reed Business, Risk Solutions)?', 'dropdown', 'RELX'), { yes: false });
   assert.deepEqual(ask('Please confirm if you have a valid Aadhar card.', 'dropdown', 'Maersk'), { yes: true });
   assert.deepEqual(ask('Please confirm if you have a valid PAN card.', 'dropdown', 'Maersk'), { yes: true });
   assert.deepEqual(ask('I confirm that I am 18+ years of age', 'dropdown', 'Maersk'), { yes: true });

@@ -61,6 +61,39 @@ test('the candidate’s own applications (job-site confirmations, assessment inv
   assert.deepEqual((await all(db, 'SELECT category, subject FROM emails ORDER BY id')).map((e) => [e.category, e.subject]), [['ignored', null], ['ignored', null]]);
 });
 
+test('Workday confirmations: recognised, and linked by portal, requisition id, title or timing', async () => {
+  const { workdayLink } = await import('../lib/gmail-sync.mjs');
+  const c = (fromAddr, subject, text) => classifyEmail({ fromAddr, subject, text }).category;
+  assert.equal(c('examplecorp@myworkday.com', 'Thank you for your online submission',
+    'Dear A, Thank you for your interest in working with Examplecorp. A recruiter will contact you if your skills match. Thank you again for applying, and we wish you success.'), 'application_confirmation');
+  assert.equal(c('examplecorp@myworkday.com', 'Analyst I at Examplecorp',
+    'Dear A, \nThank you for your interest in Examplecorp. We have\r\n received your application for the Analyst I - R1600001\r\n position.'), 'application_confirmation');
+  assert.equal(c('examplecorp@myworkday.com', 'Examplecorp - Application Update',
+    'Dear A, Thank you for your interest in the Data Analyst position. Your application will be taken into careful consideration.'), 'application_confirmation');
+  assert.equal(c('examplecorp@myworkday.com', 'Examplecorp Inc. - Thank you for applying',
+    'We have successfully received your submission to the following position: R-100001 Associate Data Scientist (Open) .'), 'application_confirmation');
+
+  const app = (id, title, url, submitted_at, status = 'submitted') => ({ app_id: id, job_id: id, company: 'Examplecorp', title, url, submitted_at, status });
+  const mail = (fromAddr, date, text) => ({ fromAddr, date, subject: 'Thank you', text });
+  const three = [app('h1', 'Storage AI Engineer', 'https://excorp.wd5.myworkdayjobs.com/jobs/job/B/Storage-AI-Engineer_1100001', '2026-10-18T15:32:18Z'),
+    app('h2', 'AI and Machine Learning Engineer', 'https://excorp.wd5.myworkdayjobs.com/jobs/job/B/AI-and-ML_1100002', '2026-10-18T15:33:32Z'),
+    app('h3', 'Data Scientist / Data Engineer', 'https://excorp.wd5.myworkdayjobs.com/jobs/job/B/DS_1100003', '2026-10-18T15:34:44Z'),
+    app('h4', 'Data Scientist', 'https://excorp.wd5.myworkdayjobs.com/jobs/job/B/DS_1100004', null, 'ready')];
+  // Names neither role nor requisition: the submission just before it arrived.
+  assert.equal(workdayLink(three, mail('excorp@myworkday.com', '2026-10-18T15:33:41Z', 'Thank you again for applying')).app_id, 'h2');
+  // The longest title it names; a role not yet submitted is not a candidate.
+  assert.equal(workdayLink(three, mail('excorp@myworkday.com', '2026-10-19T09:00:00Z', 'your application for Data Scientist / Data Engineer')).app_id, 'h3');
+  assert.equal(workdayLink(three, mail('excorp@myworkday.com', '2026-10-19T09:00:00Z', 'Thank you again for applying')).ambiguous, true);
+  const two = [app('a1', 'Associate Data Scientist', 'https://amcorp.wd1.myworkdayjobs.com/careers/job/H/Associate-Data-Scientist_R-100001', '2026-10-18T16:53:49Z'),
+    app('a2', 'Associate Data Science', 'https://amcorp.wd1.myworkdayjobs.com/careers/job/H/Associate-Data-Science_R-100002', '2026-10-18T16:57:34Z')];
+  assert.equal(workdayLink(two, mail('amcorp@myworkday.com', '2026-10-18T19:00:00Z', 'the following position: R-100001 Associate Data Scientist (Open) .')).app_id, 'a1');
+  // Another name of the employer (a brand of the lnw tenant's): the exact title, submitted just before.
+  const brand = [app('l1', 'BI Developer', 'https://lnwx.wd5.myworkdayjobs.com/ext/job/B/BI-Developer_R100009', '2026-10-18T14:17:32Z')];
+  assert.equal(workdayLink(brand, mail('workday@brandco.com', '2026-10-18T14:17:40Z', 'Thank you for applying for the BI Developer position at Brandco!')).app_id, 'l1');
+  assert.equal(workdayLink(brand, mail('workday@brandco.com', '2026-10-19T14:17:40Z', 'Thank you for applying for the BI Developer position at Brandco!')), null);
+  assert.equal(workdayLink(brand, mail('jobs@othercorp.com', '2026-10-18T14:17:40Z', 'BI Developer')), null);
+});
+
 test('foundit role text split across lines', () => {
   const mail = (id, jobId) => ({ ...foundit, id, threadId: `t${id}`, snippet: '', date: '2026-10-17T06:46:23.000Z', fromName: 'foundit', authenticated: true,
     subject: 'Examplecorp Application Successful | Ace your interview',
