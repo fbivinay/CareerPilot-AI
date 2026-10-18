@@ -19,7 +19,7 @@ test('employer questions are answered only from the profile, in the unit they as
     answerFor({ label, kind, required }, { profile, answers, job, inIndia: true });
   assert.deepEqual(ask('Do you have legal right to work in this country?'), { yes: true });
   assert.deepEqual(ask('Will you now or in the future require sponsorship?'), { yes: false });
-  assert.deepEqual(ask('Have you ever worked for Marvell (as an Employee, Intern or Contractor)?'), { yes: false });
+  assert.deepEqual(ask('Have you ever worked for Marvell?'), { yes: false });
   assert.deepEqual(ask('Have you ever worked for Acme Labs?', 'dropdown', { company: 'Acme Labs', employment_type: 'full_time' }), { yes: true });
   // Unknown to the profile: never guessed.
   assert.equal(ask('Are you at least 18 years old or older?'), undefined);
@@ -37,6 +37,36 @@ test('employer questions are answered only from the profile, in the unit they as
   assert.ok(ask('Veteran Status').option[0].test('I do not wish to self-identify'));
   assert.deepEqual(dateRange('May 2026 - Jun 2026'), [{ month: 5, year: 2026 }, { month: 6, year: 2026 }]);
   assert.ok(fieldWants('Big Data Analytics').test('Data Analytics') && !fieldWants('Big Data Analytics').test('Business Analytics'));
+});
+
+test('a statement is signed only when all it says is that the answers are true', async () => {
+  const { answerFor } = await import('../lib/apply/workday.mjs');
+  const ask = (label, kind, answers) => answerFor({ label, kind, required: true }, { profile: { name: 'A Candidate' }, answers, job: { company: 'Marvell' } });
+  const marvell = 'I understand that Marvell reserves the right to inquire further on any matter bearing on the company’s export compliance obligations. I certify that the foregoing answers are true and correct to the best of my knowledge and belief. Signature and Date';
+  assert.match(ask(marvell, 'textarea', { may_e_sign: true }).text, /^A Candidate, \d{1,2} \w+ \d{4}$/);
+  assert.equal(ask(marvell, 'textarea', {}), undefined);
+  assert.equal(ask(marvell, 'checkbox', { may_e_sign: true }), undefined); // never ticked or answered "yes"
+  assert.deepEqual(ask('Attestation: I hereby attest that all information I have provided is true and complete.', 'text', { may_e_sign: true }), { text: 'A Candidate' });
+  // Anything more than that is the candidate's to approve; so is a bare signature box, which shows nothing to read.
+  const promise = 'Attestation and acknowledgement statement By signing below, I hereby: Attest that all information I have provided in conjunction with this employment application is true and complete. Attest that I will not bring confidential information from a former employer.';
+  assert.equal(ask(promise, 'text', { may_e_sign: true }), undefined);
+  assert.equal(ask('By signing below, I certify that I have never worked for Marvell.', 'text', { may_e_sign: true }), undefined);
+  assert.equal(ask('Signature', 'text', { may_e_sign: true }), undefined);
+});
+
+test('a past tie to the employer is "no" only when every tie the question names is known to be "no"', async () => {
+  const { answerFor } = await import('../lib/apply/workday.mjs');
+  const profile = { name: 'A Candidate', experience: [{ company: 'Acme Labs, Bengaluru' }] };
+  const ask = (label, answers, company = 'Marvell') => answerFor({ label, kind: 'dropdown', required: true }, { profile, answers, job: { company } });
+  const worked = 'Have you ever worked for Marvell (as an Employee, Intern or Contractor)?';
+  assert.equal(ask(worked, {}), undefined); // a contract need not be in the work history
+  assert.deepEqual(ask(worked, { prior_relationship_with_employer: false }), { yes: false });
+  assert.deepEqual(ask('Have you ever worked for Acme Labs as an employee, contractor or consultant?', { prior_relationship_with_employer: false }, 'Acme Labs'), { yes: true });
+  assert.deepEqual(ask('Have you held any independent contractor or consultant roles with Marvell?', { prior_relationship_with_employer: true }), { yes: true });
+  assert.equal(ask('Have you previously interviewed with or worked for Marvell?', { prior_relationship_with_employer: false }), undefined);
+  assert.deepEqual(ask('Have you previously interviewed with or worked for Marvell?', { previously_interviewed: false }), { yes: false });
+  assert.deepEqual(ask('Have you previously interviewed with or worked for Acme Labs?', { previously_interviewed: false }, 'Acme Labs'), { yes: true });
+  assert.deepEqual(ask('Do you have a relative employed at Marvell?', { relatives_at_employer: false }), { yes: false });
 });
 
 test('blocking questions are counted across applications, most blocking first', async () => {

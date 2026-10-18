@@ -673,6 +673,42 @@ const norm = (s) => String(s ?? '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').tr
 const workedAt = (profile, company) => (profile.experience ?? []).some((e) => norm(splitPlace(e.company)[0]).includes(norm(company)) && norm(company).length > 2);
 const lpa = (inr) => Math.round((inr / 1e5) * 100) / 100;
 
+// A statement the candidate signs by typing their name. Their standing permission (answers.may_e_sign)
+// covers only certifying that the answers are true and acknowledging that the employer may check them:
+// a statement with any other sentence in it (a promise, a waiver, a consent) waits for the candidate to
+// approve it (answers.custom), and a tick box or yes/no is never signed this way.
+const CERTIFIES = [
+  /^(i (hereby )?)?(certify|attest|declare|confirm|affirm) that (all )?(of )?(the )?(foregoing |above |preceding )?(information|answers|statements|responses)\b[^?]*?\b(is|are) (true|correct|accurate|complete)(,? (and )?(true|correct|accurate|complete))*( to the best of my knowledge( and belief)?)?$/i,
+  /^i understand that (?!.*\b(i|me|my)\b)[^?]{1,60}? reserves the right to (inquire|verify|investigate)\b[^?]*$/i,
+];
+function signs(c) {
+  if (!c.answers.may_e_sign || (c.kind !== 'text' && c.kind !== 'textarea')) return undefined;
+  const sentences = c.label
+    .replace(/\b(attestation|acknowledge?ment)( and (attestation|acknowledge?ment))?( statement)?\b|\bby signing (below|this)\b,?( i hereby)?|\bsignature( and date)?\b/gi, '.')
+    .split(/[.;:]/).map((s) => s.trim()).filter(Boolean);
+  if (!sentences.length || !sentences.every((s) => CERTIFIES.some((re) => re.test(s)))) return undefined;
+  const date = new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Asia/Kolkata' });
+  return { text: /\bdate\b/i.test(c.label) ? `${c.profile.name}, ${date}` : c.profile.name };
+}
+
+// Past ties to this employer. One question can name several ("worked here as an employee or
+// contractor"): it is "yes" when any tie it names is, "no" only when every tie it names is known to be
+// "no", and unknown otherwise. Employment comes from the profile's full history, the rest from the
+// candidate's standing answers.
+const RELATIVE = /\b(friend|relative|family member|related to)\b|personal relationship with any|relationship with (any|a) (current )?employee/i;
+const PAST_TIE = new RegExp(`${RELATIVE.source}|\\binterviewed\\b|\\b(ever|previously|formerly|currently|already)\\b.{0,20}\\b(worked|employed|work)\\b|\\bformer (employee|intern|contractor)\\b|collaborated with|\\b(client|partner|vendor|supplier)\\b.{0,40}\\bcapacity|contractor or consultant|consultant roles?\\b`, 'i');
+function pastTies(c) {
+  const facts = [
+    [RELATIVE, c.answers.relatives_at_employer],
+    [/\binterview(ed|s)?\b/i, c.answers.previously_interviewed],
+    [/\b(work|worked|employed|employee|intern)\b/i, workedAt(c.profile, c.job.company)],
+    // A contract may not be in the history, even when named in passing ("Employee, Intern or Contractor").
+    [/collaborat|\b(client|partner|vendor|supplier|contractor|consultant)s?\b/i, c.answers.prior_relationship_with_employer],
+  ].filter(([re]) => re.test(c.label)).map(([, fact]) => yes(fact)?.yes);
+  if (facts.includes(true)) return { yes: true };
+  return !facts.length || facts.includes(undefined) ? undefined : { yes: false };
+}
+
 // [pattern on the question, answer(ctx)]: the first matching pattern decides; undefined = not known.
 const QUESTION_RULES = [
   [/\b(at least|over|above|older than)\b.{0,15}\b18\b|\b18 years\b|age of 18|legal age/i, (c) => yes(c.answers.age_18_or_older)],
@@ -680,27 +716,22 @@ const QUESTION_RULES = [
   [/(legal|lawful)\w* (right|authori[sz]\w*|eligib\w*|permi\w*) to work|authori[sz]ed to work|work authori[sz]ation|eligible to work|right to work/i,
     (c) => (c.inIndia ? yes(c.answers.indian_work_authorization) : undefined)],
   [/relocat/i, (c) => yes(c.answers.willing_to_relocate)],
-  [/\b(friend|relative|family member|related to)\b|personal relationship with any|relationship with (any|a) (current )?employee/i, (c) => yes(c.answers.relatives_at_employer)],
   [/restrictive covenant|non-?compete|non-?solicit/i, (c) => yes(c.answers.restrictive_covenants)],
-  // Any other past tie to the employer (client, partner, vendor, contractor, consultant).
-  [/collaborated with|\b(client|partner|vendor|supplier)\b.{0,40}\bcapacity|contractor or consultant|consultant roles?\b/i,
-    (c) => yes(c.answers.prior_relationship_with_employer)],
-  // An attestation the candidate signs by typing their name, and its date (only with their permission).
-  [/by signing (below|this)|attestation|i hereby attest/i, (c) => (c.answers.may_e_sign ? { text: c.profile.name, yes: true } : undefined)],
+  // A statement to sign, and its date (only with the candidate's permission).
+  [/by signing (below|this)|attestation|i hereby attest|\bsignature\b/i, signs],
   [/^date\s*:?$/i, (c) => {
     if (!c.answers.may_e_sign) return undefined;
     const [year, month, day] = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }).split('-').map(Number);
     return { date: { year, month, day }, text: `${String(day).padStart(2, '0')}/${String(month).padStart(2, '0')}/${year}` };
   }],
-  [/\binterviewed\b/i, (c) => yes(c.answers.previously_interviewed)],
   [/^(name )?(prefix|salutation)$/i, (c) => (c.answers.name_prefix ? { option: [new RegExp(`^${escapeRe(String(c.answers.name_prefix).replace(/\.$/, ''))}\\.?$`, 'i')], text: c.answers.name_prefix } : undefined)],
-  [/\b(ever|previously|formerly|currently|already)\b.{0,20}\b(worked|employed|work)\b|\bformer (employee|intern|contractor)\b/i, (c) => ({ yes: workedAt(c.profile, c.job.company) })],
   [/citizen of any of the following countries|citizen of (cuba|iran|north korea|syria)/i,
     (c) => (c.answers.citizenship ? { yes: new RegExp(`\\b${escapeRe(c.answers.citizenship)}\\b`, 'i').test(c.label) } : undefined)],
   [/countries in which you (currently )?hold citizenship|select (all )?(the )?countr(y|ies) of (your )?citizenship/i,
     (c) => (c.answers.citizenship ? { option: [new RegExp(`^${escapeRe(c.answers.citizenship)}$`, 'i')], search: c.answers.citizenship } : undefined)],
   [/citizen or national of the united states|permanent resident|export control/i, (c) => yes(c.answers.us_person)],
   [/^(country of )?(citizenship|nationality)\b/i, (c) => (c.answers.citizenship ? { option: [new RegExp(`^${escapeRe(c.answers.citizenship)}`, 'i'), /^indian?$/i] } : undefined)],
+  [PAST_TIE, pastTies], // after the export-control questions, which can mention employment too
   [/\b(start|joining|join)\b.{0,15}\bdate\b|\bavailab\w* to (start|join)\b|\bearliest\b.{0,15}\b(start|join)|\bwhen\b.{0,30}\b(start|join)\b/i, (c) => {
     if (c.kind !== 'date') return undefined;
     const when = isoDate(/full.?time/i.test(c.label) ? c.answers.earliest_full_time_start
@@ -743,9 +774,6 @@ const QUESTION_RULES = [
   [/^e-?mail( address)?$/i, (c) => (c.profile.email ? { text: c.profile.email } : undefined)],
   [/^address line 1$|^street address|^address$/i, (c) => (c.answers.address_line1 ? { text: c.answers.address_line1 } : undefined)],
   [/postal code|\bpin ?code\b|\bzip\b/i, (c) => (c.answers.postal_code ? { text: String(c.answers.postal_code) } : undefined)],
-  [/\bsignature\b/i, (c) => (c.answers.may_e_sign
-    ? { text: `${c.profile.name}, ${new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Asia/Kolkata' })}` }
-    : undefined)],
 ];
 
 export function answerFor(question, ctx) {
