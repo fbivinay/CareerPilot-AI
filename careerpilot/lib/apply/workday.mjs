@@ -1142,9 +1142,12 @@ const QUESTION_RULES = [
   }],
   // The role applied for: the posting's own title, or a role name it contains ("Data Scientist" in
   // "Data Scientist (Computer Vision)").
+  // Fractal's options are kinds of candidate ("I am a Fresher", "I am an Intern"): an internship's intern, or a
+  // fresher with no work beyond internships.
   [/\bselect the (role|position) you are applying for\b|\bwhich (role|position) are you applying for\b/i, (c) => {
     const title = String(c.job.title ?? '').toLowerCase();
-    return title ? { option: [new RegExp(`^${escapeRe(c.job.title)}$`, 'i'), { test: (t) => t.length >= 6 && title.includes(t.toLowerCase()) }] } : undefined;
+    const kind = c.job.employment_type === 'internship' ? /\bI am an intern\b/i : workYears(c.profile) === 0 ? /\bI am a fresher\b/i : /\bexperienced professional\b/i;
+    return { option: [kind, ...(title ? [new RegExp(`^${escapeRe(c.job.title)}$`, 'i'), { test: (t) => t.length >= 6 && title.includes(t.toLowerCase()) }] : [])] };
   }],
   [/\bcomfortable working from (the )?office\b|\bwork(ing)? (from|at) (the )?(office|client location)\b/i,
     (c) => ((c.answers.work_arrangements ?? []).some((k) => /on.?site|office/i.test(k)) ? { yes: true } : undefined)],
@@ -1155,7 +1158,7 @@ const QUESTION_RULES = [
   // required consent to the employer's terms or privacy notice is ticked (the candidate authorized both
   // on 2026-10-17).
   [/job alert|newsletter|marketing|talent (community|network)|future (opportunit|role|position)|contact me about|keep me (informed|updated)|receive (\w+ )?communications?\b.*\bevents?\b/i,
-    (c) => (c.kind === 'dropdown' || c.kind === 'radio' ? { option: [/^(no|i do not|i don't|do not|disagree|decline)\b/i] } : undefined)],
+    (c) => (c.kind === 'dropdown' || c.kind === 'radio' ? { option: [/^(no|i do not|i don't|do not|disagree|decline)\b/i, /\bunsubscribe\b|\bopt.?out\b|\b(do not|don'?t) wish\b/i] } : undefined)], // Fractal: "I wish to unsubscribe …"
   // Also a required "I have read the Privacy Notice" (Dentsu) or "… understand how my information will be
   // processed" (Visa), and a required consent to the tool the employer runs its hiring process with
   // (Logitech's automated interview scheduling).

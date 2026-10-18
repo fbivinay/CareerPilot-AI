@@ -304,6 +304,9 @@ test('Barclays, Mastercard, Maersk, ICF, US Bank, Mobility, PwC and RELX questio
   const role = answerFor({ label: 'Please select the role you are applying for', kind: 'dropdown', required: true },
     { profile, answers, job: { company: 'Fractal', title: 'Data Scientist (Computer Vision)' }, inIndia: true });
   assert.equal(best(['Data Engineer', 'Data Scientist', 'ML Engineer'], role.option), 1);
+  assert.equal(best(['I am an Intern', 'I am an Apprentice', 'I am a Fresher', 'I am an Experienced Professional'], role.option), 2);
+  assert.equal(best(['I wish to subscribe to marketing communications', 'I wish to unsubscribe from marketing communications'],
+    ask('Do you wish to receive our marketing communications? If you do not respond, it will be considered that you wish to subscribe', 'dropdown', 'Fractal').option), 1);
   assert.equal(best(['Indian Citizen', 'US Citizen', 'Foreign National'], ask('Please specify your Citizenship Status', 'dropdown', 'Maersk').option), 0);
   const notice = ask('Do you need to provide a notice period to your current employer?', 'dropdown', 'TransUnion');
   assert.equal(best(['Yes', 'No'], notice.option), 1);
