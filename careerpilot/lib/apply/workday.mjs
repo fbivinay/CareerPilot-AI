@@ -882,6 +882,8 @@ const QUESTION_RULES = [
   // Every part of current pay (bonus, benefits) is part of the current CTC, which is 0 for a student.
   [/\b(current|present)\b.{0,25}\b(ctc|salary|compensation|pay|bonus|benefits|allowances?|incentives?)\b/i, (c) => (c.answers.current_ctc == null ? undefined
     : { text: String(c.answers.current_ctc), option: [/^0\b|not applicable|n\/a|student|fresher/i] })],
+  // Before the pay figures, which would read "desired pay" here (the candidate said yes on 2026-10-18).
+  [/(desired|expected) (pay|salary)( rate)? is higher than|still (want|wish|like) to be considered/i, (c) => yes(c.answers.consider_if_pay_below_expectation)],
   // The candidate's own figures (₹7 LPA full-time, ₹40,000 a month for internships), converted to the
   // unit the question names; with no unit named, the unit is written out. A list of pay ranges gets the
   // range the figure falls in.

@@ -35,6 +35,9 @@ test('employer questions are answered only from the profile, in the unit they as
   const ranges = ['Up to INR 6,00,000', 'INR 6,00,000 - INR10,00,000', 'INR 10,00,000 - INR 20,00,000', 'INR 50,00,000 - above'];
   assert.deepEqual(ranges.filter((o) => ask('What is your desired base salary?').option[0].test(o)), ['INR 6,00,000 - INR10,00,000']);
   // Past ties named in the question, and required acknowledgements.
+  assert.equal(ask('If your desired pay rate is higher than the amount the position pays, do you still want to be considered for the position?'), undefined);
+  assert.deepEqual(answerFor({ label: 'If your desired pay rate is higher than the amount the position pays, do you still want to be considered for the position?', kind: 'dropdown', required: true },
+    { profile, answers: { ...answers, consider_if_pay_below_expectation: true }, job: { company: 'Lnw' }, inIndia: true }), { yes: true });
   assert.deepEqual(ask('Did you work for KPMG?'), { yes: false });
   assert.deepEqual(ask('Have you worked for Haleon in the past?'), { yes: false });
   assert.deepEqual(ask('Have you worked for Acme Labs in the past?'), { yes: true });
