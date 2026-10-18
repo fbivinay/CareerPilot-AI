@@ -78,6 +78,10 @@ test('questions answered by deriving from the profile, and opt-ins declined', as
   assert.deepEqual(ask('Do you hold an OCI/PIO card?'), { yes: false });
   assert.deepEqual(ask('Have you ever been an employee of either Northern Trust or any affiliates of Northern Trust?'), { yes: false });
   assert.deepEqual(ask('Do you currently have a personal relationship (including marital or other committed relationship) with a Northern Trust employee?'), { yes: false });
+  assert.deepEqual(ask('Any relation working with Synechron?'), { yes: false });
+  assert.deepEqual(answerFor({ label: 'Have you participated in any Airbus interviews before ?', kind: 'radio', required: true },
+    { profile, answers: { ...answers, previously_interviewed: false }, job: { company: 'Ag' } }), { yes: false });
+  assert.ok(ask('Primary Nationality').option.some((re) => re.test('India')));
   assert.equal(ask('How many years of Relevant Experience do you have?', 'text').text, '0'); // two 2-month internships
   assert.equal(ask('How many years of experience do you have with Python?', 'text'), undefined);
   assert.deepEqual(ask('How soon you can join us?', 'text'), { text: 'From 10 November 2026' });

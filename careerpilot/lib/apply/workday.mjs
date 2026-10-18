@@ -704,8 +704,8 @@ function signs(c) {
 // contractor"): it is "yes" when any tie it names is, "no" only when every tie it names is known to be
 // "no", and unknown otherwise. Employment comes from the profile's full history, the rest from the
 // candidate's standing answers.
-const RELATIVE = /\b(friend|relative|family member|related to)\b|\bpersonal relationship\b|relationship with (any|a) (current )?employee/i;
-const PAST_TIE = new RegExp(`${RELATIVE.source}|\\binterviewed\\b|\\b(ever|previously|already) applied\\b|\\breceived an offer\\b|\\bindependent contractor\\b|third.party labou?r|\\b(ever|previously|formerly|currently|already)\\b.{0,20}\\b(worked|employed|work|employee)\\b|\\bformer (employee|intern|contractor)\\b|collaborated with|\\b(client|partner|vendor|supplier)\\b.{0,40}\\bcapacity|contractor or consultant|consultant roles?\\b`, 'i');
+const RELATIVE = /\b(friend|relative|family member|related to)\b|\bpersonal relationship\b|relationship with (any|a) (current )?employee|\brelations? working (with|at|for)\b/i;
+const PAST_TIE = new RegExp(`${RELATIVE.source}|\\binterviewed\\b|\\binterviews?\\b.{0,15}\\bbefore\\b|\\b(ever|previously|already) applied\\b|\\breceived an offer\\b|\\bindependent contractor\\b|third.party labou?r|\\b(ever|previously|formerly|currently|already)\\b.{0,20}\\b(worked|employed|work|employee)\\b|\\bformer (employee|intern|contractor)\\b|collaborated with|\\b(client|partner|vendor|supplier)\\b.{0,40}\\bcapacity|contractor or consultant|consultant roles?\\b`, 'i');
 function pastTies(c) {
   const facts = [
     [RELATIVE, c.answers.relatives_at_employer],
@@ -786,7 +786,8 @@ const QUESTION_RULES = [
   [/countries in which you (currently )?hold citizenship|select (all )?(the )?countr(y|ies) of (your )?citizenship/i,
     (c) => (c.answers.citizenship ? { option: [new RegExp(`^${escapeRe(c.answers.citizenship)}$`, 'i')], search: c.answers.citizenship } : undefined)],
   [/citizen or national of the united states|permanent resident|export control/i, (c) => yes(c.answers.us_person)],
-  [/^(country of )?(citizenship|nationality)\b/i, (c) => (c.answers.citizenship ? { option: [new RegExp(`^${escapeRe(c.answers.citizenship)}`, 'i'), /^indian?$/i] } : undefined)],
+  [/^(primary |country of )?(citizenship|nationality)\b/i, (c) => (c.answers.citizenship
+    ? { option: [new RegExp(`^${escapeRe(c.answers.citizenship)}`, 'i'), /^indian?$/i], search: c.answers.citizenship } : undefined)],
   // An OCI/PIO card is for foreign citizens of Indian origin: an Indian citizen cannot hold one.
   [/\b(oci|pio)\b|overseas citizen(ship)? of india/i, (c) => (/^india/i.test(c.answers.citizenship ?? '') ? { yes: false } : undefined)],
   [PAST_TIE, pastTies], // after the export-control questions, which can mention employment too
@@ -843,7 +844,8 @@ const QUESTION_RULES = [
   [/^currency\b|\bcurrency \(/i, () => ({ option: [/\binr\b|indian rupee/i], text: 'INR' })], // the profile's figures are in rupees
   [/notice period|\bhow much notice\b/i, (c) => (c.answers.notice_period == null ? undefined
     : { text: String(c.answers.notice_period), option: [new RegExp(`^${c.answers.notice_period}\\b`), /immediate|^0\b|no notice|not applicable/i] })],
-  [/\b(current|present)\b.{0,25}\b(ctc|salary|compensation|pay)\b/i, (c) => (c.answers.current_ctc == null ? undefined
+  // Every part of current pay (bonus, benefits) is part of the current CTC, which is 0 for a student.
+  [/\b(current|present)\b.{0,25}\b(ctc|salary|compensation|pay|bonus|benefits|allowances?|incentives?)\b/i, (c) => (c.answers.current_ctc == null ? undefined
     : { text: String(c.answers.current_ctc), option: [/^0\b|not applicable|n\/a|student|fresher/i] })],
   // The candidate's own figures (₹7 LPA full-time, ₹40,000 a month for internships), converted to the
   // unit the question names; with no unit named, the unit is written out.
