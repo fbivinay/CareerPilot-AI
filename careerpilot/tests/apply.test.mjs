@@ -308,6 +308,12 @@ test('Barclays, Mastercard, Maersk, ICF, US Bank, Mobility, PwC and RELX questio
   const where = (label) => answerFor({ label, kind: 'dropdown', required: true }, { profile: { ...profile, location: 'Bengaluru, Karnataka' }, answers, job: { company: 'Fractal' } });
   assert.equal(best(['Pune', 'Chennai', 'Bengaluru'], where('What is your Location Preference 1?').option), 2);
   assert.equal(where('What is your Location Preference 2?'), undefined);
+  // Family in government: the candidate's own answer, never their work history or the relatives answer.
+  const govFamily = 'Have your immediate family member(s) (spouse, parent, sibling or child) or business partner(s) ever been employed by any Government?';
+  assert.equal(ask(govFamily, 'dropdown', 'GE Vernova'), undefined);
+  answers.family_government_employment = false;
+  assert.deepEqual(ask(govFamily, 'dropdown', 'GE Vernova'), { yes: false });
+  assert.deepEqual(ask('Are you related to anyone who is an employee of a government office or agency that has oversight over Mastercard?', 'dropdown', 'Mastercard'), { yes: false });
   // TransUnion's "working experience" and MSD's AI questions.
   assert.equal(best(['0 - 2 years', '3 - 4 years'], ask('What is the total number years of working experience, excluding internships?', 'dropdown', 'TransUnion').option), 0);
   Object.assign(answers, { allow_ai_screening: true, consider_for_other_roles: true });

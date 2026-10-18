@@ -923,6 +923,10 @@ const QUESTION_RULES = [
   [/relocat|\bwilling to work (from|at|in) the (job('s)? )?locations?\b/i, (c) => yes(c.answers.willing_to_relocate)], // US Bank: "from the location(s) posted"
   [/reasonable (adjustment|accommodation)s?|accommodations? (during|in|for) the (recruit|interview|hiring|application)|\b(adjustment|accommodation)s?\b.{0,60}\b(recruit\w*|interview|hiring|application|selection) process/i,
     (c) => yes(c.answers.needs_accommodation)],
+  // Family or business partners in government employment (GE Vernova, Mastercard): the candidate's own
+  // answer (none, 2026-10-18); never their own work history or the relatives-at-the-employer answer.
+  [/\b(family|relatives?|spouse|parents?|siblings?|child(ren)?|business partners?|related to anyone)\b.{0,160}\b(employed by|worked for|works? for|employee of)\b.{0,60}\bgovernment\b/i,
+    (c) => yes(c.answers.family_government_employment)],
   // Government employment is in the full work history like any other (HPE asks about the U.S. one).
   [/government (or public institution )?employment experience|(employed by|worked for) (a |the )?(government|public sector)|\bemployee of a government\b/i,
     (c) => ({ yes: (c.profile.experience ?? []).some((e) => /government|ministry|municipal|public sector|federal/i.test(e.company)) })],
