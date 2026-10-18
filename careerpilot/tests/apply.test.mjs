@@ -223,6 +223,9 @@ test('AllianceBernstein, Amgen and Ashby questions follow the standing answers',
   assert.equal(ask(bms), undefined);
   answers.details_match_aadhaar = true;
   assert.deepEqual(ask(bms), { yes: true });
+  // CNX's questions for someone in a job, to a candidate with none.
+  assert.deepEqual(ask('Have you notified your current manager in writing of your intent to apply for this position?'), { yes: false });
+  assert.deepEqual(ask('Are you on a Performance Improvement Plan (PIP)?'), { yes: false });
   // Barclays' local-script address copy.
   const local = (label) => answerFor({ label, kind: 'text', required: true }, { profile: { ...profile, location: 'Bengaluru, Karnataka' },
     answers: { address_line1: 'Central Street' }, job: { company: 'Barclays' }, inIndia: true });

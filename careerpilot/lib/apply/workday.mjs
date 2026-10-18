@@ -834,6 +834,13 @@ function studying(profile) {
     ? String(ed.degree).split(/\s+in\s+/)[0] : null;
 }
 
+// Whether the candidate has a job now: one running to "Present", or current pay above 0. Unknown without
+// a current-pay answer.
+function employed(c) {
+  if ((c.profile.experience ?? []).some((e) => /[-–]\s*(present|current|now)\b/i.test(e.dates ?? ''))) return true;
+  return c.answers.current_ctc == null ? undefined : c.answers.current_ctc > 0;
+}
+
 // [pattern on the question, answer(ctx)]: the first matching pattern decides; undefined = not known.
 const QUESTION_RULES = [
   [/\b(at least|over|above|older than)\b.{0,15}\b18\b|\b18 years\b|age of 18|legal age/i, (c) => yes(c.answers.age_18_or_older)],
@@ -884,11 +891,13 @@ const QUESTION_RULES = [
   // The candidate's last role, and no current one (answers of 2026-10-18).
   [/^reasons? for leaving\b|\bwhy (did|are) you (leave|leaving)\b/i, (c) => (c.answers.reason_for_leaving_last_role ? { text: c.answers.reason_for_leaving_last_role } : undefined)],
   [/\b(responsibilities|duties)\b.{0,30}\bcurrent (job|role|position|employment)\b|\bcurrent (job|role|position)\b.{0,20}\b(responsibilities|duties)\b/i, (c) => {
-    // No job runs to "Present" and the current pay is 0: there is nothing to describe.
-    if ((c.profile.experience ?? []).some((e) => /[-–]\s*(present|current|now)\b/i.test(e.dates ?? '')) || c.answers.current_ctc !== 0) return undefined;
+    if (employed(c) !== false) return undefined;
     const degree = studying(c.profile);
     return { text: `Not applicable: I am not currently employed${degree ? ` (${degree} student)` : ''}.` };
   }],
+  // Questions for someone in a job (CNX: "notified your current manager", "on a Performance Improvement Plan").
+  [/performance improvement plan|\bpip\b|notified (your )?(current )?(manager|supervisor)|\bmanager('s)? (approval|consent|permission)\b/i,
+    (c) => (employed(c) === false ? { yes: false } : undefined)],
   [/\blicensed representative\b|\bresponsible officer\b|\bregistered representative\b/i, (c) => yes(c.answers.regulatory_licensed_role)],
   [/government official|public official|politically exposed/i, (c) => yes(/\b(related|relatives?|family|spouse)\b/i.test(c.label)
     ? c.answers.related_to_government_official : c.answers.government_official)],
