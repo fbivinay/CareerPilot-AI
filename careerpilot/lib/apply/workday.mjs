@@ -494,6 +494,13 @@ async function myInformation(page, ctx) {
   filled.phoneType = await choose(page, 'phoneType', /mobile|cell/i);
   filled.phoneCode = await pick(page, 'countryPhoneCode', 'India', /^india\b/i);
   filled.phone = await setText(page, 'phoneNumber', digits(profile.phone));
+  // The whole street address: in its two lines, or in the only one a form has (BMS, which then asks to
+  // confirm the address matches the candidate's Aadhaar card).
+  if (answers.address_line1 && answers.address_line2 && (await page.locator(F('addressLine1')).count())) {
+    filled.street = (await page.locator(F('addressLine2')).count())
+      ? await setText(page, 'addressLine2', answers.address_line2)
+      : await setText(page, 'addressLine1', `${answers.address_line1}, ${answers.address_line2}`);
+  }
   const problems = [unmet('How did you hear about us', filled.source), unmet('Country', filled.country),
     unmet('State', filled.state ?? { missing: true }), unmet('Phone device type', filled.phoneType), unmet('Country phone code', filled.phoneCode)].filter(Boolean);
   if (problems.length) return { filled, stop: 'blocked', reason: `No matching option for: ${problems.join('; ')}` };
