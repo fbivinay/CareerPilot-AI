@@ -1158,6 +1158,8 @@ const QUESTION_RULES = [
   [/^(website|portfolio|personal (website|site))( url)?$/i, (c) => (c.profile.links?.portfolio ? { text: c.profile.links.portfolio } : undefined)],
   [/^address line 1( - local)?$|^street address|^address$/i, (c) => (c.answers.address_line1 ? { text: c.answers.address_line1 } : undefined)],
   [/^address line 2( - local)?$/i, (c) => (c.answers.address_line2 ? { text: c.answers.address_line2 } : undefined)],
+  [/^building( name| number)?$/i, (c) => (c.answers.address_building ? { text: c.answers.address_building } : undefined)], // TransUnion
+  [/^street number$/i, (c) => (c.answers.address_street_number ? { text: String(c.answers.address_street_number) } : undefined)],
   [/postal code|\bpin ?code\b|\bzip\b/i, (c) => (c.answers.postal_code ? { text: String(c.answers.postal_code) } : undefined)],
 ];
 

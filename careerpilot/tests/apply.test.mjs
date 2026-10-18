@@ -234,6 +234,8 @@ test('AllianceBernstein, Amgen and Ashby questions follow the standing answers',
   const local = (label) => answerFor({ label, kind: 'text', required: true }, { profile: { ...profile, location: 'Bengaluru, Karnataka' },
     answers: { address_line1: 'Central Street', legal_given_name: 'R Vinay', legal_family_name: 'Kumar' }, job: { company: 'Barclays' }, inIndia: true });
   assert.equal(local('Local Given Name(s)').text, 'R Vinay');
+  assert.equal(answerFor({ label: 'Building', kind: 'text', required: true }, { profile, answers: { address_building: 'SV PG' }, job: { company: 'X' } }).text, 'SV PG');
+  assert.equal(answerFor({ label: 'Street Number', kind: 'text', required: true }, { profile, answers: { address_street_number: '23' }, job: { company: 'X' } }).text, '23');
   assert.equal(local('Local Family Name').text, 'Kumar');
   assert.equal(local('Address Line 1 - Local').text, 'Central Street');
   assert.equal(local('City - Local').text, 'Bengaluru');
