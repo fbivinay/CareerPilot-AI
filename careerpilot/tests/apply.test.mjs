@@ -98,6 +98,7 @@ test('restrictions, consents and pay questions follow the standing answers', asy
   assert.equal(ask('Are you subject to a non-competition or other agreement, or aware of other circumstances, that would preclude your employment?', 'textarea', undefined, { restrictive_covenants: false }), undefined);
   assert.deepEqual(ask('Do you have any commitments / bond with previous employer?'), { yes: false });
   assert.deepEqual(ask('Are you currently or have you been in the last five years serving as a government official, either domestic or foreign?'), { yes: false });
+  assert.equal(ask('Are you related to a government official, either domestic or foreign?'), undefined); // a different fact
   assert.deepEqual(ask('Please select your date of birth:', 'date'), { date: { year: 2003, month: 5, day: 14 } });
   assert.deepEqual(ask('Do you permit Labcorp to process your data to consider you for future job openings using Artificial Intelligence (AI) tools ?'), { yes: true });
   assert.deepEqual(ask('I agree to have my personal data processed by PwC for the purpose of recruitment for other positions than the one I have initially applied for'), { yes: true });

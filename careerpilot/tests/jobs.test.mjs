@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { all, one, openDb, run } from '../lib/db.mjs';
-import { expireMissing, reevaluateAll, touchKnown, upsertJob } from '../lib/jobs.mjs';
+import { describeMissing, expireMissing, reevaluateAll, touchKnown, upsertJob } from '../lib/jobs.mjs';
 import { boardFromPostingUrl, placesFilter } from '../lib/discover.mjs';
 import { locationNarrowing } from '../../providers/workday.mjs';
 import { createApplication } from '../lib/applications.mjs';
@@ -20,6 +20,18 @@ test('upsert is idempotent and keys on the canonical URL', async () => {
   assert.equal(b.created, false);
   assert.equal((await all(db, 'SELECT * FROM jobs')).length, 1);
   assert.equal(a.status, 'qualified');
+});
+
+test('a job qualified without a description is judged again once the description is read', async () => {
+  const db = await openDb({ url: ':memory:' });
+  const url = 'https://acme.wd1.myworkdayjobs.com/External/job/Bengaluru/Data-Scientist_R1';
+  const job = await upsertJob(db, posting({ url, title: 'Data Scientist', description: '' }), { source: 'workday', boardId: 'b1', settings });
+  assert.equal(job.status, 'qualified');
+  const fetchJd = async (u) => (u === url ? { text: 'Data Scientist, Bengaluru. Requires 4+ years of experience in machine learning.' } : null);
+  assert.deepEqual(await describeMissing(db, settings, { fetchJd }), { missing: 1, described: 1 });
+  const row = await one(db, 'SELECT status, exclusion_reason, description FROM jobs WHERE id = ?', [job.id]);
+  assert.equal(row.status, 'excluded');
+  assert.match(row.exclusion_reason, /4\+ years/);
 });
 
 test('re-evaluation reaches every live job, a page at a time', async () => {

@@ -8,11 +8,10 @@ import { createHash } from 'node:crypto';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { all, audit, kvGet, kvSet, now, one, run } from '../db.mjs';
+import { all, audit, kvGet, kvSet, now, one } from '../db.mjs';
 import { getApplication, transition } from '../applications.mjs';
 import { draftAnswer } from '../compose.mjs';
-import { applyEvaluation } from '../evaluate.mjs';
-import { fetchJdViaKnownApi } from '../../../browser-extract.mjs';
+import { describeJob } from '../jobs.mjs';
 import { loadProfile, loadResumePdf } from '../profile.mjs';
 import { log } from '../log.mjs';
 import { applyWorkday, portalHost } from './workday.mjs';
@@ -58,13 +57,11 @@ export async function autoApply(db, settings, { launch, submit = false, limit = 
       if (!retry && last && last.answersKey === answersKey && ['blocked', 'needs_you', 'unconfirmed'].includes(last.stop)) continue;
       const key = companyKey(job.company);
       if ((applied.get(key) ?? 0) >= PER_COMPANY) { stats.skippedCompanyCap++; continue; }
-      // Workday listings carry no description, so such a job was qualified with its experience and pay
-      // requirements unchecked: read the description from Workday's API and judge the job again first.
+      // A job qualified without its description has unchecked experience and pay requirements: read the
+      // description and judge the job again first (the pipeline's describe stage usually has already).
       if (!job.description) {
-        const jd = (await fetchJdViaKnownApi(job.url).catch(() => null))?.text;
+        const jd = await describeJob(db, job, settings);
         if (!jd) { stats.skippedNoDescription++; continue; }
-        await run(db, 'UPDATE jobs SET description = ? WHERE id = ?', [jd, job.id]);
-        await applyEvaluation(db, { ...job, description: jd }, settings);
         const judged = await one(db, 'SELECT status, score FROM jobs WHERE id = ?', [job.id]);
         if (judged.status !== 'qualified' || judged.score < settings.matching.autoActionScore) { stats.requalifiedOut++; continue; }
         job.description = jd;

@@ -756,7 +756,9 @@ const QUESTION_RULES = [
     (c) => (c.inIndia ? yes(c.answers.indian_work_authorization) : undefined)],
   [/relocat/i, (c) => yes(c.answers.willing_to_relocate)],
   [/reasonable (adjustment|accommodation)s?|accommodations? (during|in|for) the (recruit|interview|hiring|application)/i, (c) => yes(c.answers.needs_accommodation)],
-  [/government official|public official|politically exposed/i, (c) => yes(c.answers.government_official)],
+  // Being an official, and being related to one, are separate facts (Northern Trust asks both).
+  [/government official|public official|politically exposed/i, (c) => yes(/\b(related|relative|family|spouse)\b/i.test(c.label)
+    ? c.answers.related_to_government_official : c.answers.government_official)],
   [/restrictive covenant|non-?compet(e|ition)|non-?solicit|(agreement|obligation)s?\b.{0,80}\brestricts?\b|\bbond\b.{0,40}\b(employer|company)\b|commitments? ?\/ ?bond|service (bond|agreement)/i, restrictions],
   [/date of birth|\bdob\b|\bbirth ?date\b/i, (c) => {
     const d = isoDate(c.answers.date_of_birth);

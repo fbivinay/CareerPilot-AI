@@ -8,7 +8,7 @@ import path from 'node:path';
 import { getDb, kvGet, kvSet, now } from '../lib/db.mjs';
 import { getSettings } from '../lib/settings.mjs';
 import { scanBoards, seedCuratedBoards, sweepAggregator } from '../lib/discover.mjs';
-import { reevaluateAll } from '../lib/jobs.mjs';
+import { describeMissing, reevaluateAll } from '../lib/jobs.mjs';
 import { RULES_VERSION } from '../lib/match.mjs';
 import { aiScoreJobs } from '../lib/ai-match.mjs';
 import { GmailAuthError } from '../lib/gmail.mjs';
@@ -42,6 +42,8 @@ const STAGES = {
     const boards = await scanBoards(db, settings, { deadline: deadline - 150_000 });
     return { rescored, aggregator, boards };
   },
+  // Descriptions for qualified jobs found without one, so their requirements are checked (and AI-scored).
+  describe: (db, settings) => describeMissing(db, settings, { deadline: deadline - 140_000 }),
   // Free-tier token limits make scoring ~10 s a job; stop early so Gmail and outreach always run.
   ai: (db, settings) => aiScoreJobs(db, settings, { deadline: deadline - 120_000 }),
   gmail: needsGmail((db, settings) => syncGmail(db, gmail, settings, { deadline: deadline - 90_000, selfAddress: gmailStatus.email })),

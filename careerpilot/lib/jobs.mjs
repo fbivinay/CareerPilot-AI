@@ -3,6 +3,8 @@
 // longer lists). last_seen is refreshed at most daily, to stay well inside the free write quota.
 import { createHash } from 'node:crypto';
 import { normalizeUrl } from '../../url-key.mjs';
+import { fetchJdViaKnownApi } from '../../browser-extract.mjs';
+import { JD_TEXT_API_ATS, resolveAtsApi } from '../../liveness-api.mjs';
 import { all, audit, now, one, run } from './db.mjs';
 import { fingerprint } from './match.mjs';
 import { applyEvaluation, auditStmt, batchChunks, evaluationStatements } from './evaluate.mjs';
@@ -145,6 +147,28 @@ export async function expireMissing(db, boardId, seen, { places = null } = {}) {
     ]),
   ]);
   return gone.length;
+}
+
+// Board listings (Workday's in particular) carry no description, so a job can qualify with its experience
+// and pay requirements unchecked. These read the description from the ATS's public job API and judge the
+// job again. describeJob returns the description, or null when it could not be read.
+export async function describeJob(db, row, settings, fetchJd = fetchJdViaKnownApi) {
+  const text = (await fetchJd(row.url).catch(() => null))?.text;
+  if (!text) return null;
+  await run(db, 'UPDATE jobs SET description = ? WHERE id = ?', [text, row.id]);
+  await applyEvaluation(db, { ...row, description: text }, settings);
+  return text;
+}
+const describable = (url) => { try { return JD_TEXT_API_ATS.has(resolveAtsApi(url)?.ats); } catch { return false; } };
+export async function describeMissing(db, settings, { deadline = Infinity, limit = 60, fetchJd = fetchJdViaKnownApi } = {}) {
+  const ids = (await all(db, `SELECT id, url FROM jobs WHERE status = 'qualified' AND coalesce(description, '') = '' ORDER BY score DESC`))
+    .filter((r) => describable(r.url)).slice(0, limit);
+  let described = 0;
+  for (const { id } of ids) {
+    if (Date.now() > deadline) break;
+    if (await describeJob(db, await one(db, 'SELECT * FROM jobs WHERE id = ?', [id]), settings, fetchJd)) described++;
+  }
+  return { missing: ids.length, described };
 }
 
 // Re-run rules over every live job, e.g. after settings change. A page at a time: one read of every
