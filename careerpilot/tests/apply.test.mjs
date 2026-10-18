@@ -278,6 +278,11 @@ test('Barclays, Mastercard, Maersk, ICF, US Bank, Mobility, PwC and RELX questio
   const heard = ask('How did you hear about this job?', 'dropdown', 'AllianceBernstein').option;
   assert.equal(best(["School's Career Portal (i.e. Handshake/Symplicity)", 'Careers Page', 'Other'], heard), 1);
   assert.equal(best(["School's Career Portal (i.e. Handshake/Symplicity)", 'Other'], heard), 1);
+  Object.assign(answers, { age_18_or_older: true, has_aadhaar_card: true, has_pan_card: true, will_not_use_others_confidential_info: true });
+  assert.deepEqual(ask('Please confirm if you have a valid Aadhar card.', 'dropdown', 'Maersk'), { yes: true });
+  assert.deepEqual(ask('Please confirm if you have a valid PAN card.', 'dropdown', 'Maersk'), { yes: true });
+  assert.deepEqual(ask('I confirm that I am 18+ years of age', 'dropdown', 'Maersk'), { yes: true });
+  assert.deepEqual(ask('I agree that I will not disclose or use, while interviewing with or employed with GE Vernova and GE Vernova’s affiliate businesses, any confidential or proprietary information of others, including any former employer.', 'dropdown', 'GE Vernova'), { yes: true });
   const relx = ['Bachelor’s Degree or Equivalent Degree', "Associate's Degree or 2-year Equivalent Degree", 'Master’s Degree or Equivalent Degree', 'Master’s in Business Administration (MBA)'];
   assert.equal(best(relx, degreeWants('MSc in Big Data Analytics')), 2);
   assert.equal(best(relx, degreeWants('BSc in Statistics')), 0);

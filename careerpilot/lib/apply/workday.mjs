@@ -661,7 +661,7 @@ async function chooseSchool(page, scope, institution) {
   let notListed = {};
   // Workday's own entry for a school missing from its list, as tenants name it (PwC: "School Not Listed";
   // Airbus: "Other / Autre / Sonstige / Otras"). Never a similarly named school.
-  for (const [q, want] of [['School not in list', /not (in|on) (the )?list|not listed/i], ['School Not Listed', /not listed/i], ['Other', /^other\b/i]]) {
+  for (const [q, want] of [['School not in list', /not (in|on) (the )?list|not listed/i], ['School Not Listed', /not listed/i], ['Other', /^others?\b/i]]) { // DBS: "Others"
     notListed = await pick(page, 'school', q, want, scope);
     if (notListed.chosen) return { ...notListed, note: `"${name}" is not in Workday's list` };
   }
@@ -676,7 +676,8 @@ async function addSkills(page, profile, description, max = 8) {
   const all = [...new Set(Object.values(profile.skills ?? {}).flat().map((s) => String(s).replace(/\s*\(.*\)\s*$/, '').trim()).filter(Boolean))];
   const named = (s) => new RegExp(`(^|[^a-z0-9])${escapeRe(s)}([^a-z0-9]|$)`, 'i').test(description ?? '');
   const skills = [...all.filter(named), ...all.filter((s) => !named(s))].slice(0, 16);
-  const box = group.locator('input').first();
+  // With a chip in it the search input can stop taking clicks (DBS): click the field, then type.
+  const field = group.locator(A('multiSelectContainer')).first();
   const options = page.locator(`${A('activeListContainer')} ${A('promptOption')}`);
   for (const skill of skills) {
     const have = await chips();
@@ -684,9 +685,10 @@ async function addSkills(page, profile, description, max = 8) {
     const same = (t) => t.toLowerCase() === skill.toLowerCase();
     if (have.some(same)) continue;
     await closePopup(page);
-    await centerClick(box);
-    await box.fill(skill);
-    await box.press('Enter');
+    try { await centerClick(field, { timeout: 5000 }); } catch { break; } // keep the skills added so far
+    await page.keyboard.press('Control+A');
+    await page.keyboard.type(skill);
+    await page.keyboard.press('Enter');
     await options.first().waitFor({ timeout: 8000 }).catch(() => {});
     await page.waitForTimeout(600);
     const now = await chips();
@@ -905,7 +907,7 @@ function employed(c) {
 
 // [pattern on the question, answer(ctx)]: the first matching pattern decides; undefined = not known.
 const QUESTION_RULES = [
-  [/\b(at least|over|above|older than)\b.{0,15}\b18\b|\b18 years\b|age of 18|legal age/i, (c) => yes(c.answers.age_18_or_older)],
+  [/\b(at least|over|above|older than)\b.{0,15}\b18\b|\b18\s*\+?\s*years\b|\b18\+|age of 18|legal age/i, (c) => yes(c.answers.age_18_or_older)],
   // A work or residency permit is for foreign nationals: a citizen of the job's country needs neither.
   [/\b(work|residency|residence) permit\b/i, (c) => (c.inIndia && /^india/i.test(c.answers.citizenship ?? '')
     ? { option: [/not applicable|^n\/?a$/i, /^yes\b/i] } : undefined)],
@@ -954,6 +956,11 @@ const QUESTION_RULES = [
   [/\bverification of (your )?ident\w*|\bverify (your )?identity\b|\bproof of identity\b/i, (c) => yes(c.answers.can_verify_identity)],
   // The name and address given match the candidate's Aadhaar card (their answer of 2026-10-18; BMS).
   [/\b(name|address)\b.{0,80}\bmatch\w*\b.{0,60}\b(aadhaa?r)\b/i, (c) => yes(c.answers.details_match_aadhaar)],
+  // Identity documents the candidate holds (answers of 2026-10-18; Maersk).
+  [/\b(valid|have( an?)?) aadhaa?r\b/i, (c) => yes(c.answers.has_aadhaar_card)],
+  [/\b(valid|have( an?)?) pan\b|\bpan card\b/i, (c) => yes(c.answers.has_pan_card)],
+  // Not to disclose or use others' confidential information (GE Vernova; agreed on 2026-10-18).
+  [/\bnot (disclose|use)\b.{0,80}\bconfidential\b|\bconfidential (or|and) proprietary information of others\b/i, (c) => yes(c.answers.will_not_use_others_confidential_info)],
   // Texts about the application itself, not marketing (that rule comes later and stays "no").
   [/\b(sms|text messages?)\b.{0,80}\b(application|candidate|recruit\w*|interview)/i, (c) => yes(c.answers.sms_updates)],
   // No break from career or studies (the candidate's answer): no gaps, the studies filling the time.
