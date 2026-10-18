@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { all, one, openDb } from '../lib/db.mjs';
 import { canTransition, createApplication, transition } from '../lib/applications.mjs';
 import { classifyEmail, parseJobAlert, stripQuoted } from '../lib/email-intel.mjs';
-import { processMessage, processSentMessage } from '../lib/gmail-sync.mjs';
+import { processMessage } from '../lib/gmail-sync.mjs';
 import { applicationEmail, domainMatchesCompany, emailsInText } from '../lib/contacts.mjs';
 import { blockReason, inSendWindow, runOutreach } from '../lib/outreach.mjs';
 import { buildMime } from '../lib/gmail.mjs';
@@ -92,14 +92,17 @@ test('gmail sync links a confirmation, transitions the application and records e
   assert.equal((await one(db, 'SELECT needs_review FROM emails WHERE id = ?', ['m2'])).needs_review, 1);
 });
 
-test('a confirmation for a manual application creates a tracked application', async () => {
+test('a confirmation for an application CareerPilot did not make is not tracked, even at a company where it applied', async () => {
   const db = await openDb({ url: ':memory:' });
+  const { id } = await upsertJob(db, { url: 'https://jobs.lever.co/foo/1', title: 'Junior Data Analyst', company: 'Foo Labs', location: 'Bengaluru', description: 'Freshers' },
+    { source: 'lever', settings });
+  const ours = await createApplication(db, id, { method: 'portal' });
   const r = await processMessage(db, { id: 'm9', threadId: 't9', fromAddr: 'jobs-noreply@linkedin.com', fromName: 'LinkedIn',
-    subject: 'Your application was sent to Foo Labs', text: 'Your application was sent to Foo Labs', snippet: '', date: '2026-10-20T10:00:00.000Z', html: '', authenticated: true },
-  settings, { ourThreadIds: new Set() });
-  assert.equal(r.transitioned, true);
-  const apps = await all(db, 'SELECT a.status, j.company FROM applications a JOIN jobs j ON j.id = a.job_id');
-  assert.deepEqual(apps.map((a) => [a.status, a.company]), [['confirmed', 'Foo Labs']]);
+    subject: 'Your application was sent to Foo Labs', text: 'Your application was sent to Foo Labs for Senior Data Engineer', snippet: '',
+    date: '2026-10-20T10:00:00.000Z', html: '', authenticated: true }, settings, { ourThreadIds: new Set() });
+  assert.equal(r.transitioned, false);
+  assert.deepEqual((await all(db, 'SELECT id, status FROM applications')).map((a) => [a.id, a.status]), [[ours.id, 'ready']]);
+  assert.equal((await one(db, 'SELECT category FROM emails WHERE id = ?', ['m9'])).category, 'ignored');
 });
 
 test('spoofed or unauthenticated mail never changes status; offers always need the candidate', async () => {

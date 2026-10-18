@@ -1,10 +1,10 @@
-// Messages in the exact shapes seen in a real job-search inbox (foundit, SHL, LinkedIn, newsletters,
-// the candidate's own sent applications). All names, ids and addresses here are invented.
+// Messages in the exact shapes seen in a real job-search inbox (foundit, SHL, LinkedIn, newsletters).
+// All names, ids and addresses here are invented.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { all, one, openDb } from '../lib/db.mjs';
-import { applicationDetails, classifyEmail, extractDetails, sentApplication } from '../lib/email-intel.mjs';
-import { processMessage, processSentMessage } from '../lib/gmail-sync.mjs';
+import { applicationDetails, classifyEmail, extractDetails } from '../lib/email-intel.mjs';
+import { processMessage } from '../lib/gmail-sync.mjs';
 import { upsertJob } from '../lib/jobs.mjs';
 import { createApplication } from '../lib/applications.mjs';
 import { DEFAULT_SETTINGS as settings } from '../lib/settings.mjs';
@@ -51,58 +51,23 @@ test('newsletters, social notices and promos are not hiring events', () => {
     + 'foundit also advises users to beware of any fraudulent communication asking for personal /banking information or seeking money for any job offer.'), 'other');
 });
 
-test('sent application detection', () => {
-  assert.deepEqual(sentApplication({ subject: 'Application for MIS & Data Analytics Position', attachments: [{ filename: 'cv.pdf' }] }), { title: 'MIS & Data Analytics' });
-  assert.equal(sentApplication({ subject: 'Re: Application for Data Analyst' }), null);
-  assert.equal(sentApplication({ subject: 'Full Paper Submission – Conference' }), null);
-});
-
-test('trusted platform confirmations and assessment invites create tracked applications; untrusted ones do not', async () => {
+test('the candidate’s own applications (job-site confirmations, assessment invites) are not tracked or kept', async () => {
   const db = await openDb({ url: ':memory:' });
   const base = { snippet: '', date: '2026-10-17T06:46:23.000Z', html: '', fromName: 'x', authenticated: true };
   await processMessage(db, { ...base, ...foundit, id: 'c1' }, settings, { ourThreadIds: new Set() });
   await processMessage(db, { ...base, ...shl, id: 'c2', threadId: 't2' }, settings, { ourThreadIds: new Set() });
-  await processMessage(db, { ...base, id: 'c3', threadId: 't3', fromAddr: 'job@monsterindia.com', authenticated: false,
-    subject: 'Evilcorp Application Successful', text: "you've applied to Boss job at Evilcorp." }, settings, { ourThreadIds: new Set() });
-  const apps = await all(db, 'SELECT a.status, j.company, j.title, j.url FROM applications a JOIN jobs j ON j.id = a.job_id ORDER BY j.company');
-  assert.deepEqual(apps.map((a) => [a.company, a.title, a.status]), [
-    ['Example Retail India Limited', 'Assessment (from email)', 'assessment'],
-    ['Examplecorp', 'Analyst I', 'confirmed'],
-  ]);
-  assert.equal(apps[1].url, 'https://www.foundit.in/seeker/job-details?id=34840156');
+  assert.deepEqual(await all(db, 'SELECT * FROM applications'), []);
+  assert.deepEqual(await all(db, 'SELECT * FROM jobs'), []);
+  assert.deepEqual((await all(db, 'SELECT category, subject FROM emails ORDER BY id')).map((e) => [e.category, e.subject]), [['ignored', null], ['ignored', null]]);
 });
 
-test('the candidate’s own sent application is recorded as submitted and replies in its thread update it', async () => {
-  const db = await openDb({ url: ':memory:' });
-  const msg = { id: 's1', threadId: 'ts1', subject: 'Application for MIS & Data Analytics Position', to: 'hr.coordinator@gmail.com',
-    attachments: [{ filename: 'Resume.pdf' }], date: '2026-10-17T07:03:59.000Z', text: 'Dear Hiring Team', snippet: '', fromAddr: 'me@example.org' };
-  assert.equal((await processSentMessage(db, msg, settings, { selfAddress: 'me@example.org' })).recorded, true);
-  const app = await one(db, 'SELECT a.*, j.company, j.title FROM applications a JOIN jobs j ON j.id = a.job_id');
-  assert.equal(app.status, 'submitted');
-  assert.equal(app.company, 'via hr.coordinator@gmail.com');
-  assert.equal(app.title, 'MIS & Data Analytics');
-  const reply = await processMessage(db, { id: 's2', threadId: 'ts1', fromAddr: 'hr.coordinator@gmail.com', fromName: 'HR', subject: 'Re: Application',
-    text: 'We would like to invite you for an interview on Monday. Please share your availability.', snippet: '', date: '2026-10-18T07:00:00.000Z', html: '' },
-  settings, { ourThreadIds: new Set(['ts1']) });
-  assert.equal(reply.transitioned, true);
-  assert.equal((await one(db, 'SELECT status FROM applications')).status, 'interview');
-  // Mail to yourself (the daily digest) is not an application.
-  assert.equal((await processSentMessage(db, { ...msg, id: 's3', to: 'me@example.org' }, settings, { selfAddress: 'me@example.org' })).recorded, false);
-});
-
-test('foundit role text split across lines; two postings with one title are two applications', async () => {
+test('foundit role text split across lines', () => {
   const mail = (id, jobId) => ({ ...foundit, id, threadId: `t${id}`, snippet: '', date: '2026-10-17T06:46:23.000Z', fromName: 'foundit', authenticated: true,
     subject: 'Examplecorp Application Successful | Ace your interview',
     text: "Get the app \r\n Hi Test Candidate,📨 you've\r\n applied\r\n to Analyst I\r\n job\r\n at Examplecorp.\n Recruiter will call you on \r\n"
       + ' Jobs you may like: Data Analyst at Othercorp.',
     html: `<a href="https://www.foundit.in/x?jobId%3D${jobId}">x</a>` });
   assert.deepEqual(applicationDetails(mail('a', '111111')), { company: 'Examplecorp', title: 'Analyst I', url: 'https://www.foundit.in/seeker/job-details?id=111111' });
-  const db = await openDb({ url: ':memory:' });
-  for (const [id, jobId] of [['a', '111111'], ['b', '222222'], ['c', '111111']]) {
-    await processMessage(db, mail(id, jobId), settings, { ourThreadIds: new Set() });
-  }
-  const apps = await all(db, 'SELECT a.status, j.title, j.url FROM applications a JOIN jobs j ON j.id = a.job_id ORDER BY j.url');
-  assert.deepEqual(apps.map((a) => [a.title, a.status, a.url.slice(-6)]), [['Analyst I', 'confirmed', '111111'], ['Analyst I', 'confirmed', '222222']]);
 });
 
 test('an offer letter mentioned in a promotion is not an offer; one that is attached is', () => {
@@ -125,12 +90,13 @@ test('Wellfound confirmations: the upsell is not an interview, and companies nam
   assert.equal(classifyEmail({ fromAddr: 'alerts@monsterindia.com', subject: 'Beware of fraudsters impersonating foundit partners',
     text: 'But unfortunately, some unscrupulous individuals claim to be our associates.' }).category, 'other');
 
+  // CareerPilot's queued application at a company the blurb names is not touched by someone else's confirmation.
   const db = await openDb({ url: ':memory:' });
   const other = await upsertJob(db, { url: 'https://jobs.example.com/othercorp/1', title: 'Product Analyst', company: 'Othercorp', location: 'Bengaluru' }, { source: 'test', settings });
-  await createApplication(db, other.id, { status: 'ready' });
+  await createApplication(db, other.id, { status: 'ready', method: 'portal' });
   await processMessage(db, wf, settings, { ourThreadIds: new Set() });
   const apps = await all(db, 'SELECT a.status, j.company, j.title FROM applications a JOIN jobs j ON j.id = a.job_id ORDER BY j.company');
-  assert.deepEqual(apps.map((a) => [a.company, a.title, a.status]), [['Exampleschool', 'Data Analyst Intern', 'confirmed'], ['Othercorp', 'Product Analyst', 'ready']]);
+  assert.deepEqual(apps.map((a) => [a.company, a.title, a.status]), [['Othercorp', 'Product Analyst', 'ready']]);
 });
 
 test('non-job mail: a failed KYC check is no rejection, and newsletters naming a company are not linked to it', async () => {

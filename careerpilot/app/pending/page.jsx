@@ -1,4 +1,5 @@
 import { getDb, all } from '@/lib/db.mjs';
+import { SHOWN_APP, SHOWN_EMAIL } from '@/lib/applications.mjs';
 import { pendingQuestions, systemStatus } from '@/lib/queries.mjs';
 import { A, Badge, Card, PageHeader, Table, Td, fmtDateTime, gmailLink } from '../_ui/kit.jsx';
 
@@ -8,11 +9,12 @@ export default async function Pending() {
   const db = await getDb();
   const [apps, appCount, review, unknown, upcoming, s, questions] = await Promise.all([
     all(db, `SELECT a.id, a.status, a.method, a.blocked_reason, j.title, j.company, j.url, j.score FROM applications a JOIN jobs j ON j.id = a.job_id
-      WHERE a.status IN ('ready','blocked','failed') ORDER BY a.status = 'failed' DESC, j.score DESC LIMIT 100`),
-    all(db, `SELECT count(*) n FROM applications WHERE status IN ('ready','blocked','failed')`),
-    all(db, `SELECT * FROM emails WHERE needs_review = 1 AND reviewed = 0 ORDER BY received_at DESC LIMIT 50`),
+      WHERE a.status IN ('ready','blocked','failed') AND ${SHOWN_APP} ORDER BY a.status = 'failed' DESC, j.score DESC LIMIT 100`),
+    all(db, `SELECT count(*) n FROM applications a JOIN jobs j ON j.id = a.job_id WHERE a.status IN ('ready','blocked','failed') AND ${SHOWN_APP}`),
+    all(db, `SELECT e.* FROM emails e WHERE e.needs_review = 1 AND e.reviewed = 0 AND ${SHOWN_EMAIL} ORDER BY e.received_at DESC LIMIT 50`),
     all(db, `SELECT o.id, o.subject, c.email FROM outreach o JOIN contacts c ON c.id = o.contact_id WHERE o.status = 'unknown'`),
-    all(db, `SELECT * FROM emails WHERE category IN ('interview','assessment','offer') AND received_at >= ? ORDER BY received_at DESC`, [new Date(Date.now() - 14 * 864e5).toISOString()]),
+    all(db, `SELECT e.* FROM emails e WHERE e.category IN ('interview','assessment','offer') AND e.received_at >= ? AND ${SHOWN_EMAIL} ORDER BY e.received_at DESC`,
+      [new Date(Date.now() - 14 * 864e5).toISOString()]),
     systemStatus(),
     pendingQuestions(),
   ]);
@@ -23,7 +25,7 @@ export default async function Pending() {
   ].filter(Boolean);
   return (
     <>
-      <PageHeader title="Pending" sub="Everything that is waiting on you, most urgent first." />
+      <PageHeader title="Pending" sub="CareerPilot's work that is waiting, most urgent first." />
       {problems.length > 0 && (
         <Card title="System problems" className="mb-4 border-bad">
           <ul className="space-y-1 text-sm">{problems.map(([t, e]) => <li key={t}><strong>{t}:</strong> <span className="text-ink-2">{e}</span></li>)}</ul>
@@ -66,16 +68,16 @@ export default async function Pending() {
         </Card>
       </div>
       <h2 className="mb-2 mt-6 text-sm font-semibold text-ink-2">
-        Applications waiting for you ({appTotal}){appTotal > apps.length && <> · showing the top {apps.length}, <A to="/applications?status=pending">see all</A></>}
+        CareerPilot&apos;s queue ({appTotal}){appTotal > apps.length && <> · showing the top {apps.length}, <A to="/applications?status=pending">see all</A></>}
       </h2>
-      <Table head={['Role', 'Company', 'Status', 'What is needed', '']} empty="Nothing to submit right now.">
+      <Table head={['Role', 'Company', 'Status', 'What is needed', '']} empty="Nothing queued right now.">
         {apps.map((a) => (
           <tr key={a.id} className="hover:bg-surface-2">
             <Td><A to={`/applications/${a.id}`}>{a.title}</A></Td>
             <Td>{a.company}</Td>
             <Td><Badge value={a.status} /></Td>
             <Td className="max-w-md text-xs text-ink-2">{a.blocked_reason}</Td>
-            <Td><A to={a.url} external>Apply</A></Td>
+            <Td><A to={a.url} external>Posting</A></Td>
           </tr>
         ))}
       </Table>

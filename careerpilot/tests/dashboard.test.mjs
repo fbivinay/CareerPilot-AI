@@ -11,21 +11,29 @@ const q = await import('../lib/queries.mjs');
 const db = await getDb();
 const now = new Date().toISOString();
 
-// A mixed dataset: qualified/excluded/duplicate/expired jobs and applications in every state.
+// A mixed dataset: qualified/excluded/duplicate/expired jobs and CareerPilot's applications (on Workday)
+// in every state, plus applications the candidate made themselves, which the dashboard never shows.
 const statuses = ['ready', 'ready', 'blocked', 'failed', 'expired', 'submitted', 'confirmed', 'assessment', 'interview', 'offer', 'rejected', 'rejected', 'withdrawn'];
 for (let i = 0; i < 30; i++) {
   await upsertJob(db, {
-    url: `https://jobs.lever.co/co${i % 7}/${i}`, company: `Co${i % 7}`, location: i % 5 ? 'Bengaluru' : 'London, UK',
+    url: `https://co${i % 7}.wd1.myworkdayjobs.com/External/job/Bengaluru/Role_${i}`, company: `Co${i % 7}`, location: i % 5 ? 'Bengaluru' : 'London, UK',
     title: i % 4 === 0 ? 'Senior Data Scientist' : ['Junior Data Scientist', 'Data Analyst Intern', 'Analytics Engineer'][i % 3],
     description: i % 6 === 0 ? 'Freshers. CTC 9 LPA' : 'Freshers welcome',
-  }, { source: i % 3 ? 'lever' : 'alert:linkedin', settings });
+  }, { source: i % 3 ? 'workday' : 'alert:linkedin', settings });
 }
 await upsertJob(db, { url: 'https://www.linkedin.com/jobs/view/1', company: 'Co1', title: 'Junior Data Scientist', location: 'Bangalore' }, { source: 'alert:linkedin', settings });
 const jobIds = (await db.execute(`SELECT id FROM jobs WHERE status = 'qualified' ORDER BY id`)).rows.map((r) => r.id);
 for (const [i, status] of statuses.entries()) {
-  await run(db, `INSERT INTO applications (id, job_id, status, method, resume_version, created_at, updated_at) VALUES (?, ?, ?, 'portal', 'v1', ?, ?)`,
-    [`a${i}`, jobIds[i], status, now, now]);
+  await run(db, `INSERT INTO applications (id, job_id, status, method, resume_version, evidence, created_at, updated_at) VALUES (?, ?, ?, 'portal', 'v1', ?, ?, ?)`,
+    [`a${i}`, jobIds[i], status, ['ready', 'blocked', 'failed', 'expired', 'withdrawn'].includes(status) ? null : '[{"type":"workday"}]', now, now]);
 }
+// The candidate's own: a job-site application found in their mail, and a queued posting they sent themselves.
+const own = await upsertJob(db, { url: 'https://www.foundit.in/seeker/job-details?id=1', company: 'Mine', title: 'Data Analyst', location: 'Bengaluru' }, { source: 'email:foundit', settings });
+await run(db, `INSERT INTO applications (id, job_id, status, method, created_at, updated_at) VALUES ('own1', ?, 'confirmed', 'platform:foundit', ?, ?)`, [own.id, now, now]);
+assert.ok(jobIds.length > statuses.length, 'a spare qualified job for own2');
+await run(db, `INSERT INTO applications (id, job_id, status, method, evidence, created_at, updated_at) VALUES ('own2', ?, 'confirmed', 'portal', '[{"type":"email"}]', ?, ?)`,
+  [jobIds[statuses.length], now, now]);
+await run(db, `INSERT INTO emails (id, category, needs_review, application_id, processed_at, received_at) VALUES ('own-mail', 'interview', 1, 'own1', ?, ?)`, [now, now]);
 // One rejected application had reached interview first.
 await run(db, `INSERT INTO events (entity, entity_id, action, from_status, to_status, at) VALUES ('application', 'a10', 'status', 'confirmed', 'interview', ?)`, [now]);
 await run(db, `INSERT INTO contacts (id, email, source_type, created_at) VALUES ('c1', 'hr@co1.in', 'jd', ?)`, [now]);
@@ -64,6 +72,14 @@ test('analytics funnel numbers equal their drill-down lists', async () => {
   assert.equal(Number(f.offers), await apps({ status: 'offer' }));
   for (const r of bySource) assert.equal(Number(r.applied), await apps({ source: r.k, status: 'applied' }), `source ${r.k}`);
   for (const r of byRole) assert.equal(Number(r.applied), await apps({ category: r.k, status: 'applied' }), `role ${r.k}`);
+});
+
+test('the candidate’s own applications, their jobs and their mail are not shown anywhere', async () => {
+  const listed = (await q.listApplications({})).rows.map((a) => a.id);
+  assert.ok(!listed.includes('own1') && !listed.includes('own2'));
+  assert.ok(!(await q.listJobs({ status: 'all' })).rows.some((j) => j.company === 'Mine'));
+  assert.ok(!(await q.listEmails({})).rows.some((e) => e.id === 'own-mail'));
+  assert.equal((await q.applicationPlaces()).total, statuses.filter((s) => !['withdrawn', 'expired'].includes(s)).length);
 });
 
 test('job detail and application detail load for every listed row', async () => {

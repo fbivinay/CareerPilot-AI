@@ -132,7 +132,8 @@ test('Gmail sync reads every message since the checkpoint from every tab, not ju
     get: async (id) => ({ id, threadId: id, fromAddr: 'news@example.org', fromName: 'News', subject: 'Weekly digest', text: 'Hello',
       snippet: '', date: new Date(Date.UTC(2026, 9, 1) + Number(id.slice(1)) * 60_000).toISOString() }),
   };
-  const r = await syncGmail(db, gmail, { ...DEFAULT_SETTINGS, timeline: null }, { selfAddress: 'me@example.com' });
+  const r = await syncGmail(db, gmail, { ...DEFAULT_SETTINGS, timeline: null });
   assert.equal(r.processed, 450);
   assert.ok(queries.every((q) => !q.includes('category:')));
+  assert.ok(queries.every((q) => q.includes('-in:sent')), 'the candidate\'s sent mail is not read');
 });

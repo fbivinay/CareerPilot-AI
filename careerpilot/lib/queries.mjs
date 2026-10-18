@@ -1,7 +1,8 @@
 // Read queries behind the dashboard. Every number shown links to the list these same filters produce,
-// so a statistic and its drill-down can never disagree.
+// so a statistic and its drill-down can never disagree. Everything shown is CareerPilot's own work
+// (SHOWN_*): the candidate's own applications and their mail are not (their choice, 2026-10-18).
 import { all, getDb, kvGet, one } from './db.mjs';
-import { APPLIED } from './applications.mjs';
+import { APPLIED, SHOWN_APP, SHOWN_EMAIL, SHOWN_JOB } from './applications.mjs';
 import { providerHealth } from './ai.mjs';
 import { loadProfile } from './profile.mjs';
 import { answerPack } from './prepare.mjs';
@@ -21,7 +22,7 @@ const placeholders = (a) => a.map(() => '?').join(',');
 const page = (p) => Math.max(1, Number(p) || 1);
 
 function jobFilters(f) {
-  const where = [];
+  const where = [SHOWN_JOB];
   const args = [];
   const status = f.status ?? 'qualified';
   // "all" means every tracked job with duplicates merged, matching the Overview count.
@@ -38,7 +39,7 @@ function jobFilters(f) {
   if (f.comp === 'disclosed') where.push('j.comp_source IS NOT NULL');
   if (f.comp === 'undisclosed') where.push('j.comp_source IS NULL');
   if (f.since) { where.push('j.first_seen >= ?'); args.push(new Date(Date.now() - Number(f.since) * 864e5).toISOString()); }
-  return { where: where.length ? where.join(' AND ') : '1=1', args };
+  return { where: where.join(' AND '), args };
 }
 
 const JOB_SORTS = { score: 'j.score DESC, j.ai_score DESC', newest: 'j.first_seen DESC', posted: 'j.posted_at DESC', company: 'j.company ASC', comp: 'j.comp_max DESC' };
@@ -51,8 +52,8 @@ export async function listJobs(f) {
   const total = Number((await one(db, `SELECT count(*) n FROM jobs j WHERE ${where}`, args)).n);
   const rows = await all(db, `SELECT j.id, j.title, j.company, j.location, j.url, j.source, j.status, j.score, j.ai_score, j.confidence, j.role_category,
       j.employment_type, j.comp_min, j.comp_max, j.comp_period, j.comp_source, j.posted_at, j.first_seen, j.exclusion_reason, a.id app_id, a.status app_status
-    FROM jobs j LEFT JOIN applications a ON a.job_id = j.id WHERE ${where} ORDER BY ${order}, j.id LIMIT ? OFFSET ?`, [...args, PAGE_SIZE, (p - 1) * PAGE_SIZE]);
-  const sources = (await all(db, `SELECT DISTINCT source FROM jobs ORDER BY source`)).map((r) => r.source);
+    FROM jobs j LEFT JOIN applications a ON a.job_id = j.id AND ${SHOWN_APP} WHERE ${where} ORDER BY ${order}, j.id LIMIT ? OFFSET ?`, [...args, PAGE_SIZE, (p - 1) * PAGE_SIZE]);
+  const sources = (await all(db, `SELECT DISTINCT source FROM jobs j WHERE ${SHOWN_JOB} ORDER BY source`)).map((r) => r.source);
   return { rows, total, page: p, sources };
 }
 
@@ -61,8 +62,8 @@ export async function getJob(id) {
   const job = await one(db, 'SELECT * FROM jobs WHERE id = ?', [id]);
   if (!job) return null;
   const [application, emails, outreach, events, duplicates, contacts] = await Promise.all([
-    one(db, 'SELECT * FROM applications WHERE job_id = ?', [id]),
-    all(db, 'SELECT * FROM emails WHERE job_id = ? ORDER BY received_at DESC', [id]),
+    one(db, `SELECT a.* FROM applications a JOIN jobs j ON j.id = a.job_id WHERE a.job_id = ? AND ${SHOWN_APP}`, [id]),
+    all(db, `SELECT e.* FROM emails e WHERE e.job_id = ? AND ${SHOWN_EMAIL} ORDER BY e.received_at DESC`, [id]),
     all(db, `SELECT o.*, c.email, c.name FROM outreach o JOIN contacts c ON c.id = o.contact_id WHERE o.job_id = ? ORDER BY o.created_at DESC`, [id]),
     all(db, `SELECT * FROM events WHERE entity = 'job' AND entity_id = ? ORDER BY id DESC LIMIT 50`, [id]),
     all(db, 'SELECT id, url, source FROM jobs WHERE duplicate_of = ?', [id]),
@@ -72,7 +73,7 @@ export async function getJob(id) {
 }
 
 function appFilters(f) {
-  const where = [];
+  const where = [SHOWN_APP];
   const args = [];
   if (f.status === 'interviewed') {
     // Ever reached an interview, including ones later rejected or turned into offers.
@@ -88,7 +89,7 @@ function appFilters(f) {
   if (f.category) { where.push('j.role_category = ?'); args.push(f.category); }
   if (f.source) { where.push(f.source === 'alerts' ? `j.source LIKE 'alert:%'` : 'j.source = ?'); if (f.source !== 'alerts') args.push(f.source); }
   if (f.resume) { where.push('a.resume_version = ?'); args.push(f.resume); }
-  return { where: where.length ? where.join(' AND ') : '1=1', args };
+  return { where: where.join(' AND '), args };
 }
 
 const APP_SORTS = { updated: 'a.updated_at DESC', submitted: 'a.submitted_at DESC', company: 'j.company ASC', score: 'j.score DESC' };
@@ -148,15 +149,18 @@ export async function getOutreach(id) {
   return { o, followups, events };
 }
 
+// Contacts CareerPilot found in postings, wrote to, or heard from about its own work.
 export async function listContacts() {
   const db = await getDb();
   return all(db, `SELECT c.*, (SELECT count(*) FROM outreach o WHERE o.contact_id = c.id AND o.status = 'sent') sent
-    FROM contacts c ORDER BY c.created_at DESC LIMIT 200`);
+    FROM contacts c WHERE c.source_type != 'inbound_email' OR c.id IN (SELECT contact_id FROM outreach)
+      OR c.source_ref IN (SELECT e.id FROM emails e WHERE ${SHOWN_EMAIL})
+    ORDER BY c.created_at DESC LIMIT 200`);
 }
 
 export async function listEmails(f) {
   const db = await getDb();
-  const where = [`e.category != 'ignored'`];
+  const where = [`e.category != 'ignored'`, SHOWN_EMAIL];
   const args = [];
   if (f.category) { where.push('e.category = ?'); args.push(f.category); }
   if (f.review === '1') where.push('e.needs_review = 1 AND e.reviewed = 0');
@@ -166,7 +170,7 @@ export async function listEmails(f) {
   const total = Number((await one(db, `SELECT count(*) n FROM emails e WHERE ${w}`, args)).n);
   const rows = await all(db, `SELECT e.*, j.title, j.company job_company FROM emails e LEFT JOIN jobs j ON j.id = e.job_id
     WHERE ${w} ORDER BY e.received_at DESC LIMIT ? OFFSET ?`, [...args, PAGE_SIZE, (p - 1) * PAGE_SIZE]);
-  const apps = await all(db, `SELECT a.id, j.company, j.title FROM applications a JOIN jobs j ON j.id = a.job_id ORDER BY j.company LIMIT 500`);
+  const apps = await all(db, `SELECT a.id, j.company, j.title FROM applications a JOIN jobs j ON j.id = a.job_id WHERE ${SHOWN_APP} ORDER BY j.company LIMIT 500`);
   return { rows, total, page: p, apps };
 }
 
@@ -174,26 +178,28 @@ const count = async (db, sql, args = []) => Number((await one(db, sql, args)).n)
 
 export async function overview() {
   const db = await getDb();
-  const appIn = async (set) => count(db, `SELECT count(*) n FROM applications WHERE status IN (${placeholders(set)})`, set);
+  const appIn = async (set) => count(db, `SELECT count(*) n FROM applications a JOIN jobs j ON j.id = a.job_id
+    WHERE a.status IN (${placeholders(set)}) AND ${SHOWN_APP}`, set);
   const [discovered, live, qualified, qualifiedHigh, ready, blocked, failed, applied, confirmed, assessment, interview, offer, rejected,
     outreachSent, replies, review, unknownSends] = await Promise.all([
-    count(db, `SELECT count(*) n FROM jobs WHERE status != 'duplicate'`),
-    count(db, `SELECT count(*) n FROM jobs WHERE status IN ('qualified','excluded','new')`),
-    count(db, `SELECT count(*) n FROM jobs WHERE status = 'qualified'`),
-    count(db, `SELECT count(*) n FROM jobs WHERE status = 'qualified' AND confidence = 'high'`),
+    count(db, `SELECT count(*) n FROM jobs j WHERE j.status != 'duplicate' AND ${SHOWN_JOB}`),
+    count(db, `SELECT count(*) n FROM jobs j WHERE j.status IN ('qualified','excluded','new') AND ${SHOWN_JOB}`),
+    count(db, `SELECT count(*) n FROM jobs j WHERE j.status = 'qualified' AND ${SHOWN_JOB}`),
+    count(db, `SELECT count(*) n FROM jobs j WHERE j.status = 'qualified' AND j.confidence = 'high' AND ${SHOWN_JOB}`),
     appIn(['ready']), appIn(['blocked']), appIn(['failed']), appIn(APPLIED), appIn(['confirmed']), appIn(['assessment']),
     appIn(['interview']), appIn(['offer']), appIn(['rejected']),
     count(db, `SELECT count(*) n FROM outreach WHERE status = 'sent'`),
     count(db, `SELECT count(*) n FROM outreach WHERE replied_at IS NOT NULL`),
-    count(db, `SELECT count(*) n FROM emails WHERE needs_review = 1 AND reviewed = 0`),
+    count(db, `SELECT count(*) n FROM emails e WHERE e.needs_review = 1 AND e.reviewed = 0 AND ${SHOWN_EMAIL}`),
     count(db, `SELECT count(*) n FROM outreach WHERE status = 'unknown'`),
   ]);
   return { discovered, live, qualified, qualifiedHigh, ready, blocked, failed, applied, confirmed, assessment, interview, offer, rejected,
     outreachSent, replies, review, unknownSends, pending: ready + blocked + failed + review + unknownSends };
 }
 
-// ---- Where applications go: the employer's own site (named by its application system), a job site,
-// or email; and which companies. Every application counts, from ready to offer.
+// ---- Where CareerPilot's applications go: the employer's own site (named by its application system),
+// or email; and which companies. Every live one counts, from queued to offer; withdrawn and expired
+// ones were never sent.
 
 const PLACES = [
   [/myworkdayjobs\.com/i, 'Workday', 'workday.com'], [/greenhouse\.io/i, 'Greenhouse', 'greenhouse.io'],
@@ -249,7 +255,8 @@ export const placeLogo = (domain) => (domain ? `https://www.google.com/s2/favico
 
 export async function applicationPlaces({ top = 5 } = {}) {
   const db = await getDb();
-  const rows = await all(db, `SELECT a.method, a.status, j.url, j.company FROM applications a JOIN jobs j ON j.id = a.job_id`);
+  const rows = await all(db, `SELECT a.method, a.status, j.url, j.company FROM applications a JOIN jobs j ON j.id = a.job_id
+    WHERE ${SHOWN_APP} AND a.status NOT IN ('withdrawn', 'expired')`);
   const tally = (key) => {
     const m = new Map();
     for (const r of rows) { const k = key(r); const e = m.get(k.label) ?? { ...k, count: 0 }; e.count++; m.set(k.label, e); }
@@ -287,7 +294,8 @@ export function blockingQuestions(reasons) {
 
 export async function pendingQuestions() {
   const db = await getDb();
-  const rows = await all(db, `SELECT blocked_reason FROM applications WHERE status = 'blocked' AND blocked_reason IS NOT NULL`);
+  const rows = await all(db, `SELECT a.blocked_reason FROM applications a JOIN jobs j ON j.id = a.job_id
+    WHERE a.status = 'blocked' AND a.blocked_reason IS NOT NULL AND ${SHOWN_APP}`);
   return blockingQuestions(rows.map((r) => r.blocked_reason));
 }
 
@@ -309,28 +317,29 @@ export async function systemStatus() {
 
 export async function analytics() {
   const db = await getDb();
+  const ours = `FROM applications a JOIN jobs j ON j.id = a.job_id WHERE ${SHOWN_APP}`;
   const funnel = await one(db, `SELECT
-      (SELECT count(*) FROM jobs WHERE status != 'duplicate') discovered,
-      (SELECT count(*) FROM jobs WHERE status = 'qualified') qualified,
-      (SELECT count(*) FROM applications) prepared,
-      (SELECT count(*) FROM applications WHERE status IN (${placeholders(APPLIED)})) applied,
-      (SELECT count(*) FROM applications WHERE status IN (${placeholders(HEARD_BACK)})) responded,
-      (SELECT count(*) FROM applications WHERE status IN ('interview','offer') OR id IN (SELECT entity_id FROM events WHERE entity = 'application' AND to_status = 'interview')) interviewed,
-      (SELECT count(*) FROM applications WHERE status = 'offer') offers`, [...APPLIED, ...HEARD_BACK]);
+      (SELECT count(*) FROM jobs j WHERE j.status != 'duplicate' AND ${SHOWN_JOB}) discovered,
+      (SELECT count(*) FROM jobs j WHERE j.status = 'qualified' AND ${SHOWN_JOB}) qualified,
+      (SELECT count(*) ${ours}) prepared,
+      (SELECT count(*) ${ours} AND a.status IN (${placeholders(APPLIED)})) applied,
+      (SELECT count(*) ${ours} AND a.status IN (${placeholders(HEARD_BACK)})) responded,
+      (SELECT count(*) ${ours} AND (a.status IN ('interview','offer') OR a.id IN (SELECT entity_id FROM events WHERE entity = 'application' AND to_status = 'interview'))) interviewed,
+      (SELECT count(*) ${ours} AND a.status = 'offer') offers`, [...APPLIED, ...HEARD_BACK]);
   const groupBy = (expr) => all(db, `SELECT ${expr} k,
       count(DISTINCT j.id) qualified,
       count(DISTINCT CASE WHEN a.status IN (${placeholders(APPLIED)}) THEN a.id END) applied,
       count(DISTINCT CASE WHEN a.status IN (${placeholders(HEARD_BACK)}) THEN a.id END) responded,
       count(DISTINCT CASE WHEN a.status IN ('interview','offer') THEN a.id END) interviews
-    FROM jobs j LEFT JOIN applications a ON a.job_id = j.id WHERE j.status = 'qualified' OR a.id IS NOT NULL
+    FROM jobs j LEFT JOIN applications a ON a.job_id = j.id AND ${SHOWN_APP} WHERE (j.status = 'qualified' AND ${SHOWN_JOB}) OR a.id IS NOT NULL
     GROUP BY k ORDER BY applied DESC, qualified DESC LIMIT 15`, [...APPLIED, ...HEARD_BACK]);
   const bySource = await groupBy('j.source');
   const byRole = await groupBy('j.role_category');
   const byResume = await all(db, `SELECT coalesce(a.resume_version, 'unknown') k, count(*) applied,
       sum(a.status IN (${placeholders(HEARD_BACK)})) responded, sum(a.status IN ('interview','offer')) interviews
-    FROM applications a WHERE a.status IN (${placeholders(APPLIED)}) GROUP BY k`, [...HEARD_BACK, ...APPLIED]);
+    ${ours} AND a.status IN (${placeholders(APPLIED)}) GROUP BY k`, [...HEARD_BACK, ...APPLIED]);
   const outreach = await one(db, `SELECT count(*) sent, sum(replied_at IS NOT NULL) replied FROM outreach WHERE status = 'sent' AND kind != 'followup'`);
-  const weekly = await all(db, `SELECT substr(submitted_at, 1, 10) d, count(*) n FROM applications WHERE submitted_at >= ? GROUP BY d ORDER BY d`,
+  const weekly = await all(db, `SELECT substr(a.submitted_at, 1, 10) d, count(*) n ${ours} AND a.submitted_at >= ? GROUP BY d ORDER BY d`,
     [new Date(Date.now() - 28 * 864e5).toISOString()]);
   return { funnel, bySource, byRole, byResume, outreach, weekly };
 }
@@ -338,8 +347,9 @@ export async function analytics() {
 export async function companyView(name) {
   const db = await getDb();
   const [jobs, apps, contacts, outreach] = await Promise.all([
-    all(db, `SELECT id, title, location, status, score, url, first_seen FROM jobs WHERE company = ? AND status != 'duplicate' ORDER BY score DESC`, [name]),
-    all(db, `SELECT a.id, a.status, a.submitted_at, j.title FROM applications a JOIN jobs j ON j.id = a.job_id WHERE j.company = ?`, [name]),
+    all(db, `SELECT j.id, j.title, j.location, j.status, j.score, j.url, j.first_seen FROM jobs j WHERE j.company = ? AND j.status != 'duplicate' AND ${SHOWN_JOB}
+      ORDER BY j.score DESC`, [name]),
+    all(db, `SELECT a.id, a.status, a.submitted_at, j.title FROM applications a JOIN jobs j ON j.id = a.job_id WHERE j.company = ? AND ${SHOWN_APP}`, [name]),
     all(db, `SELECT * FROM contacts WHERE lower(company) = lower(?)`, [name]),
     all(db, `SELECT o.id, o.kind, o.status, o.sent_at, o.subject, c.email FROM outreach o JOIN contacts c ON c.id = o.contact_id WHERE lower(c.company) = lower(?)`, [name]),
   ]);

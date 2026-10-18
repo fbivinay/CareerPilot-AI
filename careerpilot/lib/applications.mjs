@@ -10,6 +10,24 @@
 import { randomUUID } from 'node:crypto';
 import { all, audit, now, one, run } from './db.mjs';
 
+// Applications CareerPilot created (employer portals, emailed applications), whatever happened to them
+// since: the ones mail is matched against. The candidate's own (job sites, other mail) are not its work;
+// the dashboard shows only its work (the candidate's choice, 2026-10-18). `a` is applications.
+export const CAREERPILOT_APP = `a.method IN ('portal', 'email')`;
+// What the dashboard lists: the ones it sent, and queued ones only where it submits by itself
+// (Workday). A queued portal application the candidate then sent themselves (confirmed, but never
+// submitted by CareerPilot) is theirs. `j` is the application's job.
+export const SHOWN_APP = `(a.method = 'email' OR a.evidence LIKE '%"type":"workday"%'
+  OR (a.method = 'portal' AND a.status IN ('ready','blocked','failed','expired','withdrawn') AND j.url LIKE '%.myworkdayjobs.com/%'))`;
+// Jobs CareerPilot found, not ones recorded from the candidate's own application mail.
+export const SHOWN_JOB = `j.source NOT LIKE 'email%'`;
+// Mail about CareerPilot's work: linked to an application the dashboard shows, in a thread CareerPilot
+// started, or waiting for review because it could be about one of several of its applications. `e` is emails.
+export const SHOWN_EMAIL = `(e.application_id IN (SELECT a.id FROM applications a JOIN jobs j ON j.id = a.job_id WHERE ${SHOWN_APP})
+  OR e.thread_id IN (SELECT gmail_thread_id FROM outreach WHERE gmail_thread_id IS NOT NULL)
+  OR (e.needs_review = 1 AND e.application_id IS NULL
+    AND lower(e.company) IN (SELECT lower(j.company) FROM applications a JOIN jobs j ON j.id = a.job_id WHERE ${SHOWN_APP})))`;
+
 export const RANK = { ready: 0, blocked: 0, failed: 0, expired: 0, submitted: 1, confirmed: 2, assessment: 3, interview: 4, offer: 5 };
 export const TERMINAL = new Set(['rejected', 'withdrawn']);
 export const APPLIED = ['submitted', 'confirmed', 'assessment', 'interview', 'offer', 'rejected'];

@@ -4,7 +4,7 @@
 //   needs the candidate (consent declarations, CAPTCHA, account login), so they are never auto-submitted.
 //   job-board alerts (LinkedIn, Naukri, ...) -> 'ready' for applying on that platform.
 import { all, audit, kvGet, kvSet, now, run } from './db.mjs';
-import { createApplication, transition } from './applications.mjs';
+import { createApplication, SHOWN_APP, SHOWN_EMAIL, transition } from './applications.mjs';
 import { applicationEmail } from './contacts.mjs';
 import { loadProfile } from './profile.mjs';
 
@@ -59,11 +59,11 @@ export async function prepareApplications(db, settings, { env = process.env } = 
     WHERE j.status = 'qualified' AND a.id IS NULL AND j.score >= ? ORDER BY j.score DESC LIMIT 200`, [settings.matching.autoActionScore]);
   for (const job of jobs) {
     if (applicationEmail(job.description)) { stats.email++; continue; } // handled by the outreach stage
+    // A job-site posting is the candidate's to apply to (job sites forbid automation): not CareerPilot's work.
+    if (job.source.startsWith('alert:')) continue;
     const step = nextStep(job, answerPack(profile, job));
-    const platform = job.source.startsWith('alert:') ? job.source.slice(6) : null;
     // Answers are not copied into the database; the answer pack is rebuilt from the encrypted profile when shown.
-    await createApplication(db, job.id, { status: step.status, method: platform ? `platform:${platform}` : 'portal',
-      resumeVersion: profile.resume?.version, blockedReason: step.reason });
+    await createApplication(db, job.id, { status: step.status, method: 'portal', resumeVersion: profile.resume?.version, blockedReason: step.reason });
     stats[step.status]++;
   }
 
@@ -109,11 +109,13 @@ export async function sendDigest(db, gmail, settings, { to, env = process.env } 
   const today = now().slice(0, 10);
   if ((await kvGet(db, 'digest:last')) === today) return { skipped: 'already sent today' };
   if (!to) return { skipped: 'connected mailbox unknown' };
+  // CareerPilot's own work only (the candidate's choice, 2026-10-18).
   const ready = await all(db, `SELECT j.title, j.company, j.url, a.status, a.blocked_reason FROM applications a JOIN jobs j ON j.id = a.job_id
-    WHERE a.status IN ('ready', 'blocked', 'failed') ORDER BY j.score DESC LIMIT 25`);
-  const review = await all(db, `SELECT subject, from_addr, category FROM emails WHERE needs_review = 1 AND reviewed = 0 ORDER BY received_at DESC LIMIT 15`);
-  const upcoming = await all(db, `SELECT subject, extracted FROM emails WHERE category IN ('interview', 'assessment') AND received_at >= ? ORDER BY received_at DESC LIMIT 10`,
-    [new Date(Date.now() - 7 * 864e5).toISOString()]);
+    WHERE a.status IN ('ready', 'blocked', 'failed') AND ${SHOWN_APP} ORDER BY j.score DESC LIMIT 25`);
+  const review = await all(db, `SELECT e.subject, e.from_addr, e.category FROM emails e WHERE e.needs_review = 1 AND e.reviewed = 0 AND ${SHOWN_EMAIL}
+    ORDER BY e.received_at DESC LIMIT 15`);
+  const upcoming = await all(db, `SELECT e.subject, e.extracted FROM emails e WHERE e.category IN ('interview', 'assessment') AND e.received_at >= ? AND ${SHOWN_EMAIL}
+    ORDER BY e.received_at DESC LIMIT 10`, [new Date(Date.now() - 7 * 864e5).toISOString()]);
   if (!ready.length && !review.length && !upcoming.length) { await kvSet(db, 'digest:last', today); return { skipped: 'nothing pending' }; }
   const lines = ['CareerPilot daily digest', ''];
   if (upcoming.length) lines.push('Interviews / assessments (last 7 days):', ...upcoming.map((u) => `- ${u.subject} ${(JSON.parse(u.extracted ?? '{}').dates ?? []).join(', ')}`), '');

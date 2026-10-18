@@ -184,15 +184,6 @@ export function applicationDetails(msg) {
   };
 }
 
-// A message the candidate sent that is itself an application ("Application for Data Analyst Position").
-export function sentApplication(msg) {
-  const subject = decode(msg.subject);
-  if (!/\b(application|applying)\b/i.test(subject) && !(/\b(resume|cv)\b/i.test(subject) && (msg.attachments ?? []).length)) return null;
-  if (/^(re|fwd?):/i.test(subject)) return null;
-  const title = subject.match(/(?:application|applying) (?:for|to) (?:the )?(?:post of |position of |role of )?(.{2,90}?)(?:\s+(?:position|role|post|opening|job))?\s*(?:[-–|:(]|$)/i)?.[1] ?? null;
-  return { title: title && clean(title) };
-}
-
 const MONTHS = 'jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?';
 const DATE_RE = new RegExp(`\\b(\\d{1,2}(?:st|nd|rd|th)?\\s+(?:${MONTHS})(?:,?\\s+\\d{4})?|(?:${MONTHS})\\s+\\d{1,2}(?:st|nd|rd|th)?(?:,?\\s+\\d{4})?|\\d{1,2}[/-]\\d{1,2}[/-]\\d{2,4})(?:[^\\n.]{0,20}?\\b(\\d{1,2}[:.]\\d{2}\\s*(?:am|pm)?|\\d{1,2}\\s*(?:am|pm)))?`, 'gi');
 
