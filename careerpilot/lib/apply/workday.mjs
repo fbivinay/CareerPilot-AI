@@ -1050,7 +1050,10 @@ const QUESTION_RULES = [
     (c) => (c.required ? { option: [/decline|not wish|prefer not|do not want|choose not|rather not|not to (self.)?identify|not disclos/i] } : undefined)],
   [/^e-?mail( address)?$/i, (c) => (c.profile.email ? { text: c.profile.email } : undefined)],
   // Where the candidate is and would work: Bengaluru per the profile (and willing to relocate).
-  // "City - Local", "Address Line 1 - Local": Workday's copy in the local script, the same text for India.
+  // "Local Given Name(s)", "City - Local", "Address Line 1 - Local": Workday's copy in the local script, the
+  // same text for India.
+  [/^local given names?(\(s\))?$|^local first name$/i, (c) => (c.answers.legal_given_name ? { text: c.answers.legal_given_name } : undefined)],
+  [/^local (family|last) name$|^local surname$/i, (c) => (c.answers.legal_family_name ? { text: c.answers.legal_family_name } : undefined)],
   [/^(current )?city( - local)?$/i, (c) => (c.profile.location ? { text: String(c.profile.location).split(',')[0].trim() } : undefined)],
   [/^(current )?location$/i, (c) => (c.profile.location ? { text: c.profile.location } : undefined)],
   [/(desired|preferred) (work |job )?location/i, (c) => ({ option: [new RegExp(`\\b(${escapeRe(String(c.profile.location ?? '').split(',')[0])}|bengaluru|bangalore)\\b`, 'i')] })],

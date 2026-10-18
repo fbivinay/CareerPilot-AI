@@ -228,7 +228,9 @@ test('AllianceBernstein, Amgen and Ashby questions follow the standing answers',
   assert.deepEqual(ask('Are you on a Performance Improvement Plan (PIP)?'), { yes: false });
   // Barclays' local-script address copy.
   const local = (label) => answerFor({ label, kind: 'text', required: true }, { profile: { ...profile, location: 'Bengaluru, Karnataka' },
-    answers: { address_line1: 'Central Street' }, job: { company: 'Barclays' }, inIndia: true });
+    answers: { address_line1: 'Central Street', legal_given_name: 'R Vinay', legal_family_name: 'Kumar' }, job: { company: 'Barclays' }, inIndia: true });
+  assert.equal(local('Local Given Name(s)').text, 'R Vinay');
+  assert.equal(local('Local Family Name').text, 'Kumar');
   assert.equal(local('Address Line 1 - Local').text, 'Central Street');
   assert.equal(local('City - Local').text, 'Bengaluru');
   assert.equal(local('Current location').text, 'Bengaluru, Karnataka');
