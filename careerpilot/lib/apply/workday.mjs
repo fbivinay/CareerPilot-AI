@@ -1160,6 +1160,7 @@ const QUESTION_RULES = [
   [/^address line 2( - local)?$/i, (c) => (c.answers.address_line2 ? { text: c.answers.address_line2 } : undefined)],
   [/^building( name| number)?$/i, (c) => (c.answers.address_building ? { text: c.answers.address_building } : undefined)], // TransUnion
   [/^street number$/i, (c) => (c.answers.address_street_number ? { text: String(c.answers.address_street_number) } : undefined)],
+  [/\b(full |legal )*name of (your )?father\b|\bfather'?s (legal |full )*name\b/i, (c) => (c.answers.father_full_name ? { text: c.answers.father_full_name } : undefined)], // DBS
   [/postal code|\bpin ?code\b|\bzip\b/i, (c) => (c.answers.postal_code ? { text: String(c.answers.postal_code) } : undefined)],
 ];
 
