@@ -1000,9 +1000,9 @@ const QUESTION_RULES = [
   }],
   // Letting the employer use AI tools on the application (allowed by the candidate on 2026-10-18); one
   // about future openings also needs their wish to be considered for other roles.
-  [/\b(ai|artificial intelligence)\b\)?.{0,15}\btools?\b|\btools? such as ai\b/i, (c) => {
+  [/\b(ai|artificial intelligence)\b\)?.{0,15}\btools?\b|\btools? such as ai\b|\buse of ai\b/i, (c) => {
     const facts = [yes(c.answers.allow_ai_screening)?.yes];
-    if (/future (job )?(openings|roles|positions|opportunities)|other (positions|roles)/i.test(c.label)) facts.push(yes(c.answers.consider_for_other_roles)?.yes);
+    if (/future (job )?(openings|roles|positions|opportunities)|future .{0,15}matching|other (positions|roles)/i.test(c.label)) facts.push(yes(c.answers.consider_for_other_roles)?.yes);
     return facts.includes(undefined) ? undefined : { yes: facts.every(Boolean) };
   }],
   // A statement to sign, and its date (only with the candidate's permission).
@@ -1082,7 +1082,7 @@ const QUESTION_RULES = [
     // specified)", "Government Clearance Required? No".
     (/\b(certif\w*|clearance)\b/i.test(String(c.job.description ?? '').replace(/certifications \(if blank, certifications not specified\)|government clearance required\? no/gi, '')) ? undefined
       : { option: [/not applicable|n\/a|^none/i, /^yes\b/i], text: 'Not applicable: the job description lists none' })],
-  [/\byears of (relevant |total |work |professional |prior )?experience\b|\bexperience \(?in years\)?/i, (c) => {
+  [/\byears of (relevant |total |work |working |professional |prior )?experience\b|\bexperience \(?in years\)?/i, (c) => {
     if (/\b(with|in|using|on) [A-Z]/.test(c.label)) return undefined;
     const years = workYears(c.profile);
     return { text: String(years), option: years ? [new RegExp(`^${years}\\b`)] : [/^0\b|fresher|less than (1|one)|< ?1|no experience|^none/i] };
@@ -1236,9 +1236,11 @@ async function tick(box) {
 }
 
 async function applyAnswer(page, q, a) {
-  // Yes/no options also come worded as consent ("I agree" / "I do not agree").
+  // Yes/no options also come worded as consent ("I agree" / "I do not agree"), or as the box's own statement
+  // ("By checking this box, I consent to …", MSD).
   const wantsYesNo = a.yes === undefined ? null
-    : [a.yes ? /^(yes|i agree|agree|i consent|i accept|accept|i acknowledge|acknowledge|opt-?in)\b/i : /^(no|i do not|i don't|do not|disagree|decline|i will not|opt-?out)\b/i];
+    : a.yes ? [/^(yes|i agree|agree|i consent|i accept|accept|i acknowledge|acknowledge|opt-?in)\b/i, /^by (checking|ticking|selecting) (this|the) box\b(?!.*\b(do not|don'?t)\b)/i]
+      : [/^(no|i do not|i don't|do not|disagree|decline|i will not|opt-?out)\b/i, /\b(do not|don'?t) (consent|agree|wish)\b/i];
   switch (q.kind) {
     case 'dropdown': return choose(page, q.field, wantsYesNo ?? a.option ?? [new RegExp(`^${escapeRe(a.text ?? '')}$`, 'i')]);
     case 'date': return { chosen: (await setDate(page, page, q.field, a.date)) ? 'date set' : undefined };

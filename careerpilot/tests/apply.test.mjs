@@ -305,6 +305,11 @@ test('Barclays, Mastercard, Maersk, ICF, US Bank, Mobility, PwC and RELX questio
     { profile, answers, job: { company: 'Fractal', title: 'Data Scientist (Computer Vision)' }, inIndia: true });
   assert.equal(best(['Data Engineer', 'Data Scientist', 'ML Engineer'], role.option), 1);
   assert.equal(best(['I am an Intern', 'I am an Apprentice', 'I am a Fresher', 'I am an Experienced Professional'], role.option), 2);
+  // TransUnion's "working experience" and MSD's AI questions.
+  assert.equal(best(['0 - 2 years', '3 - 4 years'], ask('What is the total number years of working experience, excluding internships?', 'dropdown', 'TransUnion').option), 0);
+  Object.assign(answers, { allow_ai_screening: true, consider_for_other_roles: true });
+  assert.deepEqual(ask('Use of AI for Future AI Matching (Optional)', 'checkbox', 'MSD'), { yes: true });
+  assert.deepEqual(ask('Use of AI to Assess my Application (Optional) As part of our recruitment process, we may use automated tools and artificial intelligence driven systems (collectively, “AI tools”) to help our recruiters assess applications.', 'radio', 'MSD'), { yes: true });
   answers.sms_updates = true;
   assert.equal(best(['Email', 'Email & Text/SMS'], ask('Which communication method would you like us to use when contacting you throughout the recruiting process? (SMS is currently supported in Australia, Canada, France, Germany, Ireland, the United Kingdom, and the United States.)', 'dropdown', 'GE Vernova').option), 0);
   assert.equal(best(['I wish to subscribe to marketing communications', 'I wish to unsubscribe from marketing communications'],
