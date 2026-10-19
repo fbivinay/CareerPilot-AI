@@ -215,6 +215,32 @@ test('login redirect target is restricted to this origin', async () => {
   assert.equal(safeNext('https://evil.com/x'), '/');
 });
 
+test('the candidate’s own email is sent unchanged to every recipient, as HTML with its text and the resume', async () => {
+  const { kvSet } = await import('../lib/db.mjs');
+  const db = await openDb({ url: ':memory:' });
+  const messages = [];
+  const gmail = { send: async (m) => { messages.push(m); return { id: `g${messages.length}`, threadId: `t${messages.length}` }; } };
+  await kvSet(db, 'outreach:template', { subject: 'Reaching Out Regarding Job Opportunities', text: 'Hello,\n\nI am a candidate.\n\nBest regards,\nTest',
+    html: '<div>Hello,<br><b>I am a candidate.</b></div>' });
+  // Outside the sending window the stage holds everything back, so the window is opened for the test.
+  const open = { ...settings, limits: { ...settings.limits, sendWindow: { ...settings.limits.sendWindow, days: [0, 1, 2, 3, 4, 5, 6], start: '00:00', end: '23:59' } } };
+  await upsertJob(db, { url: 'https://jobs.lever.co/acme/10', title: 'Junior Data Scientist', company: 'Acme', location: 'Bengaluru',
+    description: 'Freshers welcome. Send your resume to careers@acme.in' }, { source: 'lever', settings });
+  const env = { APP_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString('base64') };
+  await vaultPut(db, 'profile', JSON.stringify(profile), env);
+  await vaultPut(db, 'resume.pdf', Buffer.from('%PDF-1.7 test'), env);
+  await runOutreach(db, gmail, open, { env });
+  assert.equal(messages.length, 1);
+  const [m] = messages;
+  assert.equal(m.to, 'careers@acme.in');
+  assert.equal(m.subject, 'Reaching Out Regarding Job Opportunities');
+  assert.equal(m.text, 'Hello,\n\nI am a candidate.\n\nBest regards,\nTest'); // nothing appended
+  assert.equal(m.html, '<div>Hello,<br><b>I am a candidate.</b></div>');
+  assert.deepEqual(m.attachments.map((a) => a.filename), ['Test_Candidate_Resume.pdf']);
+  const mime = buildMime({ ...m, attachments: m.attachments });
+  assert.match(mime, /multipart\/mixed[\s\S]*multipart\/alternative[\s\S]*text\/plain[\s\S]*text\/html[\s\S]*application\/pdf/);
+});
+
 test('dry run previews emails without sending or recording anything', async () => {
   const db = await openDb({ url: ':memory:' });
   let sent = 0;

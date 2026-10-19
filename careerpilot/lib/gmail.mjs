@@ -119,7 +119,7 @@ export function parseMessage(m) {
   const attachments = [];
   (function walk(part) {
     if (!part) return;
-    if (part.filename) attachments.push({ filename: part.filename, mimeType: part.mimeType });
+    if (part.filename) attachments.push({ filename: part.filename, mimeType: part.mimeType, size: part.body?.size ?? null });
     else if (part.mimeType === 'text/plain' && part.body?.data) text += b64(part.body.data);
     else if (part.mimeType === 'text/html' && part.body?.data) html += b64(part.body.data);
     for (const p of part.parts ?? []) walk(p);
@@ -177,8 +177,9 @@ export function parseFrom(header) {
 
 const encodeHeader = (s) => (/^[\x20-\x7e]*$/.test(s) ? s : `=?UTF-8?B?${Buffer.from(s).toString('base64')}?=`);
 
-// RFC 2822 message with optional PDF attachment and reply threading headers.
-export function buildMime({ to, from, subject, text, attachments = [], inReplyTo, references }) {
+// RFC 2822 message with optional HTML (the candidate's own formatted email: bold, lists) beside the plain
+// text, optional PDF attachment, and reply threading headers.
+export function buildMime({ to, from, subject, text, html = null, attachments = [], inReplyTo, references }) {
   const boundary = `cp_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`;
   const head = [
     `To: ${to}`,
@@ -188,8 +189,12 @@ export function buildMime({ to, from, subject, text, attachments = [], inReplyTo
     ...(inReplyTo ? [`In-Reply-To: ${inReplyTo}`, `References: ${references ? references + ' ' : ''}${inReplyTo}`] : []),
   ];
   const textPart = ['Content-Type: text/plain; charset="UTF-8"', 'Content-Transfer-Encoding: base64', '', Buffer.from(text).toString('base64')];
-  if (!attachments.length) return [...head, ...textPart].join('\r\n');
-  const parts = [`--${boundary}`, ...textPart];
+  const alt = `${boundary}_alt`;
+  const bodyPart = html ? [`Content-Type: multipart/alternative; boundary="${alt}"`, '', `--${alt}`, ...textPart, `--${alt}`,
+    'Content-Type: text/html; charset="UTF-8"', 'Content-Transfer-Encoding: base64', '', Buffer.from(html).toString('base64').replace(/.{76}/g, '$&\r\n'), `--${alt}--`]
+    : textPart;
+  if (!attachments.length) return [...head, ...bodyPart].join('\r\n');
+  const parts = [`--${boundary}`, ...bodyPart];
   for (const a of attachments) {
     parts.push(`--${boundary}`, `Content-Type: ${a.mimeType}; name="${a.filename}"`, 'Content-Transfer-Encoding: base64',
       `Content-Disposition: attachment; filename="${a.filename}"`, '', a.content.toString('base64').replace(/.{76}/g, '$&\r\n'));

@@ -5,7 +5,7 @@
 import { randomUUID } from 'node:crypto';
 import { writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { all, audit, now, one, run } from './db.mjs';
+import { all, audit, kvGet, now, one, run } from './db.mjs';
 import { createApplication, getApplication, transition } from './applications.mjs';
 import { applicationEmail, contactsFromJob, upsertContact } from './contacts.mjs';
 import { composeEmail, followUpEmail } from './compose.mjs';
@@ -70,7 +70,7 @@ export async function blockReason(db, { job, contact, kind }, settings, { ignore
   return null;
 }
 
-async function send(db, gmail, { contact, job, kind, subject, body, attach, threadId = null, inReplyTo = null, references = null, followupOf = null, composer }, profile, resume) {
+async function send(db, gmail, { contact, job, kind, subject, body, html = null, attach, threadId = null, inReplyTo = null, references = null, followupOf = null, composer }, profile, resume) {
   const id = randomUUID();
   await run(db, `INSERT INTO outreach (id, contact_id, job_id, kind, subject, body, status, followup_of, created_at)
     VALUES (?, ?, ?, ?, ?, ?, 'sending', ?, ?)`, [id, contact.id, job?.id ?? null, kind, subject, body, followupOf, now()]);
@@ -79,6 +79,7 @@ async function send(db, gmail, { contact, job, kind, subject, body, attach, thre
       to: contact.email,
       subject,
       text: body,
+      html,
       threadId,
       inReplyTo,
       references,
@@ -118,6 +119,9 @@ export async function runOutreach(db, gmail, settings, { deadline = Infinity, en
   const profile = await loadProfile(db, env);
   const resume = await loadResumePdf(db, env);
   if (!profile || !resume) return { skipped: 'profile or resume not imported (npm run setup -- profile)' };
+  // The candidate's own email, sent unchanged to every recipient (their choice of 2026-10-19): its subject,
+  // text and HTML exactly, with the resume; only the address differs.
+  const template = await kvGet(db, 'outreach:template');
 
   const jobs = await all(db, `SELECT * FROM jobs WHERE status = 'qualified' AND description LIKE '%@%' AND score >= ?
     ORDER BY score DESC, first_seen DESC LIMIT 60`, [settings.matching.autoActionScore]);
@@ -133,7 +137,9 @@ export async function runOutreach(db, gmail, settings, { deadline = Infinity, en
         const existing = await getApplication(db, job.id);
         if (existing && !['ready', 'failed', 'blocked'].includes(existing.status)) { skip(`application already ${existing.status}`); continue; }
       }
-      const draft = await composeEmail(db, { profile, job, kind, contactName: contact.name }, settings);
+      const draft = template?.subject && template?.text
+        ? { subject: template.subject, body: template.text, html: template.html ?? null, composer: 'template:candidate' }
+        : await composeEmail(db, { profile, job, kind, contactName: contact.name }, settings);
       if (dryRun) {
         previews.push({ kind, job, to: contact.email, ...draft, attach: true });
         stats.previews++;
