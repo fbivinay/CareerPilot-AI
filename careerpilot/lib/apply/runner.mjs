@@ -22,6 +22,21 @@ const isWorkday = (url) => { try { portalHost(url); return true; } catch { retur
 // Start of today in India, for the daily cap.
 const todayIST = () => new Date(new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }) + 'T00:00:00+05:30').toISOString();
 
+// The description as the job page shows it. Workday's job API can refuse a machine (HTTP 403) whose job
+// pages still load (HPE, Tyson, Visa, 2026-10-19); a closed posting shows no description, so null.
+async function pageDescription(browser, url) {
+  const context = await browser.newContext({ locale: 'en-US' });
+  try {
+    const page = await context.newPage();
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45_000 });
+    const box = page.locator('[data-automation-id="jobPostingDescription"]').first();
+    await box.waitFor({ timeout: 20_000 });
+    return (await box.innerText()).trim() || null;
+  } finally {
+    await context.close();
+  }
+}
+
 export async function autoApply(db, settings, { launch, submit = false, limit = 5, deadline = Infinity, gmail = null, shots = null, retry = false, only = null, perCompany = PER_COMPANY, env = process.env } = {}) {
   if (!settings.automation.portalApplications) return { skipped: 'portal applications are turned off in Settings' };
   const profile = await loadProfile(db, env);
@@ -64,7 +79,7 @@ export async function autoApply(db, settings, { launch, submit = false, limit = 
       // A job qualified without its description has unchecked experience and pay requirements: read the
       // description and judge the job again first (the pipeline's describe stage usually has already).
       if (!job.description) {
-        const jd = await describeJob(db, job, settings);
+        const jd = await describeJob(db, job, settings, undefined, (url) => pageDescription(browser, url));
         if (!jd) { stats.skippedNoDescription++; continue; }
         const judged = await one(db, 'SELECT status, score FROM jobs WHERE id = ?', [job.id]);
         if (judged.status !== 'qualified' || judged.score < settings.matching.autoActionScore) { stats.requalifiedOut++; continue; }

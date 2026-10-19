@@ -152,8 +152,9 @@ export async function expireMissing(db, boardId, seen, { places = null } = {}) {
 // Board listings (Workday's in particular) carry no description, so a job can qualify with its experience
 // and pay requirements unchecked. These read the description from the ATS's public job API and judge the
 // job again. describeJob returns the description, or null when it could not be read.
-export async function describeJob(db, row, settings, fetchJd = fetchJdViaKnownApi) {
-  const text = (await fetchJd(row.url).catch(() => null))?.text;
+// `fromPage`, when given, reads the description off the job page when the API cannot.
+export async function describeJob(db, row, settings, fetchJd = fetchJdViaKnownApi, fromPage = null) {
+  const text = (await fetchJd(row.url).catch(() => null))?.text ?? (fromPage && await fromPage(row.url).catch(() => null));
   if (!text) return null;
   await run(db, 'UPDATE jobs SET description = ? WHERE id = ?', [text, row.id]);
   await applyEvaluation(db, { ...row, description: text }, settings);

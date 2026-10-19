@@ -151,3 +151,16 @@ test('a location-filtered scan only expires jobs located in the filtered places'
   assert.equal((await one(db, 'SELECT status FROM jobs WHERE id = ?', [blr.id])).status, 'expired');
   assert.notEqual((await one(db, 'SELECT status FROM jobs WHERE id = ?', [remote.id])).status, 'expired');
 });
+
+test('a description the job API cannot give is read off the job page, then the job is judged again', async () => {
+  const { describeJob } = await import('../lib/jobs.mjs');
+  const db = await openDb({ url: ':memory:' });
+  const url = 'https://acme.wd5.myworkdayjobs.com/External/job/Bengaluru/Data-Engineer_R2';
+  const { id } = await upsertJob(db, posting({ url, title: 'Data Engineer', description: '' }), { source: 'workday', boardId: 'b1', settings });
+  const job = await one(db, 'SELECT * FROM jobs WHERE id = ?', [id]);
+  const refused = async () => null; // the API's 403
+  assert.equal(await describeJob(db, job, settings, refused), null);
+  const page = async (u) => (u === url ? 'Data Engineer, Bengaluru. Requires 4+ years of experience with Spark.' : null);
+  assert.match(await describeJob(db, job, settings, refused, page), /4\+ years/);
+  assert.equal((await one(db, 'SELECT status FROM jobs WHERE id = ?', [job.id])).status, 'excluded'); // judged again
+});
