@@ -46,7 +46,8 @@ const STAGES = {
   describe: (db, settings) => describeMissing(db, settings, { deadline: deadline - 140_000 }),
   // Free-tier token limits make scoring ~10 s a job; stop early so Gmail and outreach always run.
   ai: (db, settings) => aiScoreJobs(db, settings, { deadline: deadline - 120_000 }),
-  gmail: needsGmail((db, settings) => syncGmail(db, gmail, settings, { deadline: deadline - 90_000, me: gmailStatus.email })),
+  gmail: needsGmail((db, settings) => syncGmail(db, gmail, settings, { deadline: deadline - 90_000, me: gmailStatus.email,
+    pushTopic: process.env.GMAIL_PUSH_TOPIC || null })),
   prepare: (db, settings) => prepareApplications(db, settings),
   outreach: needsSending((db, settings) => runOutreach(db, gmail, settings, { deadline: deadline - 60_000 })),
   // Blocked applications are emailed on every run; the digest goes once a day.

@@ -130,3 +130,28 @@ test('revoked access is detected and disconnect revokes at Google and forgets th
   assert.equal((await all(db, 'SELECT * FROM vault')).length, 0);
   assert.equal((await connectionStatus(db, env)).connected, false);
 });
+
+test('a Gmail push starts the Gmail sync on GitHub, once per burst, only with the push token', async () => {
+  const { handleGmailPush } = await import('../lib/gmail-oauth.mjs');
+  const db = await openDb({ url: ':memory:' });
+  const calls = [];
+  let status = 204;
+  const fetchImpl = async (url, init) => { calls.push({ url: String(url), auth: init.headers.authorization, ref: JSON.parse(init.body).ref }); return new Response(null, { status }); };
+  const env = { GMAIL_PUSH_TOKEN: 'push-token-123', GITHUB_DISPATCH_TOKEN: 'gh-token' };
+  const push = (token, e = env) => handleGmailPush(db, { token, env: e, fetchImpl });
+  assert.equal(await push('push-token-123', {}), 503, 'not set up');
+  assert.equal(await push('wrong-token-12'), 403);
+  assert.equal(await push(null), 403);
+  assert.equal(calls.length, 0);
+  assert.equal(await push('push-token-123'), 204);
+  assert.deepEqual(calls.map((c) => [c.url.endsWith('/actions/workflows/careerpilot-gmail.yml/dispatches'), c.auth, c.ref]), [[true, 'Bearer gh-token', 'main']]);
+  assert.equal(await push('push-token-123'), 204, 'a repeat within 30 seconds');
+  assert.equal(calls.length, 1);
+  // GitHub refusing (an expired token): Pub/Sub delivers again, and the Overview says so.
+  await db.execute(`DELETE FROM kv WHERE key = 'gmail:push'`);
+  status = 401;
+  assert.equal(await push('push-token-123'), 502);
+  assert.deepEqual([(await kvGet(db, 'gmail:push')).ok, (await kvGet(db, 'gmail:push')).status], [false, 401]);
+  assert.equal(await push('push-token-123'), 502, 'a failed start is tried again at once');
+  assert.equal(calls.length, 3);
+});

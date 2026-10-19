@@ -1,0 +1,57 @@
+# Instant Gmail sync (the candidate's choice, 2026-10-20): Gmail tells a Google Pub/Sub topic about new mail,
+# Pub/Sub tells the dashboard (/api/gmail/push), and the dashboard starts this workflow, which runs only the
+# Gmail stage. One at a time: a newer start replaces one still waiting. careerpilot-pipeline still reads
+# Gmail every 30 minutes and renews Gmail's watch daily, so mail is never missed when a push is.
+# Setup: careerpilot/SETUP.md, "Instant Gmail sync".
+name: careerpilot-gmail
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: careerpilot-gmail
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Restore dependencies
+        id: deps
+        uses: actions/cache@v4
+        with:
+          path: |
+            node_modules
+            careerpilot/node_modules
+          key: deps-${{ runner.os }}-${{ hashFiles('package.json', 'careerpilot/package-lock.json') }}
+      - name: Install dependencies
+        if: steps.deps.outputs.cache-hit != 'true'
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+        run: |
+          npm install --ignore-scripts --no-audit --no-fund
+          npm ci --prefix careerpilot --ignore-scripts --no-audit --no-fund
+      - name: Sync Gmail
+        working-directory: careerpilot
+        env:
+          RUN_BUDGET_MINUTES: '6'
+          TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+          TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+          APP_ENCRYPTION_KEY: ${{ secrets.APP_ENCRYPTION_KEY }}
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          GMAIL_PUSH_TOPIC: ${{ vars.GMAIL_PUSH_TOPIC }}
+        run: |
+          if [ -z "$TURSO_DATABASE_URL" ]; then exit 0; fi
+          node scripts/run.mjs gmail

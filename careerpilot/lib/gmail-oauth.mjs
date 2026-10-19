@@ -191,3 +191,23 @@ export async function disconnect(db, env = process.env, fetchImpl = fetch) {
 export async function markAuthFailure(db, message) {
   await kvSet(db, 'gmail:status', { ok: false, at: now(), error: message });
 }
+
+// Gmail push → Pub/Sub → /api/gmail/push: start the Gmail-only sync on GitHub (careerpilot-gmail.yml). The
+// dashboard holds no Gmail key, only a token that can start this repository's workflows. Returns the HTTP
+// status; Pub/Sub delivers again after any non-2xx one. A repeat within 30 seconds of a started run is
+// dropped: that run reads Gmail later than the mail it was told about.
+const DISPATCH_URL = 'https://api.github.com/repos/fbivinay/CareerPilot-AI/actions/workflows/careerpilot-gmail.yml/dispatches';
+export async function handleGmailPush(db, { token, env = process.env, fetchImpl = fetch }) {
+  if (!env.GMAIL_PUSH_TOKEN || !env.GITHUB_DISPATCH_TOKEN) return 503;
+  const [got, want] = [Buffer.from(String(token ?? '')), Buffer.from(env.GMAIL_PUSH_TOKEN)];
+  if (got.length !== want.length || !timingSafeEqual(got, want)) return 403;
+  const last = await kvGet(db, 'gmail:push');
+  if (last?.ok && Date.now() - Date.parse(last.at) < 30_000) return 204;
+  const res = await fetchImpl(DISPATCH_URL, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${env.GITHUB_DISPATCH_TOKEN}`, accept: 'application/vnd.github+json', 'x-github-api-version': '2022-11-28' },
+    body: JSON.stringify({ ref: 'main' }),
+  });
+  await kvSet(db, 'gmail:push', { ok: res.ok, at: now(), ...(res.ok ? {} : { status: res.status }) });
+  return res.ok ? 204 : 502;
+}

@@ -292,9 +292,48 @@ async function syncSent(db, gmail, { me, after, max, deadline, ourThreadIds }) {
   return result;
 }
 
+// A lease in kv: free when its time has passed, so one held by a run that died frees itself.
+async function takeLease(db, ms) {
+  const t = now();
+  const r = await run(db, `INSERT INTO kv (key, value, updated_at) VALUES ('lock:gmail', ?, ?)
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at WHERE kv.value < ?`,
+  [JSON.stringify(new Date(Date.now() + ms).toISOString()), t, JSON.stringify(t)]);
+  return r.rowsAffected > 0;
+}
+
+// Gmail push (the candidate's choice, 2026-10-20): Gmail tells a Pub/Sub topic about new mail, Pub/Sub tells
+// the dashboard (/api/gmail/push), and the dashboard starts careerpilot-gmail.yml. A watch lasts 7 days, so
+// it is renewed once a day, and at once after it failed. The error stays in kv, out of the public log.
+async function renewWatch(db, gmail, topic) {
+  const w = await kvGet(db, 'gmail:watch');
+  if (w?.topic === topic && !w.error && Date.now() - Date.parse(w.at) < 864e5) return;
+  try {
+    const r = await gmail.watch(topic);
+    await kvSet(db, 'gmail:watch', { topic, at: now(), expiration: new Date(Number(r.expiration)).toISOString() });
+  } catch (err) {
+    log.warn('Gmail push watch failed', { error: String(err.message).split(':')[0] });
+    await kvSet(db, 'gmail:watch', { topic, at: now(), error: String(err.message).slice(0, 300) });
+  }
+}
+
+// One Gmail sync at a time: the pipeline's and one a Gmail push started can overlap, and both would process
+// the same new mail. A sync that finds the lease taken waits up to `waitMs` for it.
+export async function syncGmail(db, gmail, settings, { waitMs = 120_000, pushTopic = null, ...opts } = {}) {
+  for (const start = Date.now(); !(await takeLease(db, 10 * 60_000));) {
+    if (Date.now() - start >= waitMs) return { skipped: 'another Gmail sync is running' };
+    await new Promise((r) => setTimeout(r, 5_000));
+  }
+  try {
+    if (pushTopic) await renewWatch(db, gmail, pushTopic);
+    return await syncMail(db, gmail, settings, opts);
+  } finally {
+    await kvSet(db, 'lock:gmail', new Date(0).toISOString());
+  }
+}
+
 // `me` is the connected Gmail address: without it the sent folder is not read, since CareerPilot's alerts
 // to the candidate would look like job emails.
-export async function syncGmail(db, gmail, settings, { lookbackDays = 30, max = 5000, deadline = Infinity, me = null } = {}) {
+async function syncMail(db, gmail, settings, { lookbackDays = 30, max = 5000, deadline = Infinity, me = null } = {}) {
   const since = (last) => (last ? Math.floor(new Date(last).getTime() / 1000) - 3600 : Math.floor(Date.now() / 1000) - lookbackDays * 86400);
   const ourThreadIds = new Set((await all(db, `SELECT gmail_thread_id t FROM outreach WHERE gmail_thread_id IS NOT NULL
     UNION SELECT a.gmail_thread_id FROM applications a WHERE a.gmail_thread_id IS NOT NULL AND ${CAREERPILOT_APP}`)).map((r) => r.t));

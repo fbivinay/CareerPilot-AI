@@ -357,6 +357,8 @@ export async function systemStatus() {
     runs,
     gmail: await kvGet(db, 'gmail:status'),
     gmailLastSync: await kvGet(db, 'gmail:last_sync'),
+    gmailWatch: await kvGet(db, 'gmail:watch'), // instant Gmail sync (gmail-sync.mjs renewWatch, gmail-oauth.mjs handleGmailPush)
+    gmailPush: await kvGet(db, 'gmail:push'),
     aggregator: await kvGet(db, 'aggregator:last_sweep'),
     boards,
     ai: await providerHealth(db),

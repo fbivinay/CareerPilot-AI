@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 // Local secret plumbing. Nothing secret is ever printed.
-//   node scripts/setup.mjs keys        create APP_ENCRYPTION_KEY and SESSION_SECRET in .env if missing
+//   node scripts/setup.mjs keys        create APP_ENCRYPTION_KEY, SESSION_SECRET and GMAIL_PUSH_TOKEN in .env if missing
 //   node scripts/setup.mjs password    set the dashboard password (hidden prompt) -> DASHBOARD_PASSWORD_HASH
 //   node scripts/setup.mjs profile     encrypt private/profile.yml + master resume into the database vault
 //   node scripts/setup.mjs github      copy the pipeline's secrets from .env to GitHub Actions secrets (gh CLI)
 //   node scripts/setup.mjs vercel      set the read-only dashboard's variables on the linked Vercel project (vercel CLI)
+//   node scripts/setup.mjs push        instant Gmail sync: the Pub/Sub topic and push subscription (gcloud) and the
+//                                      GMAIL_PUSH_TOPIC Actions variable (gh). Run after `vercel` (SETUP.md).
 //   node scripts/setup.mjs check       show which settings are present (names only)
 import { randomBytes } from 'node:crypto';
 import { execFileSync, execSync } from 'node:child_process';
@@ -21,10 +23,26 @@ if (existsSync(ENV_FILE)) process.loadEnvFile(ENV_FILE);
 // Secrets GitHub Actions needs. Dashboard-only values (password hash, session secret) go to Vercel instead.
 const ACTIONS_SECRETS = ['TURSO_DATABASE_URL', 'TURSO_AUTH_TOKEN', 'APP_ENCRYPTION_KEY', 'GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET',
   'GROQ_API_KEY', 'GEMINI_API_KEY', 'OPENROUTER_API_KEY'];
-const ALL = [...ACTIONS_SECRETS, 'SESSION_SECRET', 'DASHBOARD_PASSWORD_HASH'];
+const ALL = [...ACTIONS_SECRETS, 'SESSION_SECRET', 'DASHBOARD_PASSWORD_HASH', 'GMAIL_PUSH_TOKEN', 'GITHUB_DISPATCH_TOKEN'];
 // The Vercel dashboard is read-only: database and sign-in only. Gmail, AI and encryption keys stay off the
-// internet-facing host, so it can neither send mail nor decrypt the profile or the Gmail token.
-const VERCEL_VARS = ['TURSO_DATABASE_URL', 'TURSO_AUTH_TOKEN', 'SESSION_SECRET', 'DASHBOARD_PASSWORD_HASH'];
+// internet-facing host, so it can neither send mail nor decrypt the profile or the Gmail token. For instant
+// Gmail sync it also holds the push token Pub/Sub calls it with, and a GitHub token (fine-grained: Actions on
+// this repository only) to start careerpilot-gmail.yml.
+const VERCEL_VARS = ['TURSO_DATABASE_URL', 'TURSO_AUTH_TOKEN', 'SESSION_SECRET', 'DASHBOARD_PASSWORD_HASH', 'GMAIL_PUSH_TOKEN', 'GITHUB_DISPATCH_TOKEN'];
+const DASHBOARD_URL = process.env.APP_BASE_URL ?? 'https://careerpilot-fbivinay.vercel.app';
+const PUSH_TOPIC = 'careerpilot-gmail';
+const PUSH_SUBSCRIPTION = 'careerpilot-gmail-push';
+
+// gcloud is a .cmd on Windows, which Node starts only through a shell; no argument here has spaces. A failure
+// is reported by gcloud's own last line with the push token masked: Node's message would repeat the command.
+function gcloud(args) {
+  const mask = (s) => String(s ?? '').replaceAll(process.env.GMAIL_PUSH_TOKEN || '\0', '***');
+  try {
+    return execFileSync('gcloud', [...args, '--quiet'], { encoding: 'utf8', shell: process.platform === 'win32', stdio: ['ignore', 'pipe', 'pipe'] });
+  } catch (err) {
+    throw Object.assign(new Error(mask(String(err.stderr ?? '').trim().split('\n').pop() || 'gcloud failed')), { stderr: mask(err.stderr) });
+  }
+}
 
 // Line-based so values are written verbatim (no regex replacement patterns).
 function setEnv(name, value) {
@@ -51,11 +69,37 @@ function hiddenPrompt(question) {
 
 const commands = {
   keys() {
-    for (const name of ['APP_ENCRYPTION_KEY', 'SESSION_SECRET']) {
+    // The push token goes in a URL, so it is base64url.
+    for (const [name, encoding] of [['APP_ENCRYPTION_KEY', 'base64'], ['SESSION_SECRET', 'base64'], ['GMAIL_PUSH_TOKEN', 'base64url']]) {
       if (process.env[name]) { console.log(`${name}: already set`); continue; }
-      setEnv(name, randomBytes(32).toString('base64'));
+      setEnv(name, randomBytes(32).toString(encoding));
       console.log(`${name}: generated and saved to careerpilot/.env`);
     }
+  },
+  // Gmail may publish to the topic; the subscription delivers each notice to the dashboard with the push token.
+  // Safe to run again: existing pieces are kept, the subscription's address is updated.
+  push() {
+    if (!process.env.GMAIL_PUSH_TOKEN) throw new Error('GMAIL_PUSH_TOKEN is not set: run `npm run setup -- keys` first.');
+    const number = String(process.env.GOOGLE_CLIENT_ID ?? '').split('-')[0];
+    const project = gcloud(['projects', 'describe', number, '--format=value(projectId)']).trim();
+    if (!project) throw new Error('Could not find the Google Cloud project of GOOGLE_CLIENT_ID (is gcloud signed in?).');
+    const p = `--project=${project}`;
+    gcloud(['services', 'enable', 'pubsub.googleapis.com', p]);
+    console.log(`Pub/Sub enabled on ${project}`);
+    try { gcloud(['pubsub', 'topics', 'create', PUSH_TOPIC, p]); } catch (err) { if (!/already exists/i.test(err.stderr ?? '')) throw err; }
+    gcloud(['pubsub', 'topics', 'add-iam-policy-binding', PUSH_TOPIC, p, '--member=serviceAccount:gmail-api-push@system.gserviceaccount.com', '--role=roles/pubsub.publisher']);
+    console.log(`topic ${PUSH_TOPIC}: Gmail may publish to it`);
+    const endpoint = `--push-endpoint=${DASHBOARD_URL}/api/gmail/push?token=${process.env.GMAIL_PUSH_TOKEN}`;
+    try {
+      gcloud(['pubsub', 'subscriptions', 'create', PUSH_SUBSCRIPTION, p, `--topic=${PUSH_TOPIC}`, endpoint, '--ack-deadline=20',
+        '--min-retry-delay=10s', '--max-retry-delay=600s', '--message-retention-duration=1h']);
+    } catch (err) {
+      if (!/already exists/i.test(err.stderr ?? '')) throw err;
+      gcloud(['pubsub', 'subscriptions', 'update', PUSH_SUBSCRIPTION, p, endpoint]);
+    }
+    console.log(`subscription ${PUSH_SUBSCRIPTION}: delivers to ${DASHBOARD_URL}/api/gmail/push`);
+    execFileSync('gh', ['variable', 'set', 'GMAIL_PUSH_TOPIC', '--repo', repoSlug(), '--body', `projects/${project}/topics/${PUSH_TOPIC}`], { stdio: ['ignore', 'ignore', 'inherit'] });
+    console.log('Actions variable GMAIL_PUSH_TOPIC set: the next pipeline run starts Gmail\'s watch');
   },
   async password() {
     const a = await hiddenPrompt('New dashboard password (min 12 chars): ');
@@ -107,7 +151,7 @@ const commands = {
 
 const cmd = process.argv[2];
 if (!commands[cmd]) {
-  console.log('Usage: node scripts/setup.mjs keys|password|profile|github|vercel|check');
+  console.log('Usage: node scripts/setup.mjs keys|password|profile|github|vercel|push|check');
   process.exit(1);
 }
 await commands[cmd]();

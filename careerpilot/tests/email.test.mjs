@@ -193,3 +193,35 @@ test('the candidate’s own job emails are kept with their replies; CareerPilot�
   assert.deepEqual((await all(db, `SELECT id FROM emails WHERE category = 'ignored' AND subject IS NULL ORDER BY id`)).map((x) => x.id), ['cp2', 'r0', 'r1', 's2', 's3', 's4']);
   assert.equal((await all(db, 'SELECT id FROM emails')).length, 7);
 });
+
+test('one Gmail sync at a time; Gmail’s push watch is renewed daily, and at once after it failed', async () => {
+  const { openDb, kvGet, kvSet } = await import('../lib/db.mjs');
+  const { syncGmail } = await import('../lib/gmail-sync.mjs');
+  const { DEFAULT_SETTINGS } = await import('../lib/settings.mjs');
+  const db = await openDb({ url: ':memory:' });
+  const settings = { ...DEFAULT_SETTINGS, timeline: null };
+  let release;
+  const held = new Promise((r) => { release = r; });
+  const first = syncGmail(db, { listIds: async () => { await held; return []; } }, settings);
+  await new Promise((r) => setTimeout(r, 20));
+  assert.deepEqual(await syncGmail(db, { listIds: async () => [] }, settings, { waitMs: 0 }), { skipped: 'another Gmail sync is running' });
+  release();
+  await first;
+
+  const topic = 'projects/p/topics/careerpilot-gmail';
+  const watched = [];
+  const gmail = { listIds: async () => [], watch: async (t) => {
+    watched.push(t);
+    if (watched.length === 2) throw new Error('Gmail API 403: User not authorized to perform this action.');
+    return { historyId: '1', expiration: String(Date.now() + 7 * 864e5) };
+  } };
+  await syncGmail(db, gmail, settings, { pushTopic: topic });
+  await syncGmail(db, gmail, settings, { pushTopic: topic });
+  assert.deepEqual(watched, [topic], 'renewed once a day, not on every sync');
+  await kvSet(db, 'gmail:watch', { ...(await kvGet(db, 'gmail:watch')), at: new Date(Date.now() - 2 * 864e5).toISOString() });
+  await syncGmail(db, gmail, settings, { pushTopic: topic });
+  assert.match((await kvGet(db, 'gmail:watch')).error, /403/);
+  await syncGmail(db, gmail, settings, { pushTopic: topic });
+  assert.equal(watched.length, 3);
+  assert.ok((await kvGet(db, 'gmail:watch')).expiration && !(await kvGet(db, 'gmail:watch')).error);
+});

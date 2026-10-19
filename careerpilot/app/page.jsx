@@ -79,6 +79,10 @@ export default async function Overview() {
         <Card title="Connections">
           <KV items={[
             ['Gmail', s.gmail ? (s.gmail.ok ? `Connected · synced ${fmtDateTime(s.gmailLastSync)}` : <span className="text-bad">{s.gmail.error}</span>) : 'Not authorized yet'],
+            ['Instant Gmail sync', !s.gmailWatch ? 'Off: every 30 minutes (SETUP.md, “Instant Gmail sync”)'
+              : s.gmailWatch.error ? <span className="text-bad">Gmail refused the watch: {s.gmailWatch.error}</span>
+              : s.gmailPush && !s.gmailPush.ok ? <span className="text-bad">GitHub refused to start the sync ({s.gmailPush.status}): renew GITHUB_DISPATCH_TOKEN</span>
+              : `On until ${fmtDateTime(s.gmailWatch.expiration)}${s.gmailPush ? ` · last new mail ${fmtDateTime(s.gmailPush.at)}` : ''}`],
             ['Job boards', `${s.boards?.enabled ?? 0} active (${s.boards?.discovered ?? 0} auto-discovered), ${s.boards?.failing ?? 0} failing`],
             ['Aggregator sweep', fmtDateTime(s.aggregator)],
             ...Object.entries(s.ai).map(([id, p]) => [`AI: ${id}`, !p.configured ? 'No key (optional)'

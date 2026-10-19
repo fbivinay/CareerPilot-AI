@@ -94,6 +94,10 @@ export function createGmail({ clientId, clientSecret, refreshToken, fetchImpl = 
     async thread(id) {
       return (await api(`/threads/${id}?format=minimal`, 10)).messages ?? [];
     },
+    // Gmail push: Gmail tells the Pub/Sub topic about every change in the inbox, for the next 7 days.
+    async watch(topicName) {
+      return api('/watch', 100, { method: 'POST', body: JSON.stringify({ topicName, labelIds: ['INBOX'], labelFilterBehavior: 'INCLUDE' }) });
+    },
     async send(message) {
       const raw = Buffer.from(buildMime(message)).toString('base64url');
       return api('/messages/send', 100, { method: 'POST', body: JSON.stringify({ raw, ...(message.threadId ? { threadId: message.threadId } : {}) }) });

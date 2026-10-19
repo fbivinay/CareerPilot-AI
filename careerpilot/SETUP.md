@@ -130,3 +130,26 @@ cron is used. `/about` and `/privacy` are public (no sign-in); Google's Branding
 `https://<your-app>.vercel.app/about`, Privacy policy `https://<your-app>.vercel.app/privacy`, Authorized
 domains `<your-app>.vercel.app` → Save. Audience → **Publish app** → Confirm (do not submit for
 verification). Then reconnect Gmail once from the local dashboard (Settings → Gmail).
+
+## 9. Instant Gmail sync (optional)
+
+Without it, Gmail is read every 30 minutes, inside the pipeline. With it, Gmail tells a Google Pub/Sub topic
+about new mail the moment it arrives; Pub/Sub calls the dashboard's `/api/gmail/push` (authenticated by
+`GMAIL_PUSH_TOKEN` in the URL, not by sign-in), which starts `careerpilot-gmail.yml` (the Gmail stage only),
+so mail shows on the dashboard within a minute or two. The pipeline keeps reading Gmail every 30 minutes and
+renews Gmail's 7-day watch once a day. The Overview's Connections card shows whether it is on.
+
+1. Create a GitHub token that can only start this repository's workflows: GitHub → Settings → Developer
+   settings → Personal access tokens → **Fine-grained tokens** → Generate new token. Repository access:
+   *Only select repositories* → this repository. Permissions → Repository permissions → **Actions: Read and
+   write** (nothing else). Add it to `careerpilot/.env` as `GITHUB_DISPATCH_TOKEN=...`.
+2. With `gcloud` signed in to the Google account that owns the OAuth client (`gcloud auth login`):
+
+```bash
+npm run setup -- keys      # adds GMAIL_PUSH_TOKEN
+npm run setup -- vercel    # puts GMAIL_PUSH_TOKEN and GITHUB_DISPATCH_TOKEN on Vercel (redeploy afterwards)
+npm run setup -- push      # Pub/Sub topic + push subscription (gcloud), Actions variable GMAIL_PUSH_TOPIC (gh)
+```
+
+The next pipeline run starts the watch. When the GitHub token expires, the Overview says so; make a new one,
+then run `npm run setup -- vercel` again. Off switch: `gcloud pubsub subscriptions delete careerpilot-gmail-push`.

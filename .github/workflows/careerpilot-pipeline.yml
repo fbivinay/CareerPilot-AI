@@ -71,6 +71,7 @@ jobs:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          GMAIL_PUSH_TOPIC: ${{ vars.GMAIL_PUSH_TOPIC }} # instant Gmail sync: the watch is renewed here daily (careerpilot-gmail.yml)
           STAGES: ${{ inputs.stages || 'all' }}
         run: |
           if [ -z "$TURSO_DATABASE_URL" ]; then
