@@ -384,8 +384,19 @@ async function pick(page, field, search, wants, scope = page) {
     await closePopup(page);
     return kept ? { chosen: selected[best(selected, wants)] } : { options: selected };
   }
-  const texts = (await options.allInnerTexts()).map((t) => t.replace(/\s+/g, ' ').trim());
-  const i = best(texts, wants);
+  const read = async () => (await options.allInnerTexts()).map((t) => t.replace(/\s+/g, ' ').trim());
+  let texts = await read();
+  let i = best(texts, wants);
+  // Some prompts ignore the typed text and list everything, rendering only what is in view (PwC's
+  // Citizenship Status, 2026-10-19: Afghanistan to Anguilla): scroll until a wanted option appears.
+  for (let step = 0; i < 0 && step < 60 && texts.length; step++) {
+    await options.last().scrollIntoViewIfNeeded().catch(() => {});
+    await page.waitForTimeout(300);
+    const more = await read();
+    if (more.join('\n') === texts.join('\n')) break; // the end of the list
+    texts = more;
+    i = best(texts, wants);
+  }
   debug('pick', field, `"${search}"`, { offered: texts.slice(0, 8), pick: texts[i] ?? null });
   if (i < 0) { await closePopup(page); return { options: texts.slice(0, 15) }; }
   await options.nth(i).click();
