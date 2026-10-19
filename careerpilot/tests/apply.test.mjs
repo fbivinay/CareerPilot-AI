@@ -492,3 +492,12 @@ test("the candidate's skill ratings are given only on a scale of 10", async () =
   assert.equal(opts.find((o) => ask('How would you rate yourself in Python?', 'radio').option[0].test(o)), undefined);
   assert.equal(['7', '8', '9', '10'].find((o) => ask('How would you rate yourself in SQL?', 'radio').option[0].test(o)), '9');
 });
+
+test('a transition timeline is when the candidate can start, not a yes/no about a non-compete', async () => {
+  const { answerFor } = await import('../lib/apply/workday.mjs');
+  const ask = (answers) => answerFor({ label: 'What is your transition timeline (e.g., notice period, non-competes, garden leave)?', kind: 'text', required: true },
+    { profile: { name: 'A' }, answers, job: { company: 'Portage Point' }, inIndia: true });
+  assert.equal(ask({ notice_period: 0, restrictive_covenants: false, earliest_joining_date: '2026-11-10' }).text,
+    'No notice period, non-compete or garden leave; I can join from 10 November 2026.');
+  assert.equal(ask({ notice_period: 30, restrictive_covenants: false, earliest_joining_date: '2026-11-10' }), undefined); // the candidate's to word
+});

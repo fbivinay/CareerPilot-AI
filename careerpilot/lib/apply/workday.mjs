@@ -1021,6 +1021,14 @@ const QUESTION_RULES = [
   [/conflicts?(\(s\))? of interest/i, (c) => yes(c.answers.conflicts_of_interest)],
   // Outside paid work or money-making activity to keep after joining (Mastercard; none, 2026-10-18).
   [/\boutside (employment|activit\w*|work|business)\b/i, (c) => yes(c.answers.outside_employment_to_continue)],
+  // "What is your transition timeline (e.g., notice period, non-competes, garden leave)?" (Portage Point,
+  // 2026-10-19) asks when the candidate can start, not whether a non-compete exists: it had got "No".
+  [/\btransition timeline\b/i, (c) => {
+    const d = isoDate(c.answers.earliest_joining_date ?? c.answers.earliest_full_time_start);
+    if (c.answers.notice_period !== 0 || c.answers.restrictive_covenants !== false || !d?.day) return undefined;
+    const when = new Date(Date.UTC(d.year, d.month - 1, d.day)).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
+    return { text: `No notice period, non-compete or garden leave; I can join from ${when}.` };
+  }],
   [/restrictive covenant|non-?compet(e|ition)|non-?solicit|(agreement|obligation)s?\b.{0,80}\brestricts?\b|\bbond\b.{0,40}\b(employer|company)\b|commitments? ?\/ ?bond|service (bond|agreement)|\b(commitments?|agreements?)\b.{0,40}\bwith (other|current|former|previous|prior) employers?\b.{0,60}\baffect/i, restrictions],
   [/date of birth|\bdob\b|\bbirth ?date\b/i, (c) => {
     const d = isoDate(c.answers.date_of_birth);
