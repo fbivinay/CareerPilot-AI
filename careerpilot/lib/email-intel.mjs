@@ -16,7 +16,7 @@ export const ALERT_SENDERS = [
   ['unstop', /@(.*\.)?unstop\.com$/],
 ];
 
-const ATS_SENDERS = /@(.*\.)?(greenhouse\.io|greenhouse-mail\.io|lever\.co|hire\.lever\.co|ashbyhq\.com|myworkday\.com|smartrecruiters\.com|workablemail\.com|workable\.com|recruitee\.com|teamtailor\.com|breezy\.hr|freshteam\.com|zohorecruit\.(com|in)|keka\.com|darwinbox\.(in|com)|icims\.com|successfactors\.com|jobvite\.com)$/;
+const ATS_SENDERS = /@(.*\.)?(greenhouse\.io|greenhouse-mail\.io|lever\.co|hire\.lever\.co|ashbyhq\.com|myworkday\.com|smartrecruiters\.com|workablemail\.com|workable\.com|recruitee\.com|teamtailor\.com|breezy\.hr|freshteam\.com|zohorecruit\.(com|in)|keka\.com|darwinbox\.(in|com)|icims\.com|successfactors\.com|jobvite\.com|bamboohr\.com)$/;
 // Assessment vendors that send tests on an employer's behalf.
 const VENDOR_SENDERS = /@(.*\.)?(shl\.com|aspiringminds\.com|hackerrank\.com|hackerrankforwork\.com|codility\.com|hackerearth\.com|mettl\.com|mercer-mettl\.com|testgorilla\.com|imocha\.io|codesignal\.com|talview\.com|hirepro\.in|elitmus\.com|glider\.ai|xobin\.com|doselect\.com)$/;
 const ASSESSMENT_HOSTS = /(hackerrank\.com|codility\.com|hackerearth\.com|mettl\.com|testgorilla\.com|imocha\.io|codesignal\.com|coderbyte\.com|glider\.ai|vervoe\.com|xobin\.com|testdome\.com|interviewbit\.com|hirepro\.in|amcat|aspiringminds\.com|shl\.com|talview\.com|elitmus\.com|doselect\.com)/i;
@@ -122,6 +122,9 @@ export function classifyEmail(msg, { ourThreadIds = new Set() } = {}) {
   if (NEWSLETTER_SENDERS.test(fromAddr) && !inOurThread) return { category: 'other', confidence: 0.5 };
   // A fraud-awareness notice ("Beware of fraudsters impersonating ...") is not about an application.
   if (DISCLAIMER.test(subject.toLowerCase()) && !inOurThread) return { category: 'other', confidence: 0.6 };
+  // A code to finish submitting ("Security code for your application to Verifone", Greenhouse) confirms
+  // nothing: the application exists only once the code is entered (the AI had called it a confirmation).
+  if (/\b(security|verification) code\b/i.test(subject)) return { category: 'other', confidence: 0.9 };
 
   // Platform confirmations carry upsells ("Schedule your first interview", practice tests). When the
   // subject confirms an application, an interview or assessment also needs its meeting or test link.

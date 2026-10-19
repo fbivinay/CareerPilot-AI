@@ -151,3 +151,12 @@ test('non-job mail: a failed KYC check is no rejection, and newsletters naming a
   await processMessage(db, letter, settings, { ourThreadIds: new Set() });
   assert.equal((await one(db, 'SELECT application_id FROM emails WHERE id = ?', ['n1'])).application_id, null);
 });
+
+test('a security code to finish an application confirms nothing; BambooHR is a hiring platform', async () => {
+  const { platformSender } = await import('../lib/email-intel.mjs');
+  const c = (fromAddr, subject, text) => classifyEmail({ fromAddr, subject, text });
+  assert.deepEqual(c('no-reply@us.greenhouse-mail.io', 'Security code for your application to Examplecorp',
+    'Copy and paste this code into the security code field on your application: X1. After you enter the code, resubmit your application.'), { category: 'other', confidence: 0.9 });
+  assert.ok(platformSender('notifications@app.bamboohr.com'));
+  assert.equal(c('notifications@app.bamboohr.com', 'Thank you for applying at Examplecorp', 'Thanks A! We received your application.').category, 'application_confirmation');
+});

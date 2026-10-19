@@ -163,7 +163,8 @@ export async function processMessage(db, msg, settings, { ourThreadIds }) {
     // through job sites, so it is not linked to anything.
   } else {
     link = await linkEmail(db, msg, { strict: NAMES_POSTING.has(cls.category) });
-    if ((cls.category === 'other' || cls.category === 'ats_update') && link?.app_id) {
+    // A rule that is sure (a code to finish submitting) is not second-guessed by the AI.
+    if ((cls.category === 'other' || cls.category === 'ats_update') && cls.confidence < 0.9 && link?.app_id) {
       const ai = await aiClassify(db, msg, settings);
       if (ai && ai.category !== 'other') { cls = { category: ai.category, confidence: Math.min(ai.confidence, 0.84) }; classifiedBy = `ai:${ai._provider}`; }
     }
