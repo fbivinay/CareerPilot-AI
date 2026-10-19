@@ -1548,7 +1548,9 @@ async function applicationQuestions(page, ctx) {
       }
       const r = await applyAnswer(page, q, a);
       filled.push({ question: q.label.slice(0, 120), answer: r.chosen ?? null });
-      if (q.required && !r.chosen) unknown.set(q.field, `${q.label}${offered(r)}`);
+      // An answer the form would not keep is not a missing answer (SLI's whole-number years box and 0.3,
+      // 2026-10-19). The value itself stays out of the reason, which reaches the public Actions log.
+      if (q.required && !r.chosen) unknown.set(q.field, `${q.label}${a.text != null && !r.options ? ' (answered, but the form did not keep the answer)' : offered(r)}`);
     }
     await page.waitForTimeout(1500);
   }
