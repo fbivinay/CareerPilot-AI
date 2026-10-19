@@ -14,7 +14,9 @@ import { locationTier, roleFamily } from './match.mjs';
 import { log } from './log.mjs';
 
 const PROVIDERS_DIR = path.resolve(import.meta.dirname, '../../providers');
-const AGGREGATOR = 'https://feashliaa.github.io/job-board-data/data';
+// The dataset's owner renamed their GitHub account (feashliaa -> Riley-Dorrington, seen 2026-10-19), and Pages
+// sites do not follow a rename: every sweep since had read HTTP 404.
+const AGGREGATOR = 'https://riley-dorrington.github.io/job-board-data/data';
 
 let providersPromise;
 const providers = () => (providersPromise ??= loadProviders(PROVIDERS_DIR));
