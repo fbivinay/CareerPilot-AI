@@ -4,7 +4,7 @@ import { all, one, openDb } from '../lib/db.mjs';
 import { canTransition, createApplication, transition } from '../lib/applications.mjs';
 import { classifyEmail, parseJobAlert, stripQuoted } from '../lib/email-intel.mjs';
 import { processMessage } from '../lib/gmail-sync.mjs';
-import { applicationEmail, domainMatchesCompany, emailsInText } from '../lib/contacts.mjs';
+import { applicationEmail, domainMatchesCompany, emailsInText, forRecruiting } from '../lib/contacts.mjs';
 import { blockReason, inSendWindow, runOutreach } from '../lib/outreach.mjs';
 import { buildMime } from '../lib/gmail.mjs';
 import { relevantHighlights, templateEmail } from '../lib/compose.mjs';
@@ -68,6 +68,23 @@ test('contact extraction never includes non-recruiting or placeholder addresses'
   assert.equal(applicationEmail('Contact hr@acme.in for benefits'), null);
   assert.ok(domainMatchesCompany('careers@acme.in', 'Acme Technologies'));
   assert.ok(!domainMatchesCompany('someone@gmail.com', 'Acme'));
+});
+
+test('an address a posting prints for accommodations, fraud or posting errors is not a recruiting contact', () => {
+  // The sentences that printed them (2026-10-19); the first four were sent outreach that day.
+  const other = [
+    ['For accommodations, contact hr@karya.in.', 'hr@karya.in'],
+    ['If you need special assistance or an accommodation to use our website, apply for a position, or to perform a job, please contact us by emailing accommodationrequests@maersk.com .', 'accommodationrequests@maersk.com'],
+    ['Applicants needing an accommodation for disability or religious purposes in connection with the application process should contact Candidateaccommodation@icf.com for assistance.', 'candidateaccommodation@icf.com'],
+    ['Should a reasonable accommodation be necessary to aid a disability, requests should be sent to Dexcom Talent Acquisition at talentacquisition@dexcom.com .', 'talentacquisition@dexcom.com'],
+    ['Any impersonation of Airbus to do so should be reported to emsom@airbus.com .', 'emsom@airbus.com'],
+    ['If this posting is missing required information required by local law or incorrect, contact BMS at TAEnablement@bms.com with the Job Title and Requisition number.', 'taenablement@bms.com'],
+    ['If you need any extra support throughout the interview process, then please email us at recruitment@collinson.com', 'recruitment@collinson.com'],
+    ['Questions? hr@acme.in', 'hr@acme.in'], // no stated purpose
+  ];
+  for (const [text, email] of other) assert.equal(forRecruiting(text, email), false, email);
+  assert.ok(forRecruiting('Freshers welcome. Interested candidates can share their resume at careers@acme.in', 'careers@acme.in'));
+  assert.ok(forRecruiting('For accommodations, contact hr@acme.in. Send your CV to hr@acme.in.', 'hr@acme.in'));
 });
 
 test('gmail sync links a confirmation, transitions the application and records evidence', async () => {

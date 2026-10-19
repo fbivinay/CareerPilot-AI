@@ -50,10 +50,23 @@ export async function upsertContact(db, { email, name = null, role = null, compa
   return one(db, 'SELECT * FROM contacts WHERE email = ?', [e]);
 }
 
+// What an address printed in a job description is for, read from the sentence that prints it. Most are not
+// for applications: Karya, Maersk, ICF and Dexcom print theirs for disability accommodations, Airbus for
+// reporting impersonation, BMS for errors in the posting. All four of the former were sent outreach on
+// 2026-10-19. An address is used only when a sentence printing it asks for resumes or applications or names
+// a recruiter (in its words, not the address: recruitment@ is printed for "extra support"), and is about
+// nothing else.
+const OTHER_PURPOSE = /accommodat|disabilit|adjustments?\b|special assistance|need (?:any )?(?:extra |additional )?(?:support|help)|accessib|impersonat|fraud|scam|privacy|data protection|personal data|incorrect|missing|do not send|report|complain|grievance|whistle/i;
+const RECRUITING = /\b(resumes?|cvs?|apply|applications?|profiles?|portfolios?|recruit\w*|hiring|interested candidates)\b/i;
+export function forRecruiting(text, email) {
+  return String(text ?? '').split(/(?<=[.!?])\s+|\n+/).map((s) => s.toLowerCase())
+    .some((s) => s.includes(email) && RECRUITING.test(s.replaceAll(email, '')) && !OTHER_PURPOSE.test(s));
+}
+
 // Record every outreach-eligible address printed in a job description.
 export async function contactsFromJob(db, job) {
   const out = [];
-  for (const email of emailsInText(job.description)) {
+  for (const email of emailsInText(job.description).filter((e) => forRecruiting(job.description, e))) {
     out.push(await upsertContact(db, { email, company: job.company, sourceType: 'jd', sourceRef: job.id, domainMatch: domainMatchesCompany(email, job.company) }));
   }
   return out;

@@ -7,7 +7,7 @@ import { writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { all, audit, kvGet, now, one, run } from './db.mjs';
 import { createApplication, getApplication, transition } from './applications.mjs';
-import { applicationEmail, contactsFromJob, upsertContact } from './contacts.mjs';
+import { applicationEmail, contactsFromJob, forRecruiting, upsertContact } from './contacts.mjs';
 import { composeEmail, followUpEmail } from './compose.mjs';
 import { loadProfile, loadResumePdf } from './profile.mjs';
 import { log } from './log.mjs';
@@ -172,6 +172,8 @@ export async function runOutreach(db, gmail, settings, { deadline = Infinity, en
       if (n >= settings.limits.maxFollowUps) continue;
       const job = await one(db, 'SELECT * FROM jobs WHERE id = ?', [o.job_id]);
       if (!job || job.status === 'expired') { skip('job closed; no follow-up'); continue; }
+      // An address the posting prints for something else (accommodations) gets no second email.
+      if (job.description?.toLowerCase().includes(o.email) && !forRecruiting(job.description, o.email)) { skip('address is not for recruiting'); continue; }
       const app = await getApplication(db, job.id);
       if (app && ['rejected', 'interview', 'offer', 'assessment', 'withdrawn', 'failed'].includes(app.status)) continue;
       const f = followUpEmail({ profile, job, contactName: o.name });
