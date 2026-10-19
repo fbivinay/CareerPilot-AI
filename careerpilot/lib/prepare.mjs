@@ -4,7 +4,7 @@
 //   needs the candidate (consent declarations, CAPTCHA, account login), so they are never auto-submitted.
 //   job-board alerts (LinkedIn, Naukri, ...) -> 'ready' for applying on that platform.
 import { all, audit, kvGet, kvSet, now, run } from './db.mjs';
-import { createApplication, SHOWN_APP, SHOWN_EMAIL, transition } from './applications.mjs';
+import { createApplication, markDuplicate, sameRole, SHOWN_APP, SHOWN_EMAIL, transition } from './applications.mjs';
 import { applicationEmail } from './contacts.mjs';
 import { loadProfile } from './profile.mjs';
 
@@ -62,7 +62,7 @@ export function nextStep(job, pack) {
 export async function prepareApplications(db, settings, { env = process.env } = {}) {
   const profile = await loadProfile(db, env);
   if (!profile) return { skipped: 'profile not imported' };
-  const stats = { ready: 0, blocked: 0, email: 0, unblocked: 0, reopened: 0, withdrawn: 0, reinstated: 0 };
+  const stats = { ready: 0, blocked: 0, email: 0, duplicate: 0, unblocked: 0, reopened: 0, withdrawn: 0, reinstated: 0 };
 
   const jobs = await all(db, `SELECT j.* FROM jobs j LEFT JOIN applications a ON a.job_id = j.id
     WHERE j.status = 'qualified' AND a.id IS NULL AND j.score >= ? ORDER BY j.score DESC LIMIT 200`, [settings.matching.autoActionScore]);
@@ -70,6 +70,9 @@ export async function prepareApplications(db, settings, { env = process.env } = 
     if (applicationEmail(job.description)) { stats.email++; continue; } // handled by the outreach stage
     // A job-site posting is the candidate's to apply to (job sites forbid automation): not CareerPilot's work.
     if (job.source.startsWith('alert:')) continue;
+    // One application per role: a repost or second link of a role applied to or dropped is a duplicate.
+    const prior = await sameRole(db, job);
+    if (prior) { await markDuplicate(db, job, prior); stats.duplicate++; continue; }
     const step = nextStep(job, answerPack(profile, job));
     // Answers are not copied into the database; the answer pack is rebuilt from the encrypted profile when shown.
     await createApplication(db, job.id, { status: step.status, method: 'portal', resumeVersion: profile.resume?.version, blockedReason: step.reason });

@@ -375,3 +375,32 @@ test('Ready is what CareerPilot submits (Workday); a CAPTCHA form is blocked for
   await db.execute({ sql: 'UPDATE applications SET blocked_reason = ? WHERE id = ?', args: ['Needs you: a new question', app.id] });
   assert.deepEqual(await sendBlockedAlert(db, gmail, { to: 'me@example.com' }), { sent: 1 }); // a new reason is news
 });
+
+test('a role is applied to once: a repost of one applied to or dropped is a duplicate; a dropped role stays dropped', async () => {
+  const { sameRole, markDuplicate } = await import('../lib/applications.mjs');
+  const { upsertJob } = await import('../lib/jobs.mjs');
+  const { DEFAULT_SETTINGS } = await import('../lib/settings.mjs');
+  const db = await openDb({ url: ':memory:' });
+  const add = (url, title, location = 'Bengaluru') => upsertJob(db, { url, title, company: 'Acme', location, description: 'Freshers welcome. Python, SQL.' },
+    { source: 'greenhouse', boardId: 'b1', settings: DEFAULT_SETTINGS });
+  const first = await add('https://job-boards.greenhouse.io/acme/jobs/1', 'Data Analyst');
+  const a1 = await createApplication(db, first.id, { method: 'portal' });
+  await transition(db, a1, 'submitted', { evidence: { type: 'workday' } });
+  // The same role under another link and another spelling of the city.
+  const repost = await add('https://job-boards.greenhouse.io/acme/jobs/2', 'Data  Analyst', 'Bangalore');
+  const prior = await sameRole(db, { id: repost.id, company: 'Acme', title: 'Data  Analyst' });
+  assert.equal(prior?.job_id, first.id);
+  await markDuplicate(db, { id: repost.id, status: 'qualified' }, prior);
+  assert.equal((await one(db, 'SELECT status, duplicate_of FROM jobs WHERE id = ?', [repost.id])).duplicate_of, first.id);
+  // Dropped by the candidate: its repost is a duplicate too. Withdrawn by the system: not (it may come back).
+  const dropped = await add('https://job-boards.greenhouse.io/acme/jobs/3', 'Data Engineer');
+  const a3 = await createApplication(db, dropped.id, { method: 'portal' });
+  await transition(db, a3, 'withdrawn', { reason: 'candidate dropped it', by: 'candidate' });
+  assert.ok(await sameRole(db, { id: 'other', company: 'acme', title: 'Data Engineer' }));
+  const auto = await add('https://job-boards.greenhouse.io/acme/jobs/4', 'ML Engineer');
+  const a4 = await createApplication(db, auto.id, { method: 'portal' });
+  await transition(db, a4, 'withdrawn', { reason: 'no longer matches', by: 'system' });
+  assert.equal(await sameRole(db, { id: 'other', company: 'Acme', title: 'ML Engineer' }), null);
+  // Another role at the same company is not a duplicate.
+  assert.equal(await sameRole(db, { id: 'other', company: 'Acme', title: 'Data Scientist' }), null);
+});

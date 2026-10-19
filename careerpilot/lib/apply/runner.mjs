@@ -9,7 +9,7 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { all, audit, kvGet, kvSet, now, one } from '../db.mjs';
-import { getApplication, transition } from '../applications.mjs';
+import { getApplication, markDuplicate, sameRole, transition } from '../applications.mjs';
 import { draftAnswer } from '../compose.mjs';
 import { describeJob } from '../jobs.mjs';
 import { loadProfile, loadResumePdf } from '../profile.mjs';
@@ -56,6 +56,10 @@ export async function queue(db, settings, { retry = false, only = null, perCompa
     const last = await kvGet(db, `apply:last:${job.app_id}`);
     if (!retry && last && last.answersKey === answersKey && ['blocked', 'needs_you', 'unconfirmed'].includes(last.stop)) continue;
     if ((applied.get(companyKey(job.company)) ?? 0) >= perCompany) { capped++; continue; }
+    // Never a second application for one role, nor one the candidate dropped (checked again right before
+    // submitting, for applications prepared before a repost was recognised).
+    const prior = await sameRole(db, job);
+    if (prior) { await markDuplicate(db, job, prior); await transition(db, await getApplication(db, job.id), 'withdrawn', { reason: 'Duplicate: this role was already applied to or dropped', by: 'system' }); continue; }
     jobs.push(job);
   }
   return { jobs, applied, capped };

@@ -93,6 +93,25 @@ export async function transition(db, app, to, { evidence = null, reason = null, 
   return true;
 }
 
+// A role is applied to once. The same company and title already applied to, or dropped by the candidate,
+// under another posting (a repost after the first one closed, a second link, another spelling of the city)
+// makes this job a duplicate, never a second application; a dropped role stays dropped (the candidate's
+// rules, 2026-10-19). Returns the earlier application, or null.
+export const roleKey = (s) => String(s ?? '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+export async function sameRole(db, job) {
+  const rows = await all(db, `SELECT a.id, a.status, a.job_id, j.title FROM applications a JOIN jobs j ON j.id = a.job_id
+    WHERE a.job_id != ? AND lower(j.company) = lower(?) AND (a.status IN (${APPLIED.map(() => '?').join(',')})
+      OR (a.status = 'withdrawn' AND a.id IN (SELECT entity_id FROM events WHERE entity = 'application' AND to_status = 'withdrawn'
+        AND detail LIKE '%"by":"candidate"%')))`, [job.id, job.company, ...APPLIED]);
+  return rows.find((r) => roleKey(r.title) === roleKey(job.title)) ?? null;
+}
+
+export async function markDuplicate(db, job, prior) {
+  await run(db, `UPDATE jobs SET status = 'duplicate', duplicate_of = ? WHERE id = ?`, [prior.job_id, job.id]);
+  await audit(db, 'job', job.id, 'duplicate', { from: job.status, to: 'duplicate',
+    detail: { of: prior.job_id, reason: prior.status === 'withdrawn' ? 'role dropped by the candidate' : `role already applied to (${prior.status})` } });
+}
+
 export async function countSince(db, method, sinceIso) {
   return Number((await one(db, `SELECT count(*) n FROM applications WHERE method = ? AND submitted_at >= ?`, [method, sinceIso])).n);
 }
