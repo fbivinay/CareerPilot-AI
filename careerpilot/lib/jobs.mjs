@@ -37,7 +37,9 @@ export async function upsertJob(db, job, { source, ats = null, boardId = null, s
     // The aggregator lags by up to a day; the employer's own board is authoritative on closure, and so is
     // a closure found after the dataset was taken (2026-10-19: the 18 Oct dataset reopened four postings
     // confirmed closed on the employers' own pages that day).
-    const closedSince = existing.expired_at && snapshotAt && existing.expired_at > new Date(snapshotAt).toISOString();
+    // The date comes from the dataset's own metadata: one that does not parse keeps the posting closed.
+    const snap = Date.parse(snapshotAt ?? '');
+    const closedSince = Boolean(existing.expired_at) && (!Number.isFinite(snap) || Date.parse(existing.expired_at) > snap);
     if (source === 'aggregator' && existing.status === 'expired' && (existing.board_id || closedSince)) {
       return { id, created: false, changed: false, status: 'expired', duplicateOf: null };
     }

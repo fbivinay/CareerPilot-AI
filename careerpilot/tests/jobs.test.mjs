@@ -176,3 +176,12 @@ test('an aggregator snapshot never reopens a posting closed after it was taken (
   // A snapshot taken after the closure lists it again: it is back.
   assert.notEqual((await upsertJob(db, again, { source: 'aggregator', settings, snapshotAt: '2026-10-20T12:00:00Z' })).status, 'expired');
 });
+
+test('a snapshot date that does not parse keeps a closed posting closed', async () => {
+  const db = await openDb({ url: ':memory:' });
+  const job = await upsertJob(db, posting({ url: 'https://jobs.lever.co/acme/3333' }), { source: 'aggregator', settings });
+  await run(db, `UPDATE jobs SET status = 'expired', expired_at = '2026-10-19T08:34:00.000Z' WHERE id = ?`, [job.id]);
+  for (const snapshotAt of ['not a date', null]) {
+    assert.equal((await upsertJob(db, posting({ url: 'https://jobs.lever.co/acme/3333' }), { source: 'aggregator', settings, snapshotAt })).status, 'expired');
+  }
+});

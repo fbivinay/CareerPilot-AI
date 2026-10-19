@@ -586,3 +586,11 @@ test('a school missing from the list is the "Other" entry of the candidate\'s co
   assert.equal(best(['Others-Afghanistan', 'Others-Albania'], other), -1);
   for (const plain of ['Others', 'Other / Autre / Sonstige / Otras', 'Other (please specify)', 'Other University']) assert.equal(best([plain], other), 0, plain);
 });
+
+test('"Are you a previous X employee" is answered from the profile (Generac, 2026-10-19)', async () => {
+  const { answerFor } = await import('../lib/apply/workday.mjs');
+  const profile = { name: 'A', experience: [{ company: 'ComedKares, Bengaluru', title: 'Intern', dates: 'May 2026 - Jun 2026' }] };
+  const ask = (company) => answerFor({ label: `Are you a previous ${company} or ${company} Subsidiary employee`, kind: 'dropdown', required: true }, { profile, answers: {}, job: { company } });
+  assert.deepEqual(ask('Generac'), { yes: false });
+  assert.deepEqual(ask('ComedKares'), { yes: true });
+});
