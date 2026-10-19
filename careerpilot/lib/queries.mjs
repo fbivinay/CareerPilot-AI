@@ -2,7 +2,7 @@
 // so a statistic and its drill-down can never disagree. Everything shown is CareerPilot's own work
 // (SHOWN_*): the candidate's own applications and their mail are not (their choice, 2026-10-18).
 import { all, getDb, kvGet, one } from './db.mjs';
-import { APPLIED, SHOWN_APP, SHOWN_EMAIL, SHOWN_JOB } from './applications.mjs';
+import { APPLIED, QUALIFIED_JOB, SHOWN_APP, SHOWN_EMAIL, SHOWN_JOB } from './applications.mjs';
 import { providerHealth } from './ai.mjs';
 import { loadProfile } from './profile.mjs';
 import { answerPack } from './prepare.mjs';
@@ -27,6 +27,7 @@ function jobFilters(f) {
   const status = f.status ?? 'qualified';
   // "all" means every tracked job with duplicates merged, matching the Overview count.
   if (status === 'all') where.push(`j.status != 'duplicate'`);
+  else if (status === 'qualified') where.push(QUALIFIED_JOB); // the Overview's Qualified, item for item
   else { where.push('j.status = ?'); args.push(status); }
   if (f.q) { where.push('(lower(j.title) LIKE ? OR lower(j.company) LIKE ? OR lower(j.location) LIKE ?)'); const q = `%${f.q.toLowerCase()}%`; args.push(q, q, q); }
   if (f.category) { where.push('j.role_category = ?'); args.push(f.category); }
@@ -176,6 +177,13 @@ export async function listEmails(f) {
 
 const count = async (db, sql, args = []) => Number((await one(db, sql, args)).n);
 
+// Applications CareerPilot submitted that no employer has acknowledged yet (no confirmation email or page),
+// oldest first.
+export async function unconfirmed() {
+  return all(await getDb(), `SELECT a.id, a.submitted_at, j.company, j.title FROM applications a JOIN jobs j ON j.id = a.job_id
+    WHERE a.status = 'submitted' AND ${SHOWN_APP} ORDER BY a.submitted_at`);
+}
+
 export async function overview() {
   const db = await getDb();
   const appIn = async (set) => count(db, `SELECT count(*) n FROM applications a JOIN jobs j ON j.id = a.job_id
@@ -184,8 +192,8 @@ export async function overview() {
     outreachSent, replies, review, unknownSends] = await Promise.all([
     count(db, `SELECT count(*) n FROM jobs j WHERE j.status != 'duplicate' AND ${SHOWN_JOB}`),
     count(db, `SELECT count(*) n FROM jobs j WHERE j.status IN ('qualified','excluded','new') AND ${SHOWN_JOB}`),
-    count(db, `SELECT count(*) n FROM jobs j WHERE j.status = 'qualified' AND ${SHOWN_JOB}`),
-    count(db, `SELECT count(*) n FROM jobs j WHERE j.status = 'qualified' AND j.confidence = 'high' AND ${SHOWN_JOB}`),
+    count(db, `SELECT count(*) n FROM jobs j WHERE ${QUALIFIED_JOB} AND ${SHOWN_JOB}`),
+    count(db, `SELECT count(*) n FROM jobs j WHERE ${QUALIFIED_JOB} AND j.confidence = 'high' AND ${SHOWN_JOB}`),
     appIn(['ready']), appIn(['blocked']), appIn(['failed']), appIn(APPLIED), appIn(['confirmed']), appIn(['assessment']),
     appIn(['interview']), appIn(['offer']), appIn(['rejected']),
     count(db, `SELECT count(*) n FROM outreach WHERE status = 'sent'`),
@@ -320,7 +328,7 @@ export async function analytics() {
   const ours = `FROM applications a JOIN jobs j ON j.id = a.job_id WHERE ${SHOWN_APP}`;
   const funnel = await one(db, `SELECT
       (SELECT count(*) FROM jobs j WHERE j.status != 'duplicate' AND ${SHOWN_JOB}) discovered,
-      (SELECT count(*) FROM jobs j WHERE j.status = 'qualified' AND ${SHOWN_JOB}) qualified,
+      (SELECT count(*) FROM jobs j WHERE ${QUALIFIED_JOB} AND ${SHOWN_JOB}) qualified,
       (SELECT count(*) ${ours}) prepared,
       (SELECT count(*) ${ours} AND a.status IN (${placeholders(APPLIED)})) applied,
       (SELECT count(*) ${ours} AND a.status IN (${placeholders(HEARD_BACK)})) responded,

@@ -21,8 +21,18 @@ export const CAREERPILOT_APP = `a.method IN ('portal', 'email')`;
 // row stays, so the scanners and de-duplication still know it.
 export const SHOWN_APP = `((a.method = 'email' OR a.evidence LIKE '%"type":"workday"%' OR a.evidence LIKE '%"type":"confirmation_page"%'
   OR (a.method = 'portal' AND a.status IN ('ready','blocked','failed','withdrawn'))) AND a.status != 'expired')`;
-// Jobs CareerPilot found, not ones recorded from the candidate's own application mail, nor closed ones.
-export const SHOWN_JOB = `(j.source NOT LIKE 'email%' AND j.status != 'expired')`;
+// Jobs CareerPilot found, not ones recorded from the candidate's own application mail, nor closed ones
+// unless CareerPilot applied there: an application does not vanish when its posting closes.
+export const APPLIED = ['submitted', 'confirmed', 'assessment', 'interview', 'offer', 'rejected'];
+const APPLIED_SQL = APPLIED.map((s) => `'${s}'`).join(',');
+export const SHOWN_JOB = `(j.source NOT LIKE 'email%' AND (j.status != 'expired'
+  OR EXISTS (SELECT 1 FROM applications a WHERE a.job_id = j.id AND a.status IN (${APPLIED_SQL}) AND ${SHOWN_APP})))`;
+// What the dashboard calls qualified, so that Qualified = Applied + still to apply: jobs CareerPilot applied
+// to (whatever became of the posting since), and qualified jobs it can still apply to. Ones the candidate
+// withdrew or applied to themselves are not counted (the candidate's choice, 2026-10-19).
+export const QUALIFIED_JOB = `(EXISTS (SELECT 1 FROM applications a WHERE a.job_id = j.id AND a.status IN (${APPLIED_SQL}) AND ${SHOWN_APP})
+  OR (j.status = 'qualified' AND NOT EXISTS (SELECT 1 FROM applications a WHERE a.job_id = j.id
+    AND (a.status NOT IN ('ready','blocked','failed') OR NOT ${SHOWN_APP}))))`;
 // Mail about CareerPilot's work: linked to an application the dashboard shows, in a thread CareerPilot
 // started, or waiting for review because it could be about one of several of its applications. `e` is emails.
 export const SHOWN_EMAIL = `(e.application_id IN (SELECT a.id FROM applications a JOIN jobs j ON j.id = a.job_id WHERE ${SHOWN_APP})
@@ -32,7 +42,6 @@ export const SHOWN_EMAIL = `(e.application_id IN (SELECT a.id FROM applications 
 
 export const RANK = { ready: 0, blocked: 0, failed: 0, expired: 0, submitted: 1, confirmed: 2, assessment: 3, interview: 4, offer: 5 };
 export const TERMINAL = new Set(['rejected', 'withdrawn']);
-export const APPLIED = ['submitted', 'confirmed', 'assessment', 'interview', 'offer', 'rejected'];
 
 // Allowed transitions. Evidence-driven jumps (e.g. an interview invite for an application the
 // candidate submitted by hand) are allowed forward from any non-terminal state.

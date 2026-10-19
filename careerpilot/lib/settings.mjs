@@ -10,7 +10,8 @@ export const DEFAULT_SETTINGS = {
   },
   matching: {
     qualifyScore: 60,             // rule score needed to be "qualified"
-    autoActionScore: 70,          // score needed before any automatic outbound action
+    autoActionScore: 0,           // score needed before any automatic outbound action: none, every qualified
+                                  // job is applied to and the score only orders them (the candidate's choice, 2026-10-19)
     maxExperienceYears: 1,        // exclude when the JD's minimum exceeds this
     includeInternships: true,
   },

@@ -1,12 +1,12 @@
-import { applicationPlaces, overview, systemStatus } from '@/lib/queries.mjs';
-import { Badge, Card, KV, PageHeader, Stat, fmtDateTime, pct } from './_ui/kit.jsx';
+import { applicationPlaces, overview, systemStatus, unconfirmed } from '@/lib/queries.mjs';
+import { A, Badge, Card, KV, PageHeader, Stat, fmtDate, fmtDateTime, pct } from './_ui/kit.jsx';
 import { logout } from './actions.js';
 import { PlacesDonut, TopCompanies } from './_ui/places.jsx';
 
 export const dynamic = 'force-dynamic';
 
 export default async function Overview() {
-  const [o, s, where] = await Promise.all([overview(), systemStatus(), applicationPlaces()]);
+  const [o, s, where, waiting] = await Promise.all([overview(), systemStatus(), applicationPlaces(), unconfirmed()]);
   return (
     <>
       <PageHeader title="Overview" sub="Every number opens the list it counts.">
@@ -23,7 +23,7 @@ export default async function Overview() {
       <h2 className="mb-2 text-sm font-semibold text-ink-2">Pipeline</h2>
       <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
         <Stat label="Jobs tracked" value={o.discovered} to="/jobs?status=all" hint="All sources, duplicates merged" />
-        <Stat label="Qualified" value={o.qualified} to="/jobs?status=qualified" hint={`${o.qualifiedHigh} with verified pay`} />
+        <Stat label="Qualified" value={o.qualified} to="/jobs?status=qualified" hint={`${o.applied} applied · ${o.qualified - o.applied} to apply`} />
         <Stat label="Ready to apply" value={o.ready} to="/applications?status=ready" hint="Waiting for your submit" />
         <Stat label="Blocked" value={o.blocked} to="/applications?status=blocked" tone={o.blocked ? 'warn' : undefined} hint="Missing answers" />
         <Stat label="Applied" value={o.applied} to="/applications?status=applied" hint="Submission proven" />
@@ -39,6 +39,22 @@ export default async function Overview() {
         <Stat label="Outreach sent" value={o.outreachSent} to="/outreach?status=sent" hint={`${pct(o.replies, o.outreachSent)} replied`} />
         <Stat label="Emails to review" value={o.review} to="/inbox?review=1" tone={o.review ? 'warn' : undefined} />
       </div>
+
+      {waiting.length > 0 && (
+        <>
+          <h2 className="mb-2 text-sm font-semibold text-ink-2">No confirmation</h2>
+          <Card title={`${waiting.length} submitted, not acknowledged by the employer yet`} className="mb-6">
+            <ul className="divide-y divide-line text-sm">
+              {waiting.map((a) => (
+                <li key={a.id} className="flex items-baseline justify-between gap-3 py-1.5">
+                  <span><A to={`/applications/${a.id}`}>{a.company}</A> <span className="text-ink-3">· {a.title}</span></span>
+                  <span className="whitespace-nowrap text-xs text-ink-3">sent {fmtDate(a.submitted_at)}</span>
+                </li>
+              ))}
+            </ul>
+          </Card>
+        </>
+      )}
 
       {where.total > 0 && (
         <>

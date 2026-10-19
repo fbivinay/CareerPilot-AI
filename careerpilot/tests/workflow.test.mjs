@@ -172,7 +172,11 @@ test('outreach policy gate', async () => {
   assert.equal(await blockReason(db, { job, contact: { ...contact, opted_out: 1 }, kind: 'initial' }, settings), 'contact opted out or address bounced');
   assert.match(await blockReason(db, { job, contact: { ...contact, domain_match: 0 }, kind: 'initial' }, settings), /domain does not match/);
   assert.match(await blockReason(db, { job, contact: { ...contact, domain_match: 0 }, kind: 'application' }, settings), /domain does not match/);
-  assert.match(await blockReason(db, { job: { ...job, score: 50 }, contact, kind: 'initial' }, settings), /below auto-action/);
+  // No score threshold by default: every qualified job is acted on (the candidate's choice, 2026-10-19).
+  assert.equal(await blockReason(db, { job: { ...job, score: 50 }, contact, kind: 'initial' }, settings), null);
+  const gated = structuredClone(settings);
+  gated.matching.autoActionScore = 70;
+  assert.match(await blockReason(db, { job: { ...job, score: 50 }, contact, kind: 'initial' }, gated), /below auto-action/);
   const strict = structuredClone(settings);
   strict.automation.actOnUndisclosedComp = false;
   assert.match(await blockReason(db, { job, contact, kind: 'initial' }, strict), /low-confidence/);
