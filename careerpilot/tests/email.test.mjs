@@ -175,6 +175,8 @@ test('the candidateâ€™s own job emails are kept with their replies; CareerPilotâ
       text: 'We would like to invite you to an interview for the role. Please share your availability for next week.' },
     r1: { threadId: 't1', fromAddr: 'priya@beta.io', fromName: 'Priya Rao', subject: `Re: ${subject}`, date: at(8), text: 'Thanks, noted.' },
   };
+  // s1 was recorded by the version that logged the candidate's own applications from their sent mail (Oct 17).
+  await run(db, `INSERT INTO emails (id, category, processed_at) VALUES ('s1', 'sent_application', ?)`, [at(2)]);
   // r0 arrived before the conversation was tracked and was set aside as unrelated mail; r1 is new.
   await run(db, `INSERT INTO emails (id, category, processed_at) VALUES ('r0', 'ignored', ?)`, [at(6)]);
   const gmail = {
@@ -189,5 +191,5 @@ test('the candidateâ€™s own job emails are kept with their replies; CareerPilotâ
     [['s1', 'priya@beta.io', 'Priya Rao', 'interview', 'Priya Rao']]);
   // Everything else is remembered by id only, and the reply is linked to nothing.
   assert.deepEqual((await all(db, `SELECT id FROM emails WHERE category = 'ignored' AND subject IS NULL ORDER BY id`)).map((x) => x.id), ['cp2', 'r0', 'r1', 's2', 's3', 's4']);
-  assert.equal((await all(db, 'SELECT id FROM emails')).length, 6);
+  assert.equal((await all(db, 'SELECT id FROM emails')).length, 7);
 });

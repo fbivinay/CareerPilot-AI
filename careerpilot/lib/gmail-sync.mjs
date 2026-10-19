@@ -265,8 +265,10 @@ async function storeEmail(db, msg, cls, { link, details, classifiedBy, review, k
 async function syncSent(db, gmail, { me, after, max, deadline, ourThreadIds }) {
   const ids = await gmail.listIds(`after:${after} in:sent`, max);
   const marks = ids.map(() => '?').join(',') || "''";
-  const known = new Set((await all(db, `SELECT id FROM emails WHERE id IN (${marks}) UNION SELECT id FROM sent_mail WHERE id IN (${marks})`, [...ids, ...ids]))
-    .map((r) => r.id));
+  // Only what this pass kept or set aside: an email the version that logged the candidate's own applications
+  // recorded (category sent_application, before 2026-10-18) is looked at again.
+  const known = new Set((await all(db, `SELECT id FROM emails WHERE id IN (${marks}) AND category = 'ignored'
+    UNION SELECT id FROM sent_mail WHERE id IN (${marks})`, [...ids, ...ids])).map((r) => r.id));
   // CareerPilot's sends, by Gmail id, or by subject and recipient for one interrupted before its id was kept.
   const ours = new Set((await all(db, 'SELECT o.gmail_message_id id, o.subject, lower(c.email) email FROM outreach o JOIN contacts c ON c.id = o.contact_id'))
     .flatMap((r) => [r.id, `${r.subject}\n${r.email}`]));
@@ -285,7 +287,7 @@ async function syncSent(db, gmail, { me, after, max, deadline, ourThreadIds }) {
         [id, msg.threadId, to, toName && !toName.includes('@') ? toName : null, msg.subject, msg.date, now()]);
       result.tracked++;
       for (const m of await gmail.thread(msg.threadId)) if (!m.labelIds?.includes('SENT')) await recordReply(db, await gmail.get(m.id));
-    } else await run(db, `INSERT INTO emails (id, category, processed_at) VALUES (?, 'ignored', ?)`, [id, now()]);
+    } else await run(db, `INSERT OR IGNORE INTO emails (id, category, processed_at) VALUES (?, 'ignored', ?)`, [id, now()]);
   }
   return result;
 }
