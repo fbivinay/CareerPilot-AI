@@ -191,6 +191,19 @@ export function Timeline({ events }) {
 export const gmailLink = (threadId) => `https://mail.google.com/mail/u/0/#all/${threadId}`;
 export const host = (u) => { try { return new URL(u).hostname; } catch { return u; } };
 
+// Marks a blocked application done: the candidate applied themselves (markDoneAction). Two clicks, like Drop.
+export function DoneButton({ id, action }) {
+  return (
+    <details className="text-xs">
+      <summary className="cursor-pointer text-accent hover:underline">Done</summary>
+      <form action={action} className="mt-1">
+        <input type="hidden" name="id" value={id} />
+        <button className="whitespace-nowrap rounded border border-accent px-2 py-0.5 text-accent hover:bg-accent-soft">I applied: mark done</button>
+      </form>
+    </details>
+  );
+}
+
 // Drops a job for good (dropJobAction). Two clicks and no script: "Drop" opens "Drop for good".
 export function DropButton({ jobId, action }) {
   return (

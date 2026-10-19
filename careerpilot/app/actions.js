@@ -4,7 +4,7 @@ import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import { audit, getDb, now, one, run } from '@/lib/db.mjs';
 import { COOKIE, MAX_AGE, createSession, verifySession } from '@/lib/session.mjs';
-import { createApplication, dropJob, transition } from '@/lib/applications.mjs';
+import { createApplication, dropJob, markDone, transition } from '@/lib/applications.mjs';
 import { applyEvaluation } from '@/lib/evaluate.mjs';
 import { DEFAULT_SETTINGS, getSettings, saveSettings } from '@/lib/settings.mjs';
 import { addManualContact } from '@/lib/outreach.mjs';
@@ -66,6 +66,13 @@ export async function setApplicationStatus(formData) {
 export async function dropJobAction(formData) {
   await requireSession({ write: false });
   if (!(await dropJob(await getDb(), String(formData.get('jobId'))))) throw new Error('This job cannot be dropped');
+  revalidatePath('/', 'layout');
+}
+
+// "Done" on a blocked application (markDone): like Drop, it only records the candidate's decision.
+export async function markDoneAction(formData) {
+  await requireSession({ write: false });
+  if (!(await markDone(await getDb(), String(formData.get('id'))))) throw new Error('Only a blocked application can be marked done');
   revalidatePath('/', 'layout');
 }
 

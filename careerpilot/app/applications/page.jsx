@@ -1,7 +1,7 @@
 import { applyUrl } from '@/lib/prefill.mjs';
 import { listApplications } from '@/lib/queries.mjs';
-import { A, Badge, DropButton, Filters, PageHeader, Pager, ROLE_LABELS, Table, Td, fmtDate } from '../_ui/kit.jsx';
-import { dropJobAction } from '../actions.js';
+import { A, Badge, DoneButton, DropButton, Filters, PageHeader, Pager, ROLE_LABELS, Table, Td, fmtDate } from '../_ui/kit.jsx';
+import { dropJobAction, markDoneAction } from '../actions.js';
 
 export const dynamic = 'force-dynamic';
 
@@ -17,7 +17,7 @@ export default async function Applications({ searchParams }) {
   const { rows, total, page } = await listApplications(params);
   return (
     <>
-      <PageHeader title="Applications" sub="“Applied” counts only submissions with proof: a sent Gmail message, a confirmation page or an employer email." />
+      <PageHeader title="Applications" sub="“Applied” counts only submissions with proof: a sent Gmail message, a confirmation page, an employer email, or your “Done” on a blocked one." />
       <Filters base="/applications" params={params} fields={[
         { name: 'q', label: 'Search', placeholder: 'Company or role' },
         { name: 'status', label: 'Status', options: STATUS_OPTIONS },
@@ -31,7 +31,8 @@ export default async function Applications({ searchParams }) {
             <Td><A to={`/companies/${encodeURIComponent(a.company)}`}>{a.company}</A></Td>
             <Td className="max-w-xs"><A to={`/applications/${a.id}`}>{a.title}</A>{a.blocked_reason && <div className="text-xs text-ink-3">{a.blocked_reason}</div>}
               {['ready', 'blocked', 'failed'].includes(a.status) && <div className="text-xs"><A to={formUrl(a.url)} external>Open form</A></div>}</Td>
-            <Td><Badge value={a.status} />{['ready', 'blocked', 'failed'].includes(a.status) && <DropButton jobId={a.job_id} action={dropJobAction} />}</Td>
+            <Td><Badge value={a.status} />{a.status === 'blocked' && <DoneButton id={a.id} action={markDoneAction} />}
+              {['ready', 'blocked', 'failed'].includes(a.status) && <DropButton jobId={a.job_id} action={dropJobAction} />}</Td>
             <Td className="text-xs text-ink-2">{a.method}</Td>
             <Td className="whitespace-nowrap text-xs">{fmtDate(a.submitted_at)}</Td>
             <Td className="text-xs text-ink-2">{a.resume_version ?? '—'}</Td>

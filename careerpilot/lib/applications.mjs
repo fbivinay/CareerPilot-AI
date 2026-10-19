@@ -15,19 +15,21 @@ import { all, audit, now, one, run } from './db.mjs';
 // the dashboard shows only its work (the candidate's choice, 2026-10-18). `a` is applications.
 export const CAREERPILOT_APP = `a.method IN ('portal', 'email')`;
 // What the dashboard lists: the ones it queued, and the ones it sent itself (Workday) or filled for the
-// candidate to submit (apply-assist, on forms with a CAPTCHA). A queued portal application the candidate
+// candidate to submit (apply-assist, on forms with a CAPTCHA). A ready portal application the candidate
 // then sent on their own (confirmed, but never submitted or filled by CareerPilot) is theirs; one sent from
 // CareerPilot's answer sheet is its work (evidence "answer_sheet": Lever rejects any submit from an automated
-// browser, so the candidate pastes CareerPilot's answers into their own, 2026-10-19). A posting that closed
-// before it was applied to is not shown at all (the candidate's choice, 2026-10-19); the row stays, so the
-// scanners and de-duplication still know it.
+// browser, so the candidate pastes CareerPilot's answers into their own, 2026-10-19). So is one it blocked
+// that the candidate then finished themselves: marked done, or acknowledged by the employer before they did
+// (the candidate's choice, 2026-10-20). A posting that closed before it was applied to is not shown at all
+// (the candidate's choice, 2026-10-19); the row stays, so the scanners and de-duplication still know it.
+export const APPLIED = ['submitted', 'confirmed', 'assessment', 'interview', 'offer', 'rejected'];
+const APPLIED_SQL = APPLIED.map((s) => `'${s}'`).join(',');
 export const SHOWN_APP = `((a.method = 'email' OR a.evidence LIKE '%"type":"workday"%' OR a.evidence LIKE '%"type":"confirmation_page"%'
   OR a.evidence LIKE '%"type":"answer_sheet"%'
+  OR a.id IN (SELECT entity_id FROM events WHERE entity = 'application' AND from_status = 'blocked' AND to_status IN (${APPLIED_SQL}))
   OR (a.method = 'portal' AND a.status IN ('ready','blocked','failed','withdrawn'))) AND a.status != 'expired')`;
 // Jobs CareerPilot found, not ones recorded from the candidate's own application mail, nor closed ones
 // unless CareerPilot applied there: an application does not vanish when its posting closes.
-export const APPLIED = ['submitted', 'confirmed', 'assessment', 'interview', 'offer', 'rejected'];
-const APPLIED_SQL = APPLIED.map((s) => `'${s}'`).join(',');
 export const SHOWN_JOB = `(j.source NOT LIKE 'email%' AND (j.status != 'expired'
   OR EXISTS (SELECT 1 FROM applications a WHERE a.job_id = j.id AND a.status IN (${APPLIED_SQL}) AND ${SHOWN_APP})))`;
 // What the dashboard calls qualified, so that Qualified = Applied + still to apply: jobs CareerPilot applied
@@ -121,6 +123,17 @@ export async function dropJob(db, jobId) {
   const app = (await getApplication(db, jobId)) ?? await createApplication(db, jobId, { status: 'ready', method: 'portal' });
   const fresh = await one(db, 'SELECT * FROM applications WHERE id = ?', [app.id]);
   return fresh.status === 'withdrawn' || transition(db, fresh, 'withdrawn', { reason: 'Dropped by you in the dashboard', by: 'candidate' });
+}
+
+// "Done" on a blocked application: the candidate applied themselves (2026-10-20). It counts as applied from
+// then on (SHOWN_APP), and the employer's acknowledgement confirms it like any other. One whose
+// acknowledgement came first is already past blocked and stays as it is.
+export async function markDone(db, id) {
+  const app = await one(db, 'SELECT * FROM applications WHERE id = ?', [id]);
+  if (!app) throw new Error('Unknown application');
+  if (APPLIED.includes(app.status)) return true;
+  return app.status === 'blocked'
+    && transition(db, app, 'submitted', { evidence: { type: 'done', note: 'Applied by you' }, reason: 'Marked done by you in the dashboard', by: 'candidate' });
 }
 
 export async function markDuplicate(db, job, prior) {

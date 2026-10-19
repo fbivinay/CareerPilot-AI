@@ -1,7 +1,7 @@
 import { notFound } from 'next/navigation';
 import { getApplication } from '@/lib/queries.mjs';
-import { A, Badge, Card, KV, PageHeader, Table, Td, Timeline, fmtDateTime, gmailLink } from '../../_ui/kit.jsx';
-import { setApplicationStatus } from '../../actions.js';
+import { A, Badge, Card, DoneButton, KV, PageHeader, Table, Td, Timeline, fmtDateTime, gmailLink } from '../../_ui/kit.jsx';
+import { markDoneAction, setApplicationStatus } from '../../actions.js';
 
 export const dynamic = 'force-dynamic';
 
@@ -23,6 +23,7 @@ export default async function ApplicationPage({ params }) {
             <div className="flex flex-wrap items-center gap-3">
               <Badge value={app.status} />
               {app.blocked_reason && <span className="text-sm text-ink-2">{app.blocked_reason}</span>}
+              {app.status === 'blocked' && <DoneButton id={app.id} action={markDoneAction} />}
             </div>
             <form action={setApplicationStatus} className="mt-4 flex flex-wrap items-end gap-2">
               <input type="hidden" name="id" value={app.id} />

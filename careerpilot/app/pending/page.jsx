@@ -1,7 +1,8 @@
 import { getDb, all } from '@/lib/db.mjs';
 import { SHOWN_APP, SHOWN_EMAIL } from '@/lib/applications.mjs';
 import { pendingQuestions, systemStatus } from '@/lib/queries.mjs';
-import { A, Badge, Card, PageHeader, Table, Td, fmtDateTime, gmailLink } from '../_ui/kit.jsx';
+import { A, Badge, Card, DoneButton, PageHeader, Table, Td, fmtDateTime, gmailLink } from '../_ui/kit.jsx';
+import { markDoneAction } from '../actions.js';
 
 export const dynamic = 'force-dynamic';
 
@@ -75,7 +76,7 @@ export default async function Pending() {
           <tr key={a.id} className="hover:bg-surface-2">
             <Td><A to={`/applications/${a.id}`}>{a.title}</A></Td>
             <Td>{a.company}</Td>
-            <Td><Badge value={a.status} /></Td>
+            <Td><Badge value={a.status} />{a.status === 'blocked' && <DoneButton id={a.id} action={markDoneAction} />}</Td>
             <Td className="max-w-md text-xs text-ink-2">{a.blocked_reason}</Td>
             <Td><A to={a.url} external>Posting</A></Td>
           </tr>

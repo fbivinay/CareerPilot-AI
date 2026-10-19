@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { all, one, openDb } from '../lib/db.mjs';
-import { canTransition, createApplication, transition } from '../lib/applications.mjs';
+import { SHOWN_APP, canTransition, createApplication, markDone, transition } from '../lib/applications.mjs';
 import { classifyEmail, parseJobAlert, stripQuoted } from '../lib/email-intel.mjs';
 import { processMessage } from '../lib/gmail-sync.mjs';
 import { applicationEmail, domainMatchesCompany, emailsInText, forRecruiting } from '../lib/contacts.mjs';
@@ -430,4 +430,27 @@ test('dropping a job from the dashboard is permanent, with or without an applica
   // A repost of a dropped role, even dated later, is a duplicate.
   assert.ok(await sameRole(db, { id: 'x', company: 'Acme', title: 'Role 2', posted_at: '2099-01-01T00:00:00Z' }));
   await assert.rejects(() => dropJob(db, 'nope'), /Unknown job/);
+});
+
+test('a blocked application the candidate marks done counts as applied, and its acknowledgement confirms it', async () => {
+  const db = await openDb({ url: ':memory:' });
+  const job = async (company) => (await upsertJob(db, { url: `https://boards.greenhouse.io/${company.toLowerCase()}/jobs/1`, company, title: 'Data Analyst',
+    location: 'Bengaluru', description: 'Freshers welcome' }, { source: 'greenhouse', settings })).id;
+  const shown = async () => (await all(db, `SELECT a.id, a.status FROM applications a JOIN jobs j ON j.id = a.job_id WHERE ${SHOWN_APP} ORDER BY j.company`))
+    .map((r) => `${r.id}:${r.status}`);
+  const get = (id) => one(db, 'SELECT * FROM applications WHERE id = ?', [id]);
+  const ack = async (id) => transition(db, await get(id), 'confirmed', { evidence: { type: 'email', emailId: `e-${id}` }, reason: 'application_confirmation email' });
+  const done = await createApplication(db, await job('Acme'), { status: 'blocked', method: 'portal', blockedReason: 'CAPTCHA form: Greenhouse' });
+  const early = await createApplication(db, await job('Beta'), { status: 'blocked', method: 'portal', blockedReason: 'CAPTCHA form: Greenhouse' });
+  const own = await createApplication(db, await job('Gamma'), { status: 'ready', method: 'portal' });
+
+  assert.equal(await markDone(db, own.id), false, 'only a blocked application is marked done');
+  assert.equal(await markDone(db, done.id), true);
+  assert.equal((await get(done.id)).status, 'submitted');
+  assert.ok((await get(done.id)).submitted_at);
+  assert.ok(await ack(done.id)); // the employer's acknowledgement, later
+  assert.ok(await ack(early.id)); // acknowledged before the candidate marked it done
+  assert.equal(await markDone(db, early.id), true, 'a late Done changes nothing');
+  assert.ok(await ack(own.id)); // a ready one the candidate sent on their own stays theirs
+  assert.deepEqual(await shown(), [`${done.id}:confirmed`, `${early.id}:confirmed`]);
 });
