@@ -93,17 +93,34 @@ export async function transition(db, app, to, { evidence = null, reason = null, 
   return true;
 }
 
-// A role is applied to once. The same company and title already applied to, or dropped by the candidate,
-// under another posting (a repost after the first one closed, a second link, another spelling of the city)
-// makes this job a duplicate, never a second application; a dropped role stays dropped (the candidate's
-// rules, 2026-10-19). Returns the earlier application, or null.
+// A role is applied to once per posting. The same company and title already applied to under another link
+// of the same posting (or another spelling of the city) makes this job a duplicate, never a second
+// application. The role posted again is applied to afresh: a posting dated after that application, or,
+// with no posting date, one found after the first posting closed. A role the candidate dropped stays
+// dropped, reposts included (the candidate's rules, 2026-10-19). Returns the earlier application, or null.
 export const roleKey = (s) => String(s ?? '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 export async function sameRole(db, job) {
-  const rows = await all(db, `SELECT a.id, a.status, a.job_id, j.title FROM applications a JOIN jobs j ON j.id = a.job_id
+  const rows = await all(db, `SELECT a.id, a.status, a.job_id, a.submitted_at, a.updated_at, j.title, j.status job_status
+    FROM applications a JOIN jobs j ON j.id = a.job_id
     WHERE a.job_id != ? AND lower(j.company) = lower(?) AND (a.status IN (${APPLIED.map(() => '?').join(',')})
       OR (a.status = 'withdrawn' AND a.id IN (SELECT entity_id FROM events WHERE entity = 'application' AND to_status = 'withdrawn'
         AND detail LIKE '%"by":"candidate"%')))`, [job.id, job.company, ...APPLIED]);
-  return rows.find((r) => roleKey(r.title) === roleKey(job.title)) ?? null;
+  const posted = Date.parse(job.posted_at ?? '');
+  return rows.find((r) => {
+    if (roleKey(r.title) !== roleKey(job.title)) return false;
+    if (r.status === 'withdrawn') return true; // dropped: permanent
+    if (Number.isFinite(posted)) return posted <= Date.parse(r.submitted_at ?? r.updated_at); // posted again after it?
+    return r.job_status !== 'expired'; // undated: a repost only once the first posting has closed
+  }) ?? null;
+}
+
+// Dropping a job from the dashboard is permanent: its application (one is made if it had none) is withdrawn
+// by the candidate, so the job is never applied to and a repost of the role is a duplicate (sameRole).
+export async function dropJob(db, jobId) {
+  if (!(await one(db, 'SELECT id FROM jobs WHERE id = ?', [jobId]))) throw new Error('Unknown job');
+  const app = (await getApplication(db, jobId)) ?? await createApplication(db, jobId, { status: 'ready', method: 'portal' });
+  const fresh = await one(db, 'SELECT * FROM applications WHERE id = ?', [app.id]);
+  return fresh.status === 'withdrawn' || transition(db, fresh, 'withdrawn', { reason: 'Dropped by you in the dashboard', by: 'candidate' });
 }
 
 export async function markDuplicate(db, job, prior) {

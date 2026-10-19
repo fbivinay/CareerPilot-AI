@@ -190,3 +190,16 @@ export function Timeline({ events }) {
 
 export const gmailLink = (threadId) => `https://mail.google.com/mail/u/0/#all/${threadId}`;
 export const host = (u) => { try { return new URL(u).hostname; } catch { return u; } };
+
+// Drops a job for good (dropJobAction). Two clicks and no script: "Drop" opens "Drop for good".
+export function DropButton({ jobId, action }) {
+  return (
+    <details className="text-xs">
+      <summary className="cursor-pointer text-ink-3 hover:text-bad">Drop</summary>
+      <form action={action} className="mt-1">
+        <input type="hidden" name="jobId" value={jobId} />
+        <button className="whitespace-nowrap rounded border border-bad px-2 py-0.5 text-bad hover:bg-bad-soft">Drop for good</button>
+      </form>
+    </details>
+  );
+}

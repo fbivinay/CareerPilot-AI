@@ -403,4 +403,31 @@ test('a role is applied to once: a repost of one applied to or dropped is a dupl
   assert.equal(await sameRole(db, { id: 'other', company: 'Acme', title: 'ML Engineer' }), null);
   // Another role at the same company is not a duplicate.
   assert.equal(await sameRole(db, { id: 'other', company: 'Acme', title: 'Data Scientist' }), null);
+  // The role posted again after the application (a later posting date) is applied to afresh; an earlier
+  // date is the same posting cycle. Undated, it is a repost only once the first posting has closed.
+  assert.equal(await sameRole(db, { id: 'n1', company: 'Acme', title: 'Data Analyst', posted_at: '2099-01-01T00:00:00Z' }), null);
+  assert.ok(await sameRole(db, { id: 'n2', company: 'Acme', title: 'Data Analyst', posted_at: '2000-01-01T00:00:00Z' }));
+  await db.execute({ sql: "UPDATE jobs SET status = 'expired' WHERE id = ?", args: [first.id] });
+  assert.equal(await sameRole(db, { id: 'n3', company: 'Acme', title: 'Data Analyst' }), null);
+  // A dropped role stays dropped even when posted again.
+  assert.ok(await sameRole(db, { id: 'n4', company: 'Acme', title: 'Data Engineer', posted_at: '2099-01-01T00:00:00Z' }));
+});
+
+test('dropping a job from the dashboard is permanent, with or without an application', async () => {
+  const { dropJob, sameRole } = await import('../lib/applications.mjs');
+  const { upsertJob } = await import('../lib/jobs.mjs');
+  const { DEFAULT_SETTINGS } = await import('../lib/settings.mjs');
+  const db = await openDb({ url: ':memory:' });
+  const add = (n) => upsertJob(db, { url: `https://job-boards.greenhouse.io/acme/jobs/${n}`, title: `Role ${n}`, company: 'Acme', location: 'Bengaluru',
+    description: 'Freshers welcome. Python, SQL.' }, { source: 'greenhouse', boardId: 'b1', settings: DEFAULT_SETTINGS });
+  const bare = await add(1); // no application yet
+  assert.equal(await dropJob(db, bare.id), true);
+  assert.equal((await one(db, 'SELECT status FROM applications WHERE job_id = ?', [bare.id])).status, 'withdrawn');
+  const queued = await add(2);
+  await createApplication(db, queued.id, { method: 'portal' });
+  assert.equal(await dropJob(db, queued.id), true);
+  assert.equal(await dropJob(db, queued.id), true); // dropping twice is harmless
+  // A repost of a dropped role, even dated later, is a duplicate.
+  assert.ok(await sameRole(db, { id: 'x', company: 'Acme', title: 'Role 2', posted_at: '2099-01-01T00:00:00Z' }));
+  await assert.rejects(() => dropJob(db, 'nope'), /Unknown job/);
 });

@@ -1,5 +1,6 @@
 import { listJobs } from '@/lib/queries.mjs';
-import { A, Badge, Filters, PageHeader, Pager, ROLE_LABELS, Table, Td, fmtComp, fmtDate, href } from '../_ui/kit.jsx';
+import { A, Badge, DropButton, Filters, PageHeader, Pager, ROLE_LABELS, Table, Td, fmtComp, fmtDate, href } from '../_ui/kit.jsx';
+import { dropJobAction } from '../actions.js';
 
 export const dynamic = 'force-dynamic';
 
@@ -41,7 +42,10 @@ export default async function Jobs({ searchParams }) {
             </Td>
             <Td className="text-xs text-ink-2">{j.source}</Td>
             <Td className="whitespace-nowrap text-xs text-ink-2">{fmtDate(j.first_seen)}</Td>
-            <Td><A to={j.url} external>Posting</A></Td>
+            <Td>
+              <A to={j.url} external>Posting</A>
+              {j.status !== 'duplicate' && (!j.app_status || ['ready', 'blocked', 'failed'].includes(j.app_status)) && <DropButton jobId={j.id} action={dropJobAction} />}
+            </Td>
           </tr>
         ))}
       </Table>

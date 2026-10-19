@@ -1,7 +1,7 @@
 import { notFound } from 'next/navigation';
 import { getJob } from '@/lib/queries.mjs';
-import { A, Badge, Card, KV, PageHeader, ROLE_LABELS, Table, Td, Timeline, fmtComp, fmtDate, fmtDateTime, gmailLink } from '../../_ui/kit.jsx';
-import { setJobStatus, startApplication } from '../../actions.js';
+import { A, Badge, Card, DropButton, KV, PageHeader, ROLE_LABELS, Table, Td, Timeline, fmtComp, fmtDate, fmtDateTime, gmailLink } from '../../_ui/kit.jsx';
+import { dropJobAction, setJobStatus, startApplication } from '../../actions.js';
 
 export const dynamic = 'force-dynamic';
 
@@ -19,6 +19,7 @@ export default async function JobPage({ params }) {
             ? <a href={`/applications/${application.id}`} className="rounded-md border border-line px-3 py-1.5 text-sm">Application: <Badge value={application.status} /></a>
             : <form action={startApplication}><input type="hidden" name="jobId" value={job.id} /><button className="rounded-md border border-line px-3 py-1.5 text-sm hover:border-accent">Track an application</button></form>}
           {job.status === 'qualified' && <form action={setJobStatus}><input type="hidden" name="id" value={job.id} /><input type="hidden" name="action" value="exclude" /><button className="rounded-md border border-line px-3 py-1.5 text-sm text-ink-2 hover:border-bad hover:text-bad">Not interested</button></form>}
+          {job.status !== 'duplicate' && (!application || ['ready', 'blocked', 'failed'].includes(application.status)) && <DropButton jobId={job.id} action={dropJobAction} />}
           {job.status === 'excluded' && <form action={setJobStatus}><input type="hidden" name="id" value={job.id} /><input type="hidden" name="action" value="reevaluate" /><button className="rounded-md border border-line px-3 py-1.5 text-sm">Re-evaluate</button></form>}
         </div>
       </PageHeader>

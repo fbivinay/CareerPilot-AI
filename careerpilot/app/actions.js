@@ -4,7 +4,7 @@ import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import { audit, getDb, now, one, run } from '@/lib/db.mjs';
 import { COOKIE, MAX_AGE, createSession, verifySession } from '@/lib/session.mjs';
-import { createApplication, transition } from '@/lib/applications.mjs';
+import { createApplication, dropJob, transition } from '@/lib/applications.mjs';
 import { applyEvaluation } from '@/lib/evaluate.mjs';
 import { DEFAULT_SETTINGS, getSettings, saveSettings } from '@/lib/settings.mjs';
 import { addManualContact } from '@/lib/outreach.mjs';
@@ -58,6 +58,14 @@ export async function setApplicationStatus(formData) {
   if (!app || !MANUAL_STATUSES.includes(to)) throw new Error('Invalid application or status');
   const ok = await transition(db, app, to, { evidence: { type: 'manual', note: note || null }, reason: note || 'set in dashboard', by: 'candidate' });
   if (!ok) throw new Error(`Cannot move from ${app.status} to ${to}`);
+  revalidatePath('/', 'layout');
+}
+
+// Dropping a job works on the read-only deployment too: it only records the candidate's decision (nothing
+// is sent, no setting changes) and needs the dashboard password like every page (2026-10-19).
+export async function dropJobAction(formData) {
+  await requireSession({ write: false });
+  if (!(await dropJob(await getDb(), String(formData.get('jobId'))))) throw new Error('This job cannot be dropped');
   revalidatePath('/', 'layout');
 }
 
