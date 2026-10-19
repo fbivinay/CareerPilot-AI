@@ -94,23 +94,31 @@ export function followUpEmail({ profile, job, contactName }) {
 // waits for the candidate.
 export async function draftAnswer(db, { profile, job, question }, settings, ai = {}) {
   try {
-    const draft = await aiJson(db, {
-      name: 'form-answer',
-      dataClass: 'profile',
-      system: [
-        'You answer one open question on a job application form, as the candidate, in the first person.',
-        'Use ONLY facts from CANDIDATE FACTS and JOB. Never invent skills, experience, numbers, dates, achievements, or claims about the company that the JOB text does not make.',
-        'Do not claim personal habits, traits or activities that CANDIDATE FACTS do not show (for example publishing, mentoring or leading teams); say what the candidate has done and wants to do.',
-        'If answering needs a fact that CANDIDATE FACTS does not contain, reply {"answer": null}.',
-        'Plain text, 50-120 words, no placeholders or brackets. Reply with JSON: {"answer": string or null}.',
-      ].join(' '),
-      user: `QUESTION: ${question}\n\nJOB: ${job.title} at ${job.company}\n${(job.description ?? '').slice(0, 3500)}\n\nCANDIDATE FACTS:\n${profileFacts(profile)}`,
-      maxTokens: 700,
-    }, { settings, ...ai });
-    const answer = typeof draft.answer === 'string' ? draft.answer.trim() : '';
-    if (!answer || /\[|\{|lorem|your name/i.test(answer) || answer.length > 1500) return null;
-    if (unclaimed(answer, profile).length) return null; // a skill or role the profile does not show
-    return unverifiedNumbers(answer, factCorpus(profile, `${job.title} ${job.company} ${job.description ?? ''} ${question}`)).length ? null : answer;
+    // A draft claiming a skill or role the profile does not show is written once more without it (SLI's
+    // draft, 2026-10-19, said it used pandas, which the profile only lists), and dropped if it claims one again.
+    let avoid = [];
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const draft = await aiJson(db, {
+        name: 'form-answer',
+        dataClass: 'profile',
+        system: [
+          'You answer one open question on a job application form, as the candidate, in the first person.',
+          'Use ONLY facts from CANDIDATE FACTS and JOB. Never invent skills, experience, numbers, dates, achievements, or claims about the company that the JOB text does not make.',
+          'Do not claim personal habits, traits or activities that CANDIDATE FACTS do not show (for example publishing, mentoring or leading teams); say what the candidate has done and wants to do.',
+          'If answering needs a fact that CANDIDATE FACTS does not contain, reply {"answer": null}.',
+          'Plain text, 50-120 words, no placeholders or brackets. Reply with JSON: {"answer": string or null}.',
+          ...(avoid.length ? [`Do not mention ${avoid.join(', ')}: CANDIDATE FACTS do not show the candidate using or doing it.`] : []),
+        ].join(' '),
+        user: `QUESTION: ${question}\n\nJOB: ${job.title} at ${job.company}\n${(job.description ?? '').slice(0, 3500)}\n\nCANDIDATE FACTS:\n${profileFacts(profile)}`,
+        maxTokens: 700,
+      }, { settings, ...ai });
+      const answer = typeof draft.answer === 'string' ? draft.answer.trim() : '';
+      if (!answer || /\[|\{|lorem|your name/i.test(answer) || answer.length > 1500) return null;
+      avoid = unclaimed(answer, profile);
+      if (avoid.length) continue;
+      return unverifiedNumbers(answer, factCorpus(profile, `${job.title} ${job.company} ${job.description ?? ''} ${question}`)).length ? null : answer;
+    }
+    return null;
   } catch (err) {
     if (err instanceof AiUnavailable) return null;
     throw err;

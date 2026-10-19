@@ -360,8 +360,13 @@ async function choose(page, field, wants, scope = page, search = null) {
   if (same(texts[i], current)) { await page.keyboard.press('Escape'); return { chosen: current, options: texts }; }
   await options.nth(i).scrollIntoViewIfNeeded();
   await options.nth(i).click();
-  await page.waitForTimeout(400);
-  const now = (await button.innerText()).trim();
+  // A choice that redraws part of the form (a new Country rebuilds the address block) can take GitHub's
+  // runners over a second to show (2026-10-19: "India" read as missing): wait up to 3 s for it.
+  let now = '';
+  for (let t = 0; t < 10 && !same(now, texts[i]); t++) {
+    await page.waitForTimeout(300);
+    now = (await button.innerText().catch(() => '')).trim();
+  }
   debug('choose', field, 'now shows', now);
   return same(now, texts[i]) ? { chosen: texts[i], options: texts } : { options: texts, note: `clicked "${texts[i]}" but the field shows "${now}"` };
 }
@@ -450,7 +455,7 @@ function employerNames(job, host) {
 // A required choice that could not be made: what the form offered instead (for the stop reason).
 // A field that is not on this employer's form at all ({missing}) is not a problem.
 const unmet = (label, r) => (r.chosen || r.missing ? null
-  : `${label} (offered: ${(r.options ?? []).filter((o) => !/^select one$/i.test(o)).slice(0, 12).join(', ')}${r.size ? ` … ${r.size}` : ''})`);
+  : `${label} (offered: ${(r.options ?? []).filter((o) => !/^select one$/i.test(o)).slice(0, 12).join(', ')}${r.size ? ` … ${r.size}` : ''}${r.note ? `; ${r.note}` : ''})`);
 
 // Workday renders a step's sections one after another (later ones show grey placeholders first) and some
 // only when scrolled to: scroll through, then wait until the number of fields stops changing.
@@ -612,9 +617,11 @@ const DEGREES = [
   // MSc, …)"); then the plain level some portals list ("Masters (+2 or +3 yrs)", "Master's (M.A., M.S.,
   // M.B.A.)"). Never another degree at that level: "Master of Business Administration", "Bachelor of Arts".
   [/^m\.?\s?sc\b|master of science/i, [/^master of science \(m\.?sc\)$/i, /^masters?('s)? of science\b/i, /^m\.?\s?sc\.?$/i, /^m\.?s\.?$/i,
-    /\bISCED 7\b.*\bM\.?Sc\b/i, /^masters?('s)?( degree)?( or equivalent( degree)?)?(\s*\(.*\))?$/i, /^masters?('s)?( degree)?\s*\/\s*graduate( degree)?\b/i, /^masters?('s)? degree\s*\/\s*int'?l\.? equiv/i]],
+    /\bISCED 7\b.*\bM\.?Sc\b/i, /^masters?\b.*\bM\.?\s?Sc\b/i, // Novartis: "Masters - Other (e.g. MSc.)"
+    /^masters?('s)?( degree)?( or equivalent( degree)?)?(\s*\(.*\))?$/i, /^masters?('s)?( degree)?\s*\/\s*graduate( degree)?\b/i, /^masters?('s)? degree\s*\/\s*int'?l\.? equiv/i]],
   [/^b\.?\s?sc\b|bachelor of science/i, [/^bachelor of science \(b\.?sc\)$/i, /^bachelors?('s)? of science\b/i, /^b\.?\s?sc\.?$/i, /^b\.?s\.?$/i,
-    /\bISCED 6\b.*\bB\.?Sc\b/i, /^bachelors?('s)?( degree)?( or equivalent( degree)?)?(\s*\(.*\))?$/i, /^bachelors?('s)?( degree)?\s*\/\s*undergraduate( degree)?\b/i, /^bachelors?('s)? degree\s*\/\s*int'?l\.? equiv/i]],
+    /\bISCED 6\b.*\bB\.?Sc\b/i, /^bachelors?\b.*\bB\.?\s?Sc\b/i, /^bachelors?('s)?\s*\/\s*first univ(\.|ersity)?( degree)?$/i, // Novartis: "Bachelors/First Univ. Degree"
+    /^bachelors?('s)?( degree)?( or equivalent( degree)?)?(\s*\(.*\))?$/i, /^bachelors?('s)?( degree)?\s*\/\s*undergraduate( degree)?\b/i, /^bachelors?('s)? degree\s*\/\s*int'?l\.? equiv/i]],
   [/^m\.?\s?tech\b|master of technology/i, [/^master of technology\b/i, /^m\.?\s?tech$/i]],
   [/^b\.?\s?tech\b|bachelor of technology/i, [/^bachelor of technology\b/i, /^b\.?\s?tech$/i]],
   [/^b\.?\s?e\b|bachelor of engineering/i, [/^bachelor of engineering\b/i]],
@@ -712,7 +719,12 @@ async function typeDate(page, group, parts, want, ok) {
 
 // The institution exactly as the profile names it, otherwise Workday's own "School not in list": a
 // similarly named school (St. Joseph's College for St. Joseph's University) would be a different claim.
-async function chooseSchool(page, scope, institution) {
+export function otherSchool(country) {
+  const own = country ? [new RegExp(`^others?\\s*[-–(/:]?\\s*${escapeRe(country)}\\b`, 'i')] : [];
+  return { own, other: [...own, /^others?(\s*$|\s*[\/(]|\s+(universit|institut|college|school))/i] };
+}
+
+async function chooseSchool(page, scope, institution, country) {
   const name = splitPlace(institution)[0];
   // A plain text box (Synechron's schoolName): the institution's exact name is the answer.
   for (const field of ['schoolName', 'school']) {
@@ -727,8 +739,11 @@ async function chooseSchool(page, scope, institution) {
   if (exact.chosen) return exact;
   let notListed = {};
   // Workday's own entry for a school missing from its list, as tenants name it (PwC: "School Not Listed";
-  // Airbus: "Other / Autre / Sonstige / Otras"). Never a similarly named school.
-  for (const [q, want] of [['School not in list', /not (in|on) (the )?list|not listed/i], ['School Not Listed', /not listed/i], ['Other', /^others?\b/i]]) { // DBS: "Others"
+  // Airbus: "Other / Autre / Sonstige / Otras"; DBS: "Others"; Novartis: one per country, "Others-India").
+  // Never a similarly named school, and never another country's (2026-10-19: Novartis got "Others-Afghanistan").
+  const { own, other } = otherSchool(country);
+  for (const [q, want] of [['School not in list', /not (in|on) (the )?list|not listed/i], ['School Not Listed', /not listed/i],
+    ...(country ? [[`Others ${country}`, own]] : []), ['Other', other]]) {
     notListed = await pick(page, 'school', q, want, scope);
     if (notListed.chosen) return { ...notListed, note: `"${name}" is not in Workday's list` };
   }
@@ -775,7 +790,7 @@ async function myExperience(page, { profile, answers, job, resumePath }) {
   const filled = { experience: [], education: [] };
   const problems = [];
   const usedJobs = new Set();
-  const expSection = await sectionName(page, ['Professional-Experience', 'Work-Experience', 'Work-History']); // Dentsu: Work History
+  const expSection = await sectionName(page, ['Professional-Experience', 'Work-Experience', 'Work-History', 'Job-History']); // Dentsu: Work History; Novartis: Job History
   for (const e of profile.experience ?? []) {
     const panel = await entryPanel(page, expSection, usedJobs,
       async (p) => (await inputValue(p, 'jobTitle')).toLowerCase() === e.title.toLowerCase(),
@@ -800,7 +815,7 @@ async function myExperience(page, { profile, answers, job, resumePath }) {
       async (p) => best([await buttonText(p, 'degree')], degreeWants(ed.degree)) === 0,
       async (p) => /^(select one)?$/i.test(await buttonText(p, 'degree')));
     if (!panel) break; // no education section on this employer's form; if one were required, Workday's own check says so on Save
-    const school = await chooseSchool(page, panel, ed.institution);
+    const school = await chooseSchool(page, panel, ed.institution, answers.address_country);
     const degree = await choose(page, 'degree', degreeWants(ed.degree), panel);
     const field = studyField(ed.degree);
     let study = { missing: true };
@@ -1112,6 +1127,16 @@ const QUESTION_RULES = [
   // An OCI/PIO card is for foreign citizens of Indian origin: an Indian citizen cannot hold one.
   [/\b(oci|pio)\b|overseas citizen(ship)? of india/i, (c) => (/^india/i.test(c.answers.citizenship ?? '') ? { yes: false } : undefined)],
   [PAST_TIE, pastTies], // after the export-control questions, which can mention employment too
+  // Joining, or interviewing in person, where the job is (SLI: "available to join in the posted Job
+  // Location?", "available for personal interview in the posted job location if shortlisted?"): yes when the
+  // job is in the candidate's city; joining anywhere else is their relocation answer. Before the start-date
+  // rule, which "available to join" also matches; "when" and "date" questions stay with that one.
+  [/^(?!.*\b(when|date)\b).*\b(available|able|willing)\b.{0,30}\b(join|interview)\w*\b.{0,40}\blocation\b/i, (c) => {
+    const city = String(c.profile.location ?? '').split(',')[0].trim().toLowerCase();
+    const names = [city, { bengaluru: 'bangalore', bangalore: 'bengaluru' }[city]].filter(Boolean);
+    if (names.length && new RegExp(`\\b(${names.map(escapeRe).join('|')})\\b`, 'i').test(c.job.location ?? '')) return { yes: true };
+    return /\bjoin/i.test(c.label) ? yes(c.answers.willing_to_relocate) : undefined;
+  }],
   [/\b(start|joining|join)\b.{0,15}\bdate\b|\bavailab\w* to (start|join)\b|\bearliest\b.{0,15}\b(start|join)|\bwhen\b.{0,30}\b(start|join)\b|\bhow soon\b.{0,20}\b(start|join)\b/i, (c) => {
     const when = isoDate(/full.?time/i.test(c.label) ? c.answers.earliest_full_time_start
       : c.job.employment_type === 'internship' ? c.answers.internship_available_from : c.answers.earliest_joining_date);
@@ -1256,7 +1281,7 @@ const QUESTION_RULES = [
   }],
   [/\bcomfortable working from (the )?office\b|\bwork(ing)? (from|at) (the )?(office|client location)\b/i,
     (c) => ((c.answers.work_arrangements ?? []).some((k) => /on.?site|office/i.test(k)) ? { yes: true } : undefined)],
-  [/\bprior evaluation\b|\b(tests?|interviews?)\b.{0,60}\b(last|past) \d+ months\b/i,
+  [/\bprior evaluation\b|\b(tests?|interviews?)\b.{0,60}\b(last|past|recent) \d+ months\b/i,
     (c) => (c.evaluatedHere === false && c.answers.previously_interviewed === false ? { yes: false } : undefined)],
   [/\b(completed|hold)\b.{0,60}\b(fractal data science professional certificate|analytics vidhya'?s? black belt)/i, (c) => yes(c.answers.fractal_av_certificates)],
   // Marketing opt-ins are never given: a tick box stays unticked and a required yes/no is answered no. A
@@ -1287,6 +1312,7 @@ const QUESTION_RULES = [
   [/\b(ethnic|race|racial|veteran|disabilit|hispanic|latino|sexual orientation|pronoun)/i,
     (c) => (c.required ? { option: [/decline|not wish|prefer not|do not want|choose not|rather not|not to (self.)?identify|not disclos/i] } : undefined)],
   [/^e-?mail( address)?$/i, (c) => (c.profile.email ? { text: c.profile.email } : undefined)],
+  [/^(your )?full name$/i, (c) => (c.profile.name ? { text: c.profile.name } : undefined)], // SLI, as on the resume
   // Where the candidate is and would work: Bengaluru per the profile (and willing to relocate).
   // "Local Given Name(s)", "City - Local", "Address Line 1 - Local": Workday's copy in the local script, the
   // same text for India.
@@ -1352,6 +1378,14 @@ const QUESTION_RULES = [
     if (c.kind === 'text' || c.kind === 'textarea') return /\b1 ?(to|-) ?10\b|\bout of 10\b|\/ ?10\b/i.test(c.label) ? { text: String(r) } : undefined;
     return { option: [new RegExp(`^${r}$`)] };
   }],
+  // The software for the role with the candidate's level on a scale of 10 (SLI: "names of relevant software's
+  // required for this role and your expertise level on a scale of 1-10"): every skill they rated, "SQL: 9/10".
+  [/\bsoftware\b.{0,80}\b(expertise|proficiency|skill) level\b/i, (c) => {
+    const rated = Object.entries(c.answers.skill_ratings ?? {});
+    if (!rated.length || (c.kind !== 'text' && c.kind !== 'textarea') || !/\b1 ?(to|-) ?10\b|\bout of 10\b|\/ ?10\b/i.test(c.label)) return undefined;
+    const show = (k) => ({ sql: 'SQL', git: 'Git', 'power bi': 'Power BI' }[k] ?? k.replace(/^./, (ch) => ch.toUpperCase()));
+    return { text: rated.map(([k, v]) => `${show(k)}: ${v}/10`).join(', ') };
+  }],
   // Securities licences: none (regulatory_licensed_role, 2026-10-18; Portage Point asks for FINRA's).
   [/\bfinra licen[sc]es?\b/i, (c) => (c.answers.regulatory_licensed_role === false
     ? { option: /\bstatus\b/i.test(c.label) ? [/^not applicable$/i] : [/^no finra licen[sc]es?$/i, /^none\b/i] } : undefined)],
@@ -1374,11 +1408,26 @@ const QUESTION_RULES = [
   [/postal code|\bpin ?code\b|\bzip\b/i, (c) => (c.answers.postal_code ? { text: String(c.answers.postal_code) } : undefined)],
 ];
 
+// A question wrapped in politeness (SLI: "Kindly mention your Full Name:", "Kindly confirm your current
+// location (City, state):"), without the wrapping, for when no rule knows the words as written.
+export const unwrap = (label) => String(label)
+  .replace(/^(kindly|please)\s+(mention|provide|confirm|enter|share|state|specify|give|let us know)\s+(us\s+)?(your\s+)?/i, '')
+  .replace(/\s*\((if applicable|city,? ?state|optional)\)/i, '').replace(/[\s:?*]+$/, '');
+
 export function answerFor(question, ctx) {
   const custom = (ctx.answers.custom ?? {})[norm(question.label)];
-  if (custom != null) return typeof custom === 'object' ? custom : { text: String(custom), ...yes(custom) && /^(yes|no|true|false)$/i.test(String(custom)) ? yes(custom) : {} };
-  const rule = QUESTION_RULES.find(([re]) => re.test(question.label));
-  return rule ? rule[1]({ ...ctx, label: question.label, kind: question.kind, required: question.required }) : undefined;
+  // The candidate's own answer picks exactly the options it names; a list is several ticks (Novartis).
+  const exact = (s) => new RegExp(`^${escapeRe(String(s).trim())}$`, 'i');
+  if (Array.isArray(custom)) return { option: custom.map(exact), text: custom.join(', ') };
+  if (custom != null) return typeof custom === 'object' ? custom : { text: String(custom), option: [exact(custom)], ...yes(custom) && /^(yes|no|true|false)$/i.test(String(custom)) ? yes(custom) : {} };
+  // Terms printed above a bare "I confirm" are not read here, so they are accepted only for an employer whose
+  // terms the candidate read and approved (answers.terms_accepted, by company; Novartis's include background
+  // and credit checks). Any other employer's go through the rules below.
+  if (/^terms and conditions: /i.test(question.label) && ctx.answers.terms_accepted?.[String(ctx.job?.company).toLowerCase()]) return { yes: true };
+  let label = question.label;
+  let rule = QUESTION_RULES.find(([re]) => re.test(label));
+  if (!rule && unwrap(label) !== label) { label = unwrap(label); rule = QUESTION_RULES.find(([re]) => re.test(label)); }
+  return rule ? rule[1]({ ...ctx, label, kind: question.kind, required: question.required }) : undefined;
 }
 
 // ($$eval is Playwright's in-page query: it runs this function in the page, it is not a string eval.)
@@ -1394,7 +1443,7 @@ const readQuestions = (page) => page.$$eval('[data-automation-id^="formField-"]'
   const field = g.getAttribute('data-automation-id').replace(/^formField-/, '');
   // Workday's own terms field may say only "I Agree", the terms printed above it (Circles). Only a bare
   // agreement is named so; any other label is read as written.
-  const named = field === 'acceptTermsAndAgreements' && /^\s*(yes,?\s*)?(i\s+)?(agree|accept|acknowledge|consent)\.?\s*\*?\s*$/i.test(label)
+  const named = field === 'acceptTermsAndAgreements' && /^\s*(yes,?\s*)?(i\s+)?(agree|accept|acknowledge|consent|confirm)\.?\s*\*?\s*$/i.test(label)
     ? `Terms and Conditions: ${label}` : label;
   return { field, label: named.replace(/\s*\*$/, ''), required: /\*$/.test(label), kind };
 }));
@@ -1459,7 +1508,7 @@ async function applyAnswer(page, q, a) {
 
 // An open question ("Top 3 reasons to join us") gets an answer drafted from the job and the verified profile
 // (ctx.draft, the candidate's choice of 2026-10-18); a disclosure never does: only the candidate knows it.
-const OPEN_QUESTION = /\b(why|reasons?|motivat\w*|interest(s|ed)?|tell us|describe|explain|what (excites|attracts|appeals|makes you))\b/i;
+const OPEN_QUESTION = /\b(why|reasons?|motivat\w*|motives?|suitab\w*|interest(s|ed)?|tell us|describe|explain|what (excites|attracts|appeals|makes you))\b/i;
 const DISCLOSURE = /conflict|disclos|relationship|relative|criminal|convict|offen[cs]e|lawsuit|litigation|terminat|dismiss|disciplin|visa|citizen|health|disabilit/i;
 // Whether an unanswered question may get a drafted answer: required, free text, open, not a disclosure.
 export const draftable = (q) => q.required && (q.kind === 'textarea' || q.kind === 'text') && OPEN_QUESTION.test(q.label) && !DISCLOSURE.test(q.label);

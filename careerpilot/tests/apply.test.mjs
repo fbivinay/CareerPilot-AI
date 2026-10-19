@@ -514,3 +514,71 @@ test('birth country and city, marital status and a country-list citizenship are 
   assert.equal(pick(ask('Citizenship Status'), ['Afghanistan', 'India', 'Indonesia']), 'India');
   assert.equal(ask('Citizenship Status').search, 'India');
 });
+
+test('questions wrapped in "Kindly mention your ..." get the plain question\'s answer (SLI, 2026-10-19)', async () => {
+  const { answerFor, draftable } = await import('../lib/apply/workday.mjs');
+  const profile = { name: 'A Candidate', location: 'Bengaluru, Karnataka', experience: [] };
+  const answers = { previously_interviewed: false, willing_to_relocate: true };
+  const job = { company: 'Slihrms', location: 'AtkinsRéalis - Corporate Office Bangalore' };
+  const ask = (label, kind = 'text') => answerFor({ label, kind, required: true }, { profile, answers, job, evaluatedHere: false });
+  assert.deepEqual(ask('Kindly mention your Full Name:'), { text: 'A Candidate' });
+  assert.deepEqual(ask('Kindly confirm your current location (City, state):'), { text: 'Bengaluru, Karnataka' });
+  assert.match(ask('Kindly mention your current Company Name (if Applicable):').text, /^Not currently employed/);
+  assert.deepEqual(ask('Are you available to join in the posted Job Location?', 'radio'), { yes: true });
+  assert.deepEqual(ask('Are you available for personal interview in the posted job location if shortlisted?', 'radio'), { yes: true });
+  assert.deepEqual(ask('Have you had an interview with Atkins in the recent 6 months?', 'radio'), { yes: false });
+  // Elsewhere: joining is the relocation answer; an in-person interview there is the candidate's to answer.
+  const far = (label) => answerFor({ label, kind: 'radio', required: true }, { profile, answers, job: { company: 'X', location: 'Pune' } });
+  assert.deepEqual(far('Are you available to join in the posted Job Location?'), { yes: true });
+  assert.equal(far('Are you available for personal interview in the posted job location if shortlisted?'), undefined);
+  assert.ok(draftable({ label: 'Kindly let us know the motive for applying to this role and how you find yourself suitable for the role?', kind: 'textarea', required: true }));
+});
+
+test('degree buckets that name the degree or the first university degree (Novartis, 2026-10-19)', async () => {
+  const { best, degreeWants } = await import('../lib/apply/workday.mjs');
+  const options = ['Postgraduate diploma', 'MBA or equivalent', 'Bachelors/First Univ. Degree', 'Masters - Other (e.g. MSc.)', 'Master of Business Administration'];
+  assert.equal(options[best(options, degreeWants('MSc in Big Data Analytics'))], 'Masters - Other (e.g. MSc.)');
+  assert.equal(options[best(options, degreeWants('BSc in Statistics & Economics'))], 'Bachelors/First Univ. Degree');
+});
+
+test('the candidate\'s own answer ticks exactly what it names; software ratings on a 1-10 scale (2026-10-19)', async () => {
+  const { answerFor } = await import('../lib/apply/workday.mjs');
+  const answers = { custom: { 'what inspired you to apply': ['Novartis Purpose'] }, skill_ratings: { sql: 9, python: 9 } };
+  const a = answerFor({ label: 'What inspired you to apply?', kind: 'checkbox', required: true }, { profile: {}, answers, job: { company: 'Novartis' } });
+  assert.ok(a.option[0].test('Novartis Purpose') && !a.option[0].test('Novartis Purpose Award'));
+  assert.deepEqual(answerFor({ label: 'Kindly mention the names of relevant software’s required for this role and your expertise level on a scale of 1-10(10 being highest).', kind: 'textarea', required: true },
+    { profile: {}, answers, job: { company: 'Slihrms' } }), { text: 'SQL: 9/10, Python: 9/10' });
+});
+
+test('a draft that claims a skill the profile only lists is written once more without it (SLI, 2026-10-19)', async () => {
+  const { openDb } = await import('../lib/db.mjs');
+  const { draftAnswer } = await import('../lib/compose.mjs');
+  const db = await openDb({ url: ':memory:' });
+  const sent = [];
+  const replies = ['I built pipelines with Python and TensorFlow.', 'I built pipelines with Python.'];
+  const fetchImpl = async (_url, init) => {
+    sent.push(JSON.parse(init.body).messages[0].content);
+    return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ answer: replies[sent.length - 1] }) } }] }), { status: 200 });
+  };
+  const profile = { name: 'A', education: [], experience: [], projects: [{ name: 'ETL', stack: 'Python', points: ['Pipelines in Python.'] }], skills: { ml: ['TensorFlow'] } };
+  const job = { title: 'Data Intern', company: 'Acme', description: 'Python pipelines.' };
+  assert.equal(await draftAnswer(db, { profile, job, question: 'Why are you suitable?' }, undefined, { env: { GROQ_API_KEY: 'g' }, fetchImpl }), 'I built pipelines with Python.');
+  assert.equal(sent.length, 2);
+  assert.match(sent[1], /Do not mention TensorFlow/);
+});
+
+test('a bare "I confirm" under terms is ticked only for an employer whose terms the candidate accepted (Novartis, 2026-10-19)', async () => {
+  const { answerFor } = await import('../lib/apply/workday.mjs');
+  const q = { label: 'Terms and Conditions: I confirm.', kind: 'checkbox', required: true };
+  const answers = { terms_accepted: { novartis: '2026-10-19' } };
+  assert.deepEqual(answerFor(q, { profile: {}, answers, job: { company: 'Novartis' } }), { yes: true });
+  assert.equal(answerFor(q, { profile: {}, answers, job: { company: 'Acme' } }), undefined);
+});
+
+test('a school missing from the list is the "Other" entry of the candidate\'s country, never another country\'s (Novartis, 2026-10-19)', async () => {
+  const { best, otherSchool } = await import('../lib/apply/workday.mjs');
+  const { other } = otherSchool('India');
+  assert.equal(best(['Others-Afghanistan', 'Others-Albania', 'Others-India'], other), 2);
+  assert.equal(best(['Others-Afghanistan', 'Others-Albania'], other), -1);
+  for (const plain of ['Others', 'Other / Autre / Sonstige / Otras', 'Other (please specify)', 'Other University']) assert.equal(best([plain], other), 0, plain);
+});
