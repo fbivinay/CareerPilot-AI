@@ -197,7 +197,7 @@ export async function sweepAggregator(db, settings, { fetchImpl = fetch, minHour
     const { rest, seen } = await touchKnown(db, matched);
     for (const id of seen) seenAll.add(id);
     for (const m of rest) {
-      const out = await upsertJob(db, m, { source: 'aggregator', ats: m.ats, boardId: m.boardUrl ? boardIdFor(m.boardUrl) : null, settings });
+      const out = await upsertJob(db, m, { source: 'aggregator', ats: m.ats, boardId: m.boardUrl ? boardIdFor(m.boardUrl) : null, settings, snapshotAt: meta.last_updated });
       if (!out) continue;
       seenAll.add(out.id);
       if (out.duplicateOf) seenAll.add(out.duplicateOf);

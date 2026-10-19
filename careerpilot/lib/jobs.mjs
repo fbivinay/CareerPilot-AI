@@ -24,7 +24,8 @@ const toIso = (v) => {
 
 // job: {url, title, company, location, description?, postedAt?, salary?, externalId?}
 // Returns {id, created, changed, status, duplicateOf}.
-export async function upsertJob(db, job, { source, ats = null, boardId = null, settings }) {
+// snapshotAt: when the aggregator's dataset was taken.
+export async function upsertJob(db, job, { source, ats = null, boardId = null, settings, snapshotAt = null }) {
   const canonical = canonicalUrl(job.url);
   if (!canonical || !job.title) return null;
   const id = jobId(canonical);
@@ -33,8 +34,11 @@ export async function upsertJob(db, job, { source, ats = null, boardId = null, s
   const description = job.description ?? '';
 
   if (existing) {
-    // The aggregator lags by up to a day; the employer's own board is authoritative on closure.
-    if (source === 'aggregator' && existing.board_id && existing.status === 'expired') {
+    // The aggregator lags by up to a day; the employer's own board is authoritative on closure, and so is
+    // a closure found after the dataset was taken (2026-10-19: the 18 Oct dataset reopened four postings
+    // confirmed closed on the employers' own pages that day).
+    const closedSince = existing.expired_at && snapshotAt && existing.expired_at > new Date(snapshotAt).toISOString();
+    if (source === 'aggregator' && existing.status === 'expired' && (existing.board_id || closedSince)) {
       return { id, created: false, changed: false, status: 'expired', duplicateOf: null };
     }
     const better = description.length > (existing.description?.length ?? 0);

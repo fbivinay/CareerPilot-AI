@@ -164,3 +164,15 @@ test('a description the job API cannot give is read off the job page, then the j
   assert.match(await describeJob(db, job, settings, refused, page), /4\+ years/);
   assert.equal((await one(db, 'SELECT status FROM jobs WHERE id = ?', [job.id])).status, 'excluded'); // judged again
 });
+
+test('an aggregator snapshot never reopens a posting closed after it was taken (2026-10-19)', async () => {
+  const db = await openDb({ url: ':memory:' });
+  const job = await upsertJob(db, posting({ url: 'https://jobs.elastic.co/jobs?gh_jid=8247206' }), { source: 'aggregator', settings });
+  await run(db, `UPDATE jobs SET status = 'expired', expired_at = '2026-10-19T08:34:00.000Z' WHERE id = ?`, [job.id]);
+  const again = posting({ url: 'https://jobs.elastic.co/jobs?gh_jid=8247206' });
+  // The 18 Oct snapshot still lists it: closed since, so it stays closed.
+  assert.equal((await upsertJob(db, again, { source: 'aggregator', settings, snapshotAt: '2026-10-18T12:59:08Z' })).status, 'expired');
+  assert.equal((await one(db, 'SELECT status FROM jobs WHERE id = ?', [job.id])).status, 'expired');
+  // A snapshot taken after the closure lists it again: it is back.
+  assert.notEqual((await upsertJob(db, again, { source: 'aggregator', settings, snapshotAt: '2026-10-20T12:00:00Z' })).status, 'expired');
+});
