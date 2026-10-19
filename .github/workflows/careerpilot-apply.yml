@@ -19,6 +19,10 @@ on:
         description: 'Submit (false = fill up to Review only)'
         type: boolean
         default: true
+      retry:
+        description: 'Also retry blocked applications'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -35,6 +39,7 @@ jobs:
       TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
       TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
       APP_ENCRYPTION_KEY: ${{ secrets.APP_ENCRYPTION_KEY }}
+      RETRY: ${{ inputs.retry && '--retry' || '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -64,7 +69,7 @@ jobs:
             echo "pending=0" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          pending=$(node scripts/auto-apply.mjs --pending | tail -n 1)
+          pending=$(node scripts/auto-apply.mjs --pending $RETRY | tail -n 1)
           echo "Applications queued: $pending"
           echo "pending=${pending:-0}" >> "$GITHUB_OUTPUT"
       - name: Restore browser
@@ -87,4 +92,4 @@ jobs:
           LIMIT: ${{ inputs.limit || '5' }}
           # Scheduled runs submit; a manual run submits unless told not to.
           SUBMIT: ${{ (github.event_name == 'schedule' || inputs.submit) && '--submit' || '' }}
-        run: node scripts/auto-apply.mjs $SUBMIT --limit "$LIMIT"
+        run: node scripts/auto-apply.mjs $SUBMIT $RETRY --limit "$LIMIT"

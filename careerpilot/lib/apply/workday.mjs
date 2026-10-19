@@ -351,7 +351,13 @@ async function choose(page, field, wants, scope = page, search = null) {
   debug('choose', field, { current, offered: texts.length, pick: texts[i] ?? null });
   // The field can show the choice with different spacing ("Second-Degree(ISCED 7" for "Second-Degree (ISCED 7").
   const same = (a, b) => String(a).replace(/\s+/g, '') === String(b).replace(/\s+/g, '');
-  if (i < 0 || same(texts[i], current)) { await page.keyboard.press('Escape'); return i < 0 ? { options: texts } : { chosen: current, options: texts }; }
+  if (i < 0) {
+    // How much of the list there was, for the stop reason (sizes only): GitHub's runners missed "India".
+    const size = await options.first().evaluate((el) => { const l = el.closest('[role="listbox"]'); return l ? `, list ${l.clientHeight}/${l.scrollHeight}px at ${l.scrollTop}` : ''; }).catch(() => '');
+    await page.keyboard.press('Escape');
+    return { options: texts, size: `${texts.length} options${size}` };
+  }
+  if (same(texts[i], current)) { await page.keyboard.press('Escape'); return { chosen: current, options: texts }; }
   await options.nth(i).scrollIntoViewIfNeeded();
   await options.nth(i).click();
   await page.waitForTimeout(400);
@@ -444,7 +450,7 @@ function employerNames(job, host) {
 // A required choice that could not be made: what the form offered instead (for the stop reason).
 // A field that is not on this employer's form at all ({missing}) is not a problem.
 const unmet = (label, r) => (r.chosen || r.missing ? null
-  : `${label} (offered: ${(r.options ?? []).filter((o) => !/^select one$/i.test(o)).slice(0, 12).join(', ')})`);
+  : `${label} (offered: ${(r.options ?? []).filter((o) => !/^select one$/i.test(o)).slice(0, 12).join(', ')}${r.size ? ` … ${r.size}` : ''})`);
 
 // Workday renders a step's sections one after another (later ones show grey placeholders first) and some
 // only when scrolled to: scroll through, then wait until the number of fields stops changing.

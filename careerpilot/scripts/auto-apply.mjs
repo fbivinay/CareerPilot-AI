@@ -38,7 +38,7 @@ if (process.argv.includes('--pending')) {
   const profile = await loadProfile(db);
   // What a run would attempt: the queue, within what today's daily limit still allows.
   console.log(profile && settings.automation.portalApplications
-    ? Math.min((await queue(db, settings, { answersKey: answersKeyOf(profile) })).jobs.length, await dailyBudget(db, settings)) : 0);
+    ? Math.min((await queue(db, settings, { retry: process.argv.includes('--retry'), answersKey: answersKeyOf(profile) })).jobs.length, await dailyBudget(db, settings)) : 0);
   process.exit(0);
 }
 const status = await connectionStatus(db);
