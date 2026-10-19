@@ -60,15 +60,20 @@ const TECH = ['tensorflow', 'pytorch', 'keras', 'scikit-learn', 'xgboost', 'ligh
   'hugging ?face', 'opencv', 'yolo', 'tableau', 'power bi', 'looker', 'mongodb', 'postgresql', 'mysql', 'oracle', 'java', 'scala',
   'c\\+\\+', 'golang', 'rust', 'javascript', 'typescript', 'react', 'node\\.?js', 'fastapi', 'flask', 'django', 'sas', 'spss', 'matlab',
   'elasticsearch', 'redis', 'cassandra', 'neo4j', 'pandas', 'numpy', 'fine-?tun\\w*', 'reinforcement learning', 'computer vision',
-  'pinecone', 'faiss', 'chromadb', 'weaviate', 'graphql', 'microservices', 'ci/cd', 'linux', 'excel'];
+  'pinecone', 'faiss', 'chromadb', 'weaviate', 'graphql', 'microservices', 'ci/cd', 'linux', 'excel',
+  'github actions', 'docker hub', 'ec2', 'cloudwatch', 'grafana', 'prometheus', 'datadog', 'langgraph', 'vector (search|database|store)s?'];
 // Roles and habits likewise: "building on my internship experience guiding junior contributors" (Synechron,
 // the same day) when no entry mentions mentoring or leading anyone. An aspiration ("grow my leadership
 // skills") is dropped too; the question is then left to the candidate.
 const ROLES = ['mentor\\w*', 'coach(?:ed|ing)', 'leadership', '(?:lead|leading|led) (?:\\w+ ){0,2}(?:teams?|projects?|initiatives?|groups?)',
   'manag(?:ed|ing) (?:\\w+ ){0,2}teams?', 'guid(?:ed|ing) (?:\\w+ ){0,2}(?:juniors?|interns?|teams?|members|contributors|colleagues)',
   'junior (?:contributors|colleagues|members|developers|engineers|analysts)', 'publish\\w*'];
+// A technology counts only where the profile shows it used (experience, projects, education), never the
+// skills list alone: "I containerized … with Docker … deployed them on an AWS EC2 instance … CloudWatch"
+// (Appzen, 2026-10-19), when Docker and AWS appear only among skills and that internship used neither.
 export function unclaimed(text, profile) {
-  const known = JSON.stringify(profile);
+  const { skills, ...shown } = profile ?? {};
+  const known = JSON.stringify(shown);
   const out = new Set();
   for (const sentence of String(text).split(/(?<=[.!?])\s+|\n+/)) {
     if (!/\b(i|my|me|i'm|i've)\b/i.test(sentence)) continue;

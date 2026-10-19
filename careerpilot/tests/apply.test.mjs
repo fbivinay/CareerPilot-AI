@@ -389,6 +389,11 @@ test('an open question is drafted from the job and profile only; a draft with an
   assert.equal(await ask('I will build on my internship experience guiding junior contributors.', 'Why this team?'), null);
   assert.equal(await ask('Acme will let me grow my leadership skills.', 'What do you hope to gain?'), null);
   assert.equal(await ask('I want to lead innovative projects at Acme.', 'Where do you see yourself?'), null);
+  // A listed skill is not a project that used it (Appzen's draft, the same day).
+  const skilled = { ...profile, skills: { devops: ['Docker', 'AWS (EC2, S3)'] }, projects: [{ name: 'Chatbot', stack: 'Python, FastAPI', points: ['A RAG chatbot.'] }] };
+  const askSkilled = (answer, question) => draftAnswer(db, { profile: skilled, job, question }, undefined, { env: { GROQ_API_KEY: 'g' }, fetchImpl: reply(answer) });
+  assert.equal(await askSkilled('I containerized the dashboard with Docker and deployed it on EC2.', 'How did you deploy it?'), null);
+  assert.equal(await askSkilled('I served the chatbot through FastAPI.', 'How was it served?'), 'I served the chatbot through FastAPI.');
 });
 
 test('a degree is matched to its own entry or its level’s bucket, never to another degree at that level', async () => {
