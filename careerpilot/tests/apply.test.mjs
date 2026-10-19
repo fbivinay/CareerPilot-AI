@@ -571,8 +571,12 @@ test('a bare "I confirm" under terms is ticked only for an employer whose terms 
   const { answerFor } = await import('../lib/apply/workday.mjs');
   const q = { label: 'Terms and Conditions: I confirm.', kind: 'checkbox', required: true };
   const answers = { terms_accepted: { novartis: '2026-10-19' } };
-  assert.deepEqual(answerFor(q, { profile: {}, answers, job: { company: 'Novartis' } }), { yes: true });
-  assert.equal(answerFor(q, { profile: {}, answers, job: { company: 'Acme' } }), undefined);
+  const at = (company, url) => answerFor(q, { profile: {}, answers, job: { company, url } });
+  assert.deepEqual(at('Novartis', 'https://novartis.wd3.myworkdayjobs.com/Novartis_Careers/job/X_1'), { yes: true });
+  // Keyed by the portal's tenant, not by a (scraped) company name; never by an object's built-in keys.
+  assert.equal(at('Novartis', 'https://acme.wd1.myworkdayjobs.com/careers/job/X_1'), undefined);
+  assert.equal(at('Novartis', 'https://novartis.wd3.myworkdayjobs.com.evil.example/job/X_1'), undefined);
+  assert.equal(answerFor(q, { profile: {}, answers: { terms_accepted: {} }, job: { company: 'Constructor', url: 'https://constructor.wd1.myworkdayjobs.com/c/job/X' } }), undefined);
 });
 
 test('a school missing from the list is the "Other" entry of the candidate\'s country, never another country\'s (Novartis, 2026-10-19)', async () => {

@@ -19,6 +19,15 @@ export function portalHost(url) {
   return host;
 }
 const onPortal = (page, host) => new URL(page.url()).hostname.toLowerCase() === host;
+// The candidate's answer for one employer (answers.terms_accepted, answers.heard_via), keyed by the Workday
+// tenant of the validated portal host ("novartis" in novartis.wd3.myworkdayjobs.com), never by a scraped
+// company name, and only from the map's own keys ("constructor" is no employer).
+export function forEmployer(map, ctx) {
+  let tenant;
+  try { tenant = (ctx.host ?? portalHost(ctx.job?.url ?? '')).split('.')[0]; } catch { return undefined; }
+  const v = map && Object.hasOwn(map, tenant) ? map[tenant] : undefined;
+  return v != null && String(v).trim() ? v : undefined;
+}
 
 // One account per employer portal, encrypted in the vault. Saved before the account is created, so a
 // crash after Workday accepted it never loses the password.
@@ -534,8 +543,8 @@ async function myInformation(page, ctx) {
   // say "other job board" where the employer's list has no site option; one CareerPilot found on the
   // employer's own board never claims a job board.
   const viaListings = job.source === 'aggregator';
-  // The candidate's own answer for an employer whose list has no site of its own (answers.heard_via, by company).
-  const theirs = answers.heard_via?.[String(job.company).toLowerCase()];
+  // The candidate's own answer for an employer whose list has no site of its own (answers.heard_via, by tenant).
+  const theirs = forEmployer(answers.heard_via, ctx);
   const wants = theirs ? [new RegExp(`^${escapeRe(theirs)}$`, 'i')]
     : [...sourceWants(names), ...(viaListings ? [/^other job ?board$/i, /^(online )?job ?board$/i] : [])];
   let source = await choose(page, 'source', [...wants, ...SOURCE_FALLBACK]); // a list shows everything at once
@@ -1421,9 +1430,9 @@ export function answerFor(question, ctx) {
   if (Array.isArray(custom)) return { option: custom.map(exact), text: custom.join(', ') };
   if (custom != null) return typeof custom === 'object' ? custom : { text: String(custom), option: [exact(custom)], ...yes(custom) && /^(yes|no|true|false)$/i.test(String(custom)) ? yes(custom) : {} };
   // Terms printed above a bare "I confirm" are not read here, so they are accepted only for an employer whose
-  // terms the candidate read and approved (answers.terms_accepted, by company; Novartis's include background
-  // and credit checks). Any other employer's go through the rules below.
-  if (/^terms and conditions: /i.test(question.label) && ctx.answers.terms_accepted?.[String(ctx.job?.company).toLowerCase()]) return { yes: true };
+  // terms the candidate read and approved (answers.terms_accepted, by Workday tenant; Novartis's include
+  // background and credit checks). Any other employer's go through the rules below.
+  if (/^terms and conditions: /i.test(question.label) && forEmployer(ctx.answers.terms_accepted, ctx)) return { yes: true };
   let label = question.label;
   let rule = QUESTION_RULES.find(([re]) => re.test(label));
   if (!rule && unwrap(label) !== label) { label = unwrap(label); rule = QUESTION_RULES.find(([re]) => re.test(label)); }
