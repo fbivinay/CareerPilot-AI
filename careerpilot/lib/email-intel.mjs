@@ -154,6 +154,24 @@ export function classifyEmail(msg, { ourThreadIds = new Set() } = {}) {
   return { category: 'other', confidence: 0.5 };
 }
 
+// Which of the candidate's own sent emails are about a job (the Email page tracks only those, their choice,
+// 2026-10-20): the subject names a job, a role or an application. Paper, conference and journal mail
+// ("Abstract Submission – CONFLUENCE-2026", "Application of ... – paper") is not.
+// ponytail: subject words only; a job email whose subject names none of them is missed.
+const JOB_SUBJECT = /\b(jobs?|positions?|roles?|openings?|vacanc(y|ies)|opportunit(y|ies)|applications?|applying|interns?|internships?|hiring|recruit\w*|resumes?|cv|candidature|interviews?|referrals?|careers?|analysts?|engineers?|scientists?|developers?)\b/i;
+const ACADEMIC_SUBJECT = /\b(abstracts?|papers?|manuscripts?|conferences?|journals?|proceedings|camera[- ]ready|reviewers?|editors?)\b/i;
+export const isJobEmail = (subject) => JOB_SUBJECT.test(subject ?? '') && !ACADEMIC_SUBJECT.test(subject ?? '');
+
+// The reply a sent email shows, of two ({category, at}): the later one, except that a plain reply never
+// hides an earlier decision (a "thanks, see you then" after an interview invitation).
+export const DECISIONS = ['assessment', 'interview', 'offer', 'rejection'];
+export function laterReply(a, b) {
+  if (!a) return b;
+  if (!b) return a;
+  const [older, newer] = String(a.at) <= String(b.at) ? [a, b] : [b, a];
+  return DECISIONS.includes(older.category) && !DECISIONS.includes(newer.category) ? older : newer;
+}
+
 const decode = (s) => String(s ?? '').replace(/&#39;|&apos;/g, "'").replace(/&amp;/g, '&').replace(/&quot;/g, '"');
 const clean = (s) => decode(s).replace(/[*_|]/g, ' ').replace(/\s+/g, ' ').trim();
 

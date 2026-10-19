@@ -44,6 +44,11 @@ for (const [i, s] of ['sent', 'sent', 'failed', 'unknown', 'bounced'].entries())
 for (const [i, [cat, review]] of [['interview', 0], ['rejection', 1], ['other', 1], ['ignored', 0]].entries()) {
   await run(db, `INSERT INTO emails (id, category, needs_review, processed_at, received_at) VALUES (?, ?, ?, ?, ?)`, [`e${i}`, cat, review, now, now]);
 }
+// The candidate's own job emails (the Email page): rejected, unanswered, answered.
+for (const [i, reply] of ['rejection', null, 'recruiter_reply'].entries()) {
+  await run(db, `INSERT INTO sent_mail (id, thread_id, to_addr, subject, sent_at, reply_category, reply_at, created_at) VALUES (?, ?, 'hr@x.in', 'Application', ?, ?, ?, ?)`,
+    [`sm${i}`, `smt${i}`, now, reply, reply && now, now]);
+}
 
 test('overview tiles equal their drill-down lists', async () => {
   const o = await q.overview();
@@ -58,6 +63,19 @@ test('overview tiles equal their drill-down lists', async () => {
   assert.equal(o.review, (await q.listEmails({ review: '1' })).total);
   assert.equal(o.pending, o.ready + o.blocked + o.failed + o.review + o.unknownSends);
   assert.ok(o.discovered > 0 && o.applied > 0 && o.interview > 0);
+});
+
+test('email page tiles equal their drill-down lists', async () => {
+  const { counts: c, total } = await q.sentEmails({});
+  assert.equal(total, c.all);
+  for (const by of ['you', 'careerpilot']) assert.equal(c[by], (await q.sentEmails({ by })).total, by);
+  for (const reply of ['replied', 'none', 'bounce', 'assessment', 'interview', 'offer', 'rejection', 'other']) {
+    assert.equal(c[reply], (await q.sentEmails({ reply })).total, reply);
+  }
+  assert.equal(c.you + c.careerpilot, c.all);
+  assert.equal(c.replied + c.none + c.bounce, c.all);
+  // Outreach that failed or was interrupted was never sent; the bounced one was.
+  assert.deepEqual([c.you, c.careerpilot, c.rejection, c.bounce, c.replied], [3, 3, 1, 1, 3]);
 });
 
 test('analytics funnel numbers equal their drill-down lists', async () => {

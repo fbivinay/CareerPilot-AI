@@ -90,6 +90,10 @@ export function createGmail({ clientId, clientSecret, refreshToken, fetchImpl = 
     async get(id) {
       return parseMessage(await api(`/messages/${id}?format=full`, 60));
     },
+    // The ids and labels of a conversation's messages, oldest first.
+    async thread(id) {
+      return (await api(`/threads/${id}?format=minimal`, 10)).messages ?? [];
+    },
     async send(message) {
       const raw = Buffer.from(buildMime(message)).toString('base64url');
       return api('/messages/send', 100, { method: 'POST', body: JSON.stringify({ raw, ...(message.threadId ? { threadId: message.threadId } : {}) }) });

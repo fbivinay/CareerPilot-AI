@@ -123,6 +123,20 @@ const SCHEMA = [
     processed_at TEXT NOT NULL
   )`,
   `CREATE INDEX IF NOT EXISTS emails_application ON emails(application_id)`,
+  // The candidate's own job emails (the Email page): the first one they sent in each conversation, and the
+  // reply it got (gmail-sync.mjs, syncSent and recordReply).
+  `CREATE TABLE IF NOT EXISTS sent_mail (
+    id TEXT PRIMARY KEY,
+    thread_id TEXT NOT NULL UNIQUE,
+    to_addr TEXT,
+    to_name TEXT,
+    subject TEXT,
+    sent_at TEXT,
+    reply_category TEXT,
+    reply_at TEXT,
+    reply_from TEXT,
+    created_at TEXT NOT NULL
+  )`,
   `CREATE TABLE IF NOT EXISTS events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     entity TEXT NOT NULL,

@@ -1,8 +1,10 @@
 // Read queries behind the dashboard. Every number shown links to the list these same filters produce,
 // so a statistic and its drill-down can never disagree. Everything shown is CareerPilot's own work
-// (SHOWN_*): the candidate's own applications and their mail are not (their choice, 2026-10-18).
+// (SHOWN_*): the candidate's own applications and their mail are not (their choice, 2026-10-18), except
+// on the Email page, which also lists the job emails they sent themselves (sentEmails, 2026-10-20).
 import { all, getDb, kvGet, one } from './db.mjs';
 import { APPLIED, QUALIFIED_JOB, SHOWN_APP, SHOWN_EMAIL, SHOWN_JOB } from './applications.mjs';
+import { DECISIONS, laterReply } from './email-intel.mjs';
 import { providerHealth } from './ai.mjs';
 import { loadProfile } from './profile.mjs';
 import { answerPack } from './prepare.mjs';
@@ -177,6 +179,40 @@ export async function listEmails(f) {
     WHERE ${w} ORDER BY e.received_at DESC LIMIT ? OFFSET ?`, [...args, PAGE_SIZE, (p - 1) * PAGE_SIZE]);
   const apps = await all(db, `SELECT a.id, j.company, j.title FROM applications a JOIN jobs j ON j.id = a.job_id WHERE ${SHOWN_APP} ORDER BY j.company LIMIT 500`);
   return { rows, total, page: p, apps };
+}
+
+// The Email page: job emails the candidate and CareerPilot sent, one row per conversation (follow-ups are
+// counted on their first email), each with the reply it got. ?by= you | careerpilot; ?reply= replied, none
+// or a replyGroup.
+const replyGroup = (r) => (!r.reply ? 'none' : ['bounce', ...DECISIONS].includes(r.reply.category) ? r.reply.category : 'other');
+export async function sentEmails(f = {}) {
+  const db = await getDb();
+  const [cp, replies, mine] = await Promise.all([
+    all(db, `SELECT o.id, o.gmail_thread_id thread_id, o.subject, o.sent_at, o.status, o.replied_at, c.email to_addr, c.name to_name, c.company,
+        (SELECT count(*) FROM outreach x WHERE x.followup_of = o.id AND x.status IN ('sent', 'bounced')) followups
+      FROM outreach o JOIN contacts c ON c.id = o.contact_id WHERE o.followup_of IS NULL AND o.status IN ('sent', 'bounced')`),
+    all(db, `SELECT thread_id, category, received_at at, coalesce(from_name, from_addr) sender FROM emails
+      WHERE category NOT IN ('ignored', 'other') AND thread_id IN (SELECT gmail_thread_id FROM outreach WHERE gmail_thread_id IS NOT NULL)`),
+    all(db, 'SELECT * FROM sent_mail'),
+  ]);
+  const byThread = new Map();
+  for (const e of replies) byThread.set(e.thread_id, laterReply(byThread.get(e.thread_id), { category: e.category, at: e.at, from: e.sender }));
+  const rows = [
+    ...cp.map((o) => ({ ...o, by: 'careerpilot', reply: o.status === 'bounced' ? { category: 'bounce', at: null }
+      : byThread.get(o.thread_id) ?? (o.replied_at ? { category: 'recruiter_reply', at: o.replied_at } : null) })),
+    ...mine.map((m) => ({ ...m, by: 'you', reply: m.reply_category ? { category: m.reply_category, at: m.reply_at, from: m.reply_from } : null })),
+  ].sort((a, b) => String(b.sent_at).localeCompare(String(a.sent_at)));
+  const counts = { all: rows.length, you: 0, careerpilot: 0, replied: 0, none: 0, bounce: 0, other: 0, ...Object.fromEntries(DECISIONS.map((d) => [d, 0])) };
+  for (const r of rows) {
+    const g = replyGroup(r);
+    counts[r.by]++;
+    counts[g]++;
+    if (g !== 'none' && g !== 'bounce') counts.replied++;
+  }
+  const shown = rows.filter((r) => (!f.by || r.by === f.by)
+    && (!f.reply || (f.reply === 'replied' ? !['none', 'bounce'].includes(replyGroup(r)) : replyGroup(r) === f.reply)));
+  const p = page(f.page);
+  return { rows: shown.slice((p - 1) * PAGE_SIZE, p * PAGE_SIZE), total: shown.length, page: p, counts };
 }
 
 const count = async (db, sql, args = []) => Number((await one(db, sql, args)).n);

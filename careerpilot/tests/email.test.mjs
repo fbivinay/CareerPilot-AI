@@ -2,7 +2,7 @@
 // automatic status changes: conditional phrasing, quoted replies, and polite rejections.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { classifyEmail, extractDetails, stripQuoted } from '../lib/email-intel.mjs';
+import { classifyEmail, extractDetails, isJobEmail, laterReply, stripQuoted } from '../lib/email-intel.mjs';
 import { createGmail, fromAuthenticated, parseMessage } from '../lib/gmail.mjs';
 
 const c = (subject, text, fromAddr = 'no-reply@us.greenhouse-mail.io', opts) => classifyEmail({ subject, text, fromAddr, threadId: 't1' }, opts);
@@ -135,5 +135,59 @@ test('Gmail sync reads every message since the checkpoint from every tab, not ju
   const r = await syncGmail(db, gmail, { ...DEFAULT_SETTINGS, timeline: null });
   assert.equal(r.processed, 450);
   assert.ok(queries.every((q) => !q.includes('category:')));
-  assert.ok(queries.every((q) => q.includes('-in:sent')), 'the candidate\'s sent mail is not read');
+  assert.ok(queries.every((q) => q.includes('-in:sent')), 'without the candidate\'s address the sent folder is not read');
+});
+
+test('the candidate’s job emails are told from their other sent mail by the subject', () => {
+  // Their real sent mail of 2026-10-18 and the weeks before: two job emails, then paper and conference mail.
+  for (const s of ['Reaching Out Regarding Job Opportunities', 'Application for MIS & Data Analytics Position', 'Resume - R Vinay Kumar',
+    'Data Scientist – R Vinay Kumar']) assert.ok(isJobEmail(s), s);
+  for (const s of ['Full Paper Submission – CONFLUENCE-2026 – Theme 5', 'Follow-up Regarding Abstract Acceptance – CONFLUENCE-2026 | Theme 5',
+    'Fwd: Registration Confirmed - 2nd International Conference 2026', 'Inquiry Regarding Manuscript EB-26-00661',
+    'Application of deep learning to crop yields – camera-ready paper', '']) assert.ok(!isJobEmail(s), s);
+  // A plain reply never hides an earlier decision; a later decision replaces it.
+  assert.equal(laterReply({ category: 'interview', at: '1' }, { category: 'recruiter_reply', at: '2' }).category, 'interview');
+  assert.equal(laterReply({ category: 'interview', at: '1' }, { category: 'rejection', at: '2' }).category, 'rejection');
+  assert.equal(laterReply(null, { category: 'recruiter_reply', at: '2' }).category, 'recruiter_reply');
+});
+
+test('the candidate’s own job emails are kept with their replies; CareerPilot’s sends and other sent mail are not', async () => {
+  const { openDb, all, run } = await import('../lib/db.mjs');
+  const { syncGmail } = await import('../lib/gmail-sync.mjs');
+  const { DEFAULT_SETTINGS } = await import('../lib/settings.mjs');
+  const db = await openDb({ url: ':memory:' });
+  const me = 'candidate@example.com';
+  const at = (h) => new Date(Date.UTC(2026, 9, 18, h)).toISOString();
+  await run(db, `INSERT INTO contacts (id, email, source_type, created_at) VALUES ('c1', 'hr@acme.in', 'jd', ?)`, [at(0)]);
+  await run(db, `INSERT INTO outreach (id, contact_id, kind, subject, body, status, gmail_message_id, gmail_thread_id, sent_at, created_at)
+    VALUES ('o1', 'c1', 'initial', 'Application for Data Analyst', 'b', 'sent', 'cp1', 'tcp', ?, ?)`, [at(1), at(1)]);
+  // A send interrupted before its Gmail id was kept: still CareerPilot's, known by subject and recipient.
+  await run(db, `INSERT INTO outreach (id, contact_id, kind, subject, body, status, created_at) VALUES ('o2', 'c1', 'application', 'Application for Data Engineer – R Vinay Kumar', 'b', 'unknown', ?)`, [at(1)]);
+  const subject = 'Application for MIS & Data Analytics Position';
+  const mail = {
+    cp1: { threadId: 'tcp', to: 'hr@acme.in', subject: 'Application for Data Analyst – R Vinay Kumar', date: at(1) }, // CareerPilot's
+    cp2: { threadId: 'tcp2', to: 'HR <hr@acme.in>', subject: 'Application for Data Engineer – R Vinay Kumar', date: at(1) }, // CareerPilot's, interrupted
+    s1: { threadId: 't1', to: '"Priya Rao" <priya@beta.io>', subject, date: at(2) },
+    s2: { threadId: 't2', to: 'editor@journal.org', subject: 'Inquiry Regarding Manuscript EB-26-00661', date: at(3) },
+    s3: { threadId: 't3', to: me, subject: 'CareerPilot: 2 blocked applications need you', date: at(4) }, // an alert to themselves
+    s4: { threadId: 't1', to: 'priya@beta.io', subject: `Re: ${subject}`, date: at(7) }, // their own follow-up in the conversation
+    r0: { threadId: 't1', fromAddr: 'priya@beta.io', fromName: 'Priya Rao', subject: `Re: ${subject}`, date: at(5),
+      text: 'We would like to invite you to an interview for the role. Please share your availability for next week.' },
+    r1: { threadId: 't1', fromAddr: 'priya@beta.io', fromName: 'Priya Rao', subject: `Re: ${subject}`, date: at(8), text: 'Thanks, noted.' },
+  };
+  // r0 arrived before the conversation was tracked and was set aside as unrelated mail; r1 is new.
+  await run(db, `INSERT INTO emails (id, category, processed_at) VALUES ('r0', 'ignored', ?)`, [at(6)]);
+  const gmail = {
+    listIds: async (q) => (q.includes('-in:sent') ? ['r1'] : ['s4', 's3', 's2', 's1', 'cp2', 'cp1']), // newest first
+    get: async (id) => ({ id, fromAddr: me, fromName: 'R Vinay Kumar', text: '', snippet: '', labelIds: [], ...mail[id] }),
+    thread: async (t) => Object.keys(mail).filter((id) => mail[id].threadId === t).map((id) => ({ id, labelIds: id.startsWith('r') ? ['INBOX'] : ['SENT'] })),
+  };
+  const r = await syncGmail(db, gmail, { ...DEFAULT_SETTINGS, timeline: null }, { me });
+  assert.equal(r.sentTracked, 1);
+  // The interview invitation is kept over the later plain reply.
+  assert.deepEqual((await all(db, 'SELECT * FROM sent_mail')).map((x) => [x.id, x.to_addr, x.to_name, x.reply_category, x.reply_from]),
+    [['s1', 'priya@beta.io', 'Priya Rao', 'interview', 'Priya Rao']]);
+  // Everything else is remembered by id only, and the reply is linked to nothing.
+  assert.deepEqual((await all(db, `SELECT id FROM emails WHERE category = 'ignored' AND subject IS NULL ORDER BY id`)).map((x) => x.id), ['cp2', 'r0', 'r1', 's2', 's3', 's4']);
+  assert.equal((await all(db, 'SELECT id FROM emails')).length, 6);
 });

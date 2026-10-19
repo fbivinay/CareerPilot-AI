@@ -3,10 +3,12 @@
 // automatically, queue ambiguous ones for review, record recruiter contacts and opt-outs, and turn
 // job-alert emails into discovered jobs. Mail about applications the candidate made themselves is
 // remembered by id only, so it is not fetched again. Idempotent: emails.id is the Gmail id.
+// The one exception: the candidate's own job emails and the replies to them are kept for the Email page
+// (sent_mail, their choice, 2026-10-20), apart from everything else and never linked to an application.
 import { all, audit, kvGet, kvSet, now, one, run } from './db.mjs';
 import { aiJson, AiUnavailable } from './ai.mjs';
 import { CAREERPILOT_APP, transition } from './applications.mjs';
-import { alertPlatform, applicationDetails, classifyEmail, extractDetails, parseJobAlert, platformSender, unwrap } from './email-intel.mjs';
+import { alertPlatform, applicationDetails, classifyEmail, extractDetails, isJobEmail, laterReply, parseJobAlert, platformSender, unwrap } from './email-intel.mjs';
 import { upsertJob } from './jobs.mjs';
 import { domainMatchesCompany, upsertContact } from './contacts.mjs';
 import { recordBounce } from './outreach.mjs';
@@ -132,8 +134,24 @@ async function aiClassify(db, msg, settings) {
   }
 }
 
-export async function processMessage(db, msg, settings, { ourThreadIds }) {
+// A reply in the conversation of one of the candidate's own job emails becomes that email's reply
+// (laterReply). Nothing else happens: they are not CareerPilot's applications.
+async function recordReply(db, msg) {
+  const row = await one(db, 'SELECT sent_at, reply_category, reply_at FROM sent_mail WHERE thread_id = ?', [msg.threadId]);
+  if (!row || !msg.date || msg.date <= row.sent_at) return;
+  const reply = { category: classifyEmail(msg, { ourThreadIds: new Set([msg.threadId]) }).category, at: msg.date };
+  if (laterReply(row.reply_category && { category: row.reply_category, at: row.reply_at }, reply) !== reply) return;
+  await run(db, 'UPDATE sent_mail SET reply_category = ?, reply_at = ?, reply_from = ? WHERE thread_id = ?',
+    [reply.category, reply.at, msg.fromName || msg.fromAddr || null, msg.threadId]);
+}
+
+export async function processMessage(db, msg, settings, { ourThreadIds, userThreadIds = new Set() }) {
   if (await one(db, 'SELECT 1 FROM emails WHERE id = ?', [msg.id])) return { skipped: true };
+  if (userThreadIds.has(msg.threadId)) {
+    await recordReply(db, msg);
+    await run(db, `INSERT INTO emails (id, category, processed_at) VALUES (?, 'ignored', ?)`, [msg.id, now()]);
+    return { category: 'own_reply', jobs: 0, transitioned: false, review: false };
+  }
   let cls = classifyEmail(msg, { ourThreadIds });
   let classifiedBy = 'rules';
   const details = extractDetails(msg);
@@ -224,25 +242,62 @@ async function storeEmail(db, msg, cls, { link, details, classifiedBy, review, k
   }
 }
 
-// The candidate's sent mail is not read: CareerPilot's own sends are tracked in the outreach table.
-export async function syncGmail(db, gmail, settings, { lookbackDays = 30, max = 5000, deadline = Infinity } = {}) {
+// The candidate's own job emails, for the Email page: the first one they sent in each conversation. Not
+// CareerPilot's sends (the outreach table has those), nor mail to themselves (CareerPilot's alerts), nor a
+// conversation CareerPilot started; other sent mail is remembered by id only. Replies that came before an
+// email was first seen are read from its conversation; later ones arrive through processMessage.
+async function syncSent(db, gmail, { me, after, max, deadline, ourThreadIds }) {
+  const ids = await gmail.listIds(`after:${after} in:sent`, max);
+  const marks = ids.map(() => '?').join(',') || "''";
+  const known = new Set((await all(db, `SELECT id FROM emails WHERE id IN (${marks}) UNION SELECT id FROM sent_mail WHERE id IN (${marks})`, [...ids, ...ids]))
+    .map((r) => r.id));
+  // CareerPilot's sends, by Gmail id, or by subject and recipient for one interrupted before its id was kept.
+  const ours = new Set((await all(db, 'SELECT o.gmail_message_id id, o.subject, lower(c.email) email FROM outreach o JOIN contacts c ON c.id = o.contact_id'))
+    .flatMap((r) => [r.id, `${r.subject}\n${r.email}`]));
+  const result = { tracked: 0, newest: null, cut: false };
+  for (const id of [...ids].reverse()) { // oldest first, so a conversation's first email is the one kept
+    if (known.has(id) || ours.has(id)) continue;
+    if (Date.now() > deadline) { result.cut = true; break; }
+    const msg = await gmail.get(id);
+    if (msg.date && (!result.newest || msg.date > result.newest)) result.newest = msg.date;
+    const raw = String(msg.to ?? '');
+    const to = raw.match(/[^\s<>",;:]+@[a-z0-9-]+(\.[a-z0-9-]+)+/i)?.[0].toLowerCase() ?? ''; // the first recipient
+    const toName = raw.includes('<') ? raw.split('<')[0].replace(/"/g, '').trim() : '';
+    if (to && to !== me && isJobEmail(msg.subject) && !ourThreadIds.has(msg.threadId) && !ours.has(`${msg.subject}\n${to}`)
+      && !(await one(db, 'SELECT 1 FROM sent_mail WHERE thread_id = ?', [msg.threadId]))) {
+      await run(db, 'INSERT INTO sent_mail (id, thread_id, to_addr, to_name, subject, sent_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        [id, msg.threadId, to, toName && !toName.includes('@') ? toName : null, msg.subject, msg.date, now()]);
+      result.tracked++;
+      for (const m of await gmail.thread(msg.threadId)) if (!m.labelIds?.includes('SENT')) await recordReply(db, await gmail.get(m.id));
+    } else await run(db, `INSERT INTO emails (id, category, processed_at) VALUES (?, 'ignored', ?)`, [id, now()]);
+  }
+  return result;
+}
+
+// `me` is the connected Gmail address: without it the sent folder is not read, since CareerPilot's alerts
+// to the candidate would look like job emails.
+export async function syncGmail(db, gmail, settings, { lookbackDays = 30, max = 5000, deadline = Infinity, me = null } = {}) {
+  const since = (last) => (last ? Math.floor(new Date(last).getTime() / 1000) - 3600 : Math.floor(Date.now() / 1000) - lookbackDays * 86400);
+  const ourThreadIds = new Set((await all(db, `SELECT gmail_thread_id t FROM outreach WHERE gmail_thread_id IS NOT NULL
+    UNION SELECT a.gmail_thread_id FROM applications a WHERE a.gmail_thread_id IS NOT NULL AND ${CAREERPILOT_APP}`)).map((r) => r.t));
+  const sent = me ? await syncSent(db, gmail, { me: me.toLowerCase(), after: since(await kvGet(db, 'gmail:last_sent_sync')), max, deadline, ourThreadIds }) : null;
+  if (sent?.newest && !sent.cut) await kvSet(db, 'gmail:last_sent_sync', sent.newest);
+  const userThreadIds = new Set((await all(db, 'SELECT thread_id t FROM sent_mail')).map((r) => r.t));
+
   const last = await kvGet(db, 'gmail:last_sync');
-  const after = last ? Math.floor(new Date(last).getTime() / 1000) - 3600 : Math.floor(Date.now() / 1000) - lookbackDays * 86400;
   // Gmail lists newest first, so a capped list silently skips the oldest mail: list everything since the
   // checkpoint (max is only a safety bound) and let the deadline limit the processing. Every tab is read;
   // Promotions and Social occasionally hold real job mail.
-  const ids = await gmail.listIds(`after:${after} -in:sent -in:chats -in:drafts`, max);
+  const ids = await gmail.listIds(`after:${since(last)} -in:sent -in:chats -in:drafts`, max);
   const known = new Set((await all(db, `SELECT id FROM emails WHERE id IN (${ids.map(() => '?').join(',') || "''"})`, ids)).map((r) => r.id));
-  const ourThreadIds = new Set((await all(db, `SELECT gmail_thread_id t FROM outreach WHERE gmail_thread_id IS NOT NULL
-    UNION SELECT a.gmail_thread_id FROM applications a WHERE a.gmail_thread_id IS NOT NULL AND ${CAREERPILOT_APP}`)).map((r) => r.t));
-  const stats = { listed: ids.length, processed: 0, alerts: 0, jobsFromAlerts: 0, transitions: 0, review: 0 };
+  const stats = { listed: ids.length, processed: 0, alerts: 0, jobsFromAlerts: 0, transitions: 0, review: 0, sentTracked: sent?.tracked ?? 0 };
   let newest = last;
   let cut = false;
   for (const id of [...ids].reverse()) {
     if (known.has(id)) continue;
     if (Date.now() > deadline) { cut = true; break; }
     const msg = await gmail.get(id);
-    const r = await processMessage(db, msg, settings, { ourThreadIds });
+    const r = await processMessage(db, msg, settings, { ourThreadIds, userThreadIds });
     stats.processed++;
     if (r.category === 'job_alert') { stats.alerts++; stats.jobsFromAlerts += r.jobs; }
     if (r.transitioned) stats.transitions++;
