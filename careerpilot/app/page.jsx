@@ -24,8 +24,8 @@ export default async function Overview() {
       <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
         <Stat label="Jobs tracked" value={o.discovered} to="/jobs?status=all" hint="All sources, duplicates merged" />
         <Stat label="Qualified" value={o.qualified} to="/jobs?status=qualified" hint={`${o.applied} applied · ${o.qualified - o.applied} to apply`} />
-        <Stat label="Ready to apply" value={o.ready} to="/applications?status=ready" hint="Waiting for your submit" />
-        <Stat label="Blocked" value={o.blocked} to="/applications?status=blocked" tone={o.blocked ? 'warn' : undefined} hint="Missing answers" />
+        <Stat label="Ready to apply" value={o.ready} to="/applications?status=ready" hint="CareerPilot submits these" />
+        <Stat label="Blocked" value={o.blocked} to="/applications?status=blocked" tone={o.blocked ? 'warn' : undefined} hint="Need you: CAPTCHA forms, answers" />
         <Stat label="Applied" value={o.applied} to="/applications?status=applied" hint="Submission proven" />
         <Stat label="Acknowledged" value={o.acknowledged} to="/applications?status=acknowledged" hint={`Employer replied · ${o.applied - o.acknowledged} not yet`} />
       </div>

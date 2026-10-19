@@ -37,7 +37,7 @@ if (!profile || !resume) throw new Error('Import your profile first: npm run set
 const settings = await getSettings(db);
 const apps = await all(db, `SELECT a.*, j.id job_id, j.url, j.title, j.company, j.location, j.source, j.description, j.employment_type
   FROM applications a JOIN jobs j ON j.id = a.job_id
-  WHERE a.status = 'ready' AND a.submitted_at IS NULL AND a.method = 'portal' AND j.url NOT LIKE '%.myworkdayjobs.com/%' ORDER BY j.score DESC LIMIT ?`, [limit]);
+  WHERE (a.status = 'ready' OR (a.status = 'blocked' AND a.blocked_reason LIKE 'CAPTCHA form%')) AND a.submitted_at IS NULL AND a.method = 'portal' AND j.url NOT LIKE '%.myworkdayjobs.com/%' ORDER BY j.score DESC LIMIT ?`, [limit]);
 if (!apps.length) { console.log('No portal applications are ready. Blocked ones list missing answers in the dashboard.'); process.exit(0); }
 
 const dir = mkdtempSync(path.join(tmpdir(), 'careerpilot-'));

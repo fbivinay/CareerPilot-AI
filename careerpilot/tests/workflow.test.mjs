@@ -350,3 +350,28 @@ test('email highlights match real skills, not filler words, and come from differ
   assert.match(picks[0], /^Wrote SQL queries/); // SQL beats a bullet full of "the/for/with"
   assert.match(picks[1], /^Forecaster/); // "Python." matches the stack, and the second pick is another source
 });
+
+test('Ready is what CareerPilot submits (Workday); a CAPTCHA form is blocked for the candidate, who is emailed once per reason', async () => {
+  const { nextStep, sendBlockedAlert, CAPTCHA_FORM } = await import('../lib/prepare.mjs');
+  const pack = { missing: [] };
+  assert.equal(nextStep({ url: 'https://acme.wd5.myworkdayjobs.com/External/job/Bengaluru/Data-Analyst_R1' }, pack).status, 'ready');
+  const gh = nextStep({ url: 'https://job-boards.greenhouse.io/acme/jobs/1' }, pack);
+  assert.equal(gh.status, 'blocked');
+  assert.ok(gh.reason.startsWith(CAPTCHA_FORM));
+  assert.equal(nextStep({ url: 'https://acme.wd5.myworkdayjobs.com/x/job/A_1' }, { missing: ['date_of_birth'] }).status, 'blocked');
+
+  const db = await openDb({ url: ':memory:' });
+  const { upsertJob } = await import('../lib/jobs.mjs');
+  const { DEFAULT_SETTINGS } = await import('../lib/settings.mjs');
+  const job = await upsertJob(db, { url: 'https://job-boards.greenhouse.io/acme/jobs/2', title: 'Data Analyst', company: 'Acme', location: 'Bengaluru',
+    description: 'Freshers welcome. Python, SQL.' }, { source: 'greenhouse', boardId: 'b1', settings: DEFAULT_SETTINGS });
+  const app = await createApplication(db, job.id, { method: 'portal', status: 'blocked', blockedReason: gh.reason });
+  const sent = [];
+  const gmail = { send: async (m) => { sent.push(m); return { id: 'm' }; } };
+  assert.deepEqual(await sendBlockedAlert(db, gmail, { to: 'me@example.com' }), { sent: 1 });
+  assert.match(sent[0].subject, /1 blocked application needs you/);
+  assert.match(sent[0].text, /Data Analyst at Acme[\s\S]*CAPTCHA form[\s\S]*greenhouse\.io\/acme\/jobs\/2/);
+  assert.deepEqual(await sendBlockedAlert(db, gmail, { to: 'me@example.com' }), { skipped: 'nothing new' }); // told once
+  await db.execute({ sql: 'UPDATE applications SET blocked_reason = ? WHERE id = ?', args: ['Needs you: a new question', app.id] });
+  assert.deepEqual(await sendBlockedAlert(db, gmail, { to: 'me@example.com' }), { sent: 1 }); // a new reason is news
+});

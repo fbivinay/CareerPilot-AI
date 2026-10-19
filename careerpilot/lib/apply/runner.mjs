@@ -37,12 +37,38 @@ async function pageDescription(browser, url) {
   }
 }
 
+// The applications a run would attempt, best first: Workday ones for qualified jobs, not left blocked on
+// the same answers, under the per-company limit. Read without a browser, so a scheduled run can stop in a
+// minute when nothing waits (scripts/auto-apply.mjs --pending).
+export async function queue(db, settings, { retry = false, only = null, perCompany = PER_COMPANY, answersKey = null } = {}) {
+  const rows = await all(db, `SELECT a.id app_id, a.status app_status, a.blocked_reason, j.* FROM applications a JOIN jobs j ON j.id = a.job_id
+    WHERE a.method = 'portal' AND j.status = 'qualified' AND j.score >= ?
+      AND (a.status = 'ready' OR (a.status = 'blocked' AND a.blocked_reason NOT LIKE 'Missing answers%'))
+    ORDER BY j.score DESC, coalesce(j.ai_score, 0) DESC, j.first_seen DESC`, [settings.matching.autoActionScore]);
+  const applied = new Map();
+  for (const r of await all(db, `SELECT j.company, count(*) n FROM applications a JOIN jobs j ON j.id = a.job_id
+    WHERE a.status IN ('submitted', 'confirmed', 'assessment', 'interview', 'offer') GROUP BY j.company`)) applied.set(companyKey(r.company), Number(r.n));
+  const jobs = [];
+  let capped = 0;
+  for (const job of rows) {
+    if (!isWorkday(job.url)) continue; // other portals have CAPTCHAs: the candidate submits them
+    if (only && !only.includes(companyKey(job.company))) continue;
+    const last = await kvGet(db, `apply:last:${job.app_id}`);
+    if (!retry && last && last.answersKey === answersKey && ['blocked', 'needs_you', 'unconfirmed'].includes(last.stop)) continue;
+    if ((applied.get(companyKey(job.company)) ?? 0) >= perCompany) { capped++; continue; }
+    jobs.push(job);
+  }
+  return { jobs, applied, capped };
+}
+
+export const answersKeyOf = (profile) => createHash('sha256').update(JSON.stringify(profile.answers ?? {})).digest('hex').slice(0, 16);
+
 export async function autoApply(db, settings, { launch, submit = false, limit = 5, deadline = Infinity, gmail = null, shots = null, retry = false, only = null, perCompany = PER_COMPANY, env = process.env } = {}) {
   if (!settings.automation.portalApplications) return { skipped: 'portal applications are turned off in Settings' };
   const profile = await loadProfile(db, env);
   const resume = await loadResumePdf(db, env);
   if (!profile || !resume) return { skipped: 'profile or resume not imported (npm run setup -- profile)' };
-  const answersKey = createHash('sha256').update(JSON.stringify(profile.answers ?? {})).digest('hex').slice(0, 16);
+  const answersKey = answersKeyOf(profile);
 
   const sentToday = Number((await one(db, `SELECT count(*) n FROM applications WHERE method = 'portal' AND submitted_at >= ?`, [todayIST()])).n);
   const budget = Math.min(limit, Math.max(0, settings.limits.portalApplicationsPerDay - sentToday));
@@ -50,13 +76,9 @@ export async function autoApply(db, settings, { launch, submit = false, limit = 
     skippedNoDescription: 0, requalifiedOut: 0, budget };
   if (!budget) return { ...stats, skipped: 'daily limit reached' };
 
-  const candidates = await all(db, `SELECT a.id app_id, a.status app_status, a.blocked_reason, j.* FROM applications a JOIN jobs j ON j.id = a.job_id
-    WHERE a.method = 'portal' AND j.status = 'qualified' AND j.score >= ?
-      AND (a.status = 'ready' OR (a.status = 'blocked' AND a.blocked_reason NOT LIKE 'Missing answers%'))
-    ORDER BY j.score DESC, coalesce(j.ai_score, 0) DESC, j.first_seen DESC`, [settings.matching.autoActionScore]);
-  const applied = new Map();
-  for (const r of await all(db, `SELECT j.company, count(*) n FROM applications a JOIN jobs j ON j.id = a.job_id
-    WHERE a.status IN ('submitted', 'confirmed', 'assessment', 'interview', 'offer') GROUP BY j.company`)) applied.set(companyKey(r.company), Number(r.n));
+  const { jobs: candidates, applied, capped } = await queue(db, settings, { retry, only, perCompany, answersKey });
+  stats.skippedCompanyCap = capped;
+  if (!candidates.length) return stats;
 
   const dir = mkdtempSync(path.join(tmpdir(), 'careerpilot-'));
   const resumePath = path.join(dir, `${profile.name.split(/\s+/).join('_')}_Resume.pdf`);
@@ -69,13 +91,9 @@ export async function autoApply(db, settings, { launch, submit = false, limit = 
   try {
     for (const job of candidates) {
       if (stats.attempted >= budget || Date.now() > deadline) break;
-      if (!isWorkday(job.url)) continue; // other portals are not automated yet
-      if (only && !only.includes(companyKey(job.company))) continue;
       stats.considered++;
-      const last = await kvGet(db, `apply:last:${job.app_id}`);
-      if (!retry && last && last.answersKey === answersKey && ['blocked', 'needs_you', 'unconfirmed'].includes(last.stop)) continue;
       const key = companyKey(job.company);
-      if ((applied.get(key) ?? 0) >= perCompany) { stats.skippedCompanyCap++; continue; }
+      if ((applied.get(key) ?? 0) >= perCompany) { stats.skippedCompanyCap++; continue; } // reached during this run
       // A job qualified without its description has unchecked experience and pay requirements: read the
       // description and judge the job again first (the pipeline's describe stage usually has already).
       if (!job.description) {

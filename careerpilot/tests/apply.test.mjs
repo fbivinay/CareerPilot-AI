@@ -429,8 +429,8 @@ test('blocking questions are counted across applications, most blocking first', 
 test('a number box must show the number typed', async () => {
   const { sameNumber } = await import('../lib/apply/workday.mjs');
   assert.ok(sameNumber('480,000', '480000'));
-  assert.ok(sameNumber('86181 87642', '8618187642'));
-  assert.ok(sameNumber('(86181) 87642', '8618187642'));
+  assert.ok(sameNumber('98765 43210', '9876543210'));
+  assert.ok(sameNumber('(98765) 43210', '9876543210'));
   assert.ok(sameNumber('8.08', '8.08'));
   assert.ok(!sameNumber('03', '0.3')); // Circles: a whole-number box dropped the point
   assert.ok(!sameNumber('', '480000'));
@@ -460,13 +460,13 @@ test('where the candidate lives, their degree, areas of interest and licences ar
 test('BambooHR-style questions (LJI, 2026-10-19) are answered from the profile; quizzes are not', async () => {
   const { answerFor } = await import('../lib/apply/workday.mjs');
   const profile = { name: 'A', location: 'Bengaluru, Karnataka', skills: { bi: ['Power BI', 'Tableau'] },
-    education: [{ degree: 'MSc in Big Data Analytics', institution: "St. Joseph's University, Bengaluru", dates: 'Aug 2025 - Jun 2027' },
+    education: [{ degree: 'MSc in Big Data Analytics', institution: "Example University, Bengaluru", dates: 'Aug 2025 - Jun 2027' },
       { degree: 'BSc in Statistics & Economics', institution: 'St. Aloysius University, Mangaluru' }],
     experience: [{ title: 'Data Intern', company: 'Acme, Bengaluru', dates: 'May 2026 - Jun 2026' }], projects: [{ name: 'P', stack: 'Python', points: ['x'] }] };
   const answers = { address_country: 'India', reason_for_leaving_last_role: 'Internship completed' };
   const ask = (label, kind = 'radio') => answerFor({ label, kind, required: true }, { profile, answers, job: { company: 'Lji' }, inIndia: true });
   assert.equal(ask('Province', 'text').text, 'Karnataka');
-  assert.equal(ask('College/University', 'text').text, "St. Joseph's University");
+  assert.equal(ask('College/University', 'text').text, 'Example University');
   assert.equal(ask('Your Stream of Graduation', 'text').text, 'Statistics & Economics');
   assert.match(ask('Total work experience', 'textarea').text, /^Fresher; internships: Data Intern at Acme \(May 2026 - Jun 2026\)$/);
   assert.match(ask('Current Employer', 'textarea').text, /^Not currently employed/);

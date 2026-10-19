@@ -44,7 +44,7 @@ test('job alerts and platform notices', () => {
 
 test('a reply quoting our outreach is judged on the reply, not on our opt-out line', () => {
   const ours = new Set(['t1']);
-  const reply = 'Hi Vinay, thanks for reaching out. Can you share your availability for a quick call on Tuesday?\n\nOn Mon, 19 Oct 2026 at 10:00, R Vinay Kumar <rvinaykumar6924@gmail.com> wrote:\n> Hello,\n> I came across the Data Analyst role...\n> If you would prefer not to hear from me again, just reply "unsubscribe".';
+  const reply = 'Hi Vinay, thanks for reaching out. Can you share your availability for a quick call on Tuesday?\n\nOn Mon, 19 Oct 2026 at 10:00, R Vinay Kumar <candidate@example.com> wrote:\n> Hello,\n> I came across the Data Analyst role...\n> If you would prefer not to hear from me again, just reply "unsubscribe".';
   assert.equal(c('Re: Data Analyst at Acme', reply, 'priya@acme.in', { ourThreadIds: ours }).category, 'interview');
   assert.equal(c('Re: Data Analyst at Acme', 'Thanks, we will keep your profile on file.\n\nOn Mon, 19 Oct 2026, R Vinay Kumar wrote:\n> ... reply "unsubscribe" ...', 'priya@acme.in', { ourThreadIds: ours }).category, 'recruiter_reply');
   assert.equal(c('Re: Data Analyst at Acme', 'Please unsubscribe me from these emails.', 'priya@acme.in', { ourThreadIds: ours }).category, 'opt_out');

@@ -49,7 +49,7 @@ means registering one in your own Google Cloud project, once (about 10 minutes).
 "CareerPilot" client would need Google's paid security assessment for Gmail scopes, so it is not an
 option at ₹0.
 
-**A. Register the client (once)**, at https://console.cloud.google.com signed in as **rvinaykumar6924@gmail.com**:
+**A. Register the client (once)**, at https://console.cloud.google.com signed in as **the Gmail account CareerPilot will use**:
 1. Create project `careerpilot` (no billing).
 2. https://console.cloud.google.com/apis/library/gmail.googleapis.com → **Enable**.
 3. https://console.cloud.google.com/auth/overview → **Get started**: app name `CareerPilot`, your email, Audience **External**.

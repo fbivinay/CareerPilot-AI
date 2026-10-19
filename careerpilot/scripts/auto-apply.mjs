@@ -5,6 +5,7 @@
 //   --limit N        at most N applications this run (default 5; the daily limit in Settings still applies)
 //   --retry          also retry applications blocked earlier with the same answers (after a code fix)
 //   --only a,b       only these companies (development)
+//   --pending        print how many applications a run would attempt, and exit (no browser)
 //   --past-company-limit   past the limit of 3 applications per company, for a run the candidate chose
 //                    (2026-10-19: a 4th at Amgen and HPE, a 4th and 5th at Barclays)
 //   --shots DIR      save a screenshot of every step (local debugging only: screenshots show your details)
@@ -16,7 +17,8 @@ import { chromium } from 'playwright';
 import { getDb, kvSet, now } from '../lib/db.mjs';
 import { getSettings } from '../lib/settings.mjs';
 import { connectionStatus, gmailClient } from '../lib/gmail-oauth.mjs';
-import { autoApply } from '../lib/apply/runner.mjs';
+import { answersKeyOf, autoApply, queue } from '../lib/apply/runner.mjs';
+import { loadProfile } from '../lib/profile.mjs';
 import { log } from '../lib/log.mjs';
 
 const envFile = path.resolve(import.meta.dirname, '..', '.env');
@@ -30,6 +32,13 @@ const deadline = Date.now() + Number(process.env.RUN_BUDGET_MINUTES ?? 30) * 60_
 
 const db = await getDb();
 const settings = await getSettings(db);
+// --pending: only print how many applications a run would attempt (no browser), so the scheduled workflow
+// skips installing one when nothing waits.
+if (process.argv.includes('--pending')) {
+  const profile = await loadProfile(db);
+  console.log(profile && settings.automation.portalApplications ? (await queue(db, settings, { answersKey: answersKeyOf(profile) })).jobs.length : 0);
+  process.exit(0);
+}
 const status = await connectionStatus(db);
 const gmail = status.canRead ? await gmailClient(db) : null; // reads Workday's account-verification emails
 // GitHub Actions has Playwright's own Chromium; a local run uses the installed Chrome.

@@ -44,13 +44,19 @@ export function answerPack(profile, job) {
 
 // What an application for this job needs next: 'blocked' when an answer is missing, otherwise 'ready'
 // with a note on how it gets submitted.
+export const CAPTCHA_FORM = 'CAPTCHA form';
+
 export function nextStep(job, pack) {
   if (pack.missing.length) {
     return { status: 'blocked', reason: `Missing answers: ${pack.missing.join(', ')} (fill them in private/profile.yml, then npm run setup -- profile)` };
   }
   const platform = job.source?.startsWith('alert:') ? job.source.slice(6) : null;
-  return { status: 'ready', reason: platform ? `Apply on ${platform}; job boards do not permit automated applications`
-    : 'Employer portal: submit yourself (consent declarations / CAPTCHA). Use the answer pack or npm run apply:assist' };
+  if (platform) return { status: 'ready', reason: `Apply on ${platform}; job boards do not permit automated applications` };
+  // Ready means CareerPilot submits it (Workday). Other portals carry a CAPTCHA, and Lever rejects any
+  // submit from an automated browser: those wait for the candidate, who is emailed (the candidate's
+  // choice, 2026-10-19).
+  return /\.myworkdayjobs\.com\//.test(job.url ?? '') ? { status: 'ready', reason: null }
+    : { status: 'blocked', reason: `${CAPTCHA_FORM}: CareerPilot cannot submit it. Get its answer sheet (or npm run apply:assist) and submit it yourself` };
 }
 
 export async function prepareApplications(db, settings, { env = process.env } = {}) {
@@ -80,7 +86,7 @@ export async function prepareApplications(db, settings, { env = process.env } = 
 
   // Applications this stage withdrew come back when their job qualifies again (rules or profile changed).
   // Ones the candidate withdrew themselves stay withdrawn.
-  const back = await all(db, `SELECT a.*, j.employment_type, j.source FROM applications a JOIN jobs j ON j.id = a.job_id
+  const back = await all(db, `SELECT a.*, j.employment_type, j.source, j.url FROM applications a JOIN jobs j ON j.id = a.job_id
     WHERE a.status = 'withdrawn' AND j.status = 'qualified'
       AND a.id IN (SELECT entity_id FROM events WHERE entity = 'application' AND to_status = 'withdrawn' AND detail LIKE '%"by":"system"%')
       AND a.id NOT IN (SELECT entity_id FROM events WHERE entity = 'application' AND to_status = 'withdrawn' AND detail LIKE '%"by":"candidate"%')`);
@@ -93,7 +99,7 @@ export async function prepareApplications(db, settings, { env = process.env } = 
   }
 
   // Applications blocked on answers you have since provided, and ones whose posting reopened.
-  const recheck = await all(db, `SELECT a.*, j.employment_type, j.source FROM applications a JOIN jobs j ON j.id = a.job_id
+  const recheck = await all(db, `SELECT a.*, j.employment_type, j.source, j.url FROM applications a JOIN jobs j ON j.id = a.job_id
     WHERE (a.status = 'blocked' AND a.blocked_reason LIKE 'Missing answers%') OR (a.status = 'expired' AND j.status = 'qualified')`);
   for (const app of recheck) {
     const step = nextStep(app, answerPack(profile, app));
@@ -108,13 +114,33 @@ export async function prepareApplications(db, settings, { env = process.env } = 
 }
 
 // Once a day, email the candidate a summary of what needs them. Uses the same gmail.send scope.
+// An email as soon as applications need the candidate (a CAPTCHA form, missing answers, a question only they
+// can answer), so nothing waits unseen while the rest is applied to automatically (the candidate's choice,
+// 2026-10-19). Each blocked application is reported once per reason.
+export async function sendBlockedAlert(db, gmail, { to, env = process.env } = {}) {
+  if (!to) return { skipped: 'connected mailbox unknown' };
+  const told = await kvGet(db, 'notify:blocked', {});
+  const rows = await all(db, `SELECT a.id, a.blocked_reason, j.title, j.company, j.url FROM applications a JOIN jobs j ON j.id = a.job_id
+    WHERE a.status IN ('blocked', 'failed') AND ${SHOWN_APP} ORDER BY a.updated_at`);
+  const fresh = rows.filter((r) => told[r.id] !== (r.blocked_reason ?? ''));
+  if (!fresh.length) return { skipped: 'nothing new' };
+  const s = fresh.length > 1 ? 's' : '';
+  const lines = [`CareerPilot could not finish ${fresh.length} application${s}; ${fresh.length > 1 ? 'they need' : 'it needs'} you:`, '',
+    ...fresh.flatMap((r) => [`- ${r.title} at ${r.company}`, `  ${r.blocked_reason ?? 'Blocked'}`, `  ${r.url}`, '']),
+    'Everything else is applied to automatically. The dashboard lists every blocked application (Overview → Blocked).'];
+  if (env.CAREERPILOT_DRY_RUN === '1') return { dryRun: true, wouldSend: fresh.length };
+  await gmail.send({ to, subject: `CareerPilot: ${fresh.length} blocked application${s} need${s ? '' : 's'} you`, text: lines.join('\n') });
+  await kvSet(db, 'notify:blocked', Object.fromEntries(rows.map((r) => [r.id, r.blocked_reason ?? ''])));
+  return { sent: fresh.length };
+}
+
 export async function sendDigest(db, gmail, settings, { to, env = process.env } = {}) {
   const today = now().slice(0, 10);
   if ((await kvGet(db, 'digest:last')) === today) return { skipped: 'already sent today' };
   if (!to) return { skipped: 'connected mailbox unknown' };
   // CareerPilot's own work only (the candidate's choice, 2026-10-18).
   const ready = await all(db, `SELECT j.title, j.company, j.url, a.status, a.blocked_reason FROM applications a JOIN jobs j ON j.id = a.job_id
-    WHERE a.status IN ('ready', 'blocked', 'failed') AND ${SHOWN_APP} ORDER BY j.score DESC LIMIT 25`);
+    WHERE a.status IN ('blocked', 'failed') AND ${SHOWN_APP} ORDER BY j.score DESC LIMIT 25`); // ready ones CareerPilot submits itself
   const review = await all(db, `SELECT e.subject, e.from_addr, e.category FROM emails e WHERE e.needs_review = 1 AND e.reviewed = 0 AND ${SHOWN_EMAIL}
     ORDER BY e.received_at DESC LIMIT 15`);
   const upcoming = await all(db, `SELECT e.subject, e.extracted FROM emails e WHERE e.category IN ('interview', 'assessment') AND e.received_at >= ? AND ${SHOWN_EMAIL}

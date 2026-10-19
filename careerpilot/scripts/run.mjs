@@ -14,7 +14,7 @@ import { aiScoreJobs } from '../lib/ai-match.mjs';
 import { GmailAuthError } from '../lib/gmail.mjs';
 import { connectionStatus, gmailClient, markAuthFailure } from '../lib/gmail-oauth.mjs';
 import { syncGmail } from '../lib/gmail-sync.mjs';
-import { prepareApplications, sendDigest } from '../lib/prepare.mjs';
+import { prepareApplications, sendBlockedAlert, sendDigest } from '../lib/prepare.mjs';
 import { runOutreach } from '../lib/outreach.mjs';
 import { log } from '../lib/log.mjs';
 
@@ -49,7 +49,9 @@ const STAGES = {
   gmail: needsGmail((db, settings) => syncGmail(db, gmail, settings, { deadline: deadline - 90_000 })),
   prepare: (db, settings) => prepareApplications(db, settings),
   outreach: needsSending((db, settings) => runOutreach(db, gmail, settings, { deadline: deadline - 60_000 })),
-  digest: needsSending((db, settings) => sendDigest(db, gmail, settings, { to: gmailStatus.email })),
+  // Blocked applications are emailed on every run; the digest goes once a day.
+  digest: needsSending(async (db, settings) => ({ blocked: await sendBlockedAlert(db, gmail, { to: gmailStatus.email }),
+    digest: await sendDigest(db, gmail, settings, { to: gmailStatus.email }) })),
 };
 
 async function main() {
