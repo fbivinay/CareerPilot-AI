@@ -152,7 +152,11 @@ const prettyCompany = (slug) => String(slug).replace(/[-_]\d+$/, '').replace(/[-
 export async function sweepAggregator(db, settings, { fetchImpl = fetch, minHours = 20 } = {}) {
   const last = await kvGet(db, 'aggregator:last_sweep');
   if (last && Date.now() - new Date(last).getTime() < minHours * 36e5) return { skipped: true };
-  const meta = await (await fetchImpl(`${AGGREGATOR}/metadata.json`)).json();
+  // The aggregator is one source among several: when it answers with an error page instead of JSON (an HTML
+  // page on 2026-10-19 failed the whole discover stage), this sweep is skipped and the board scans still run.
+  const metaRes = await fetchImpl(`${AGGREGATOR}/metadata.json`).catch(() => null);
+  const meta = metaRes?.ok ? await metaRes.json().catch(() => null) : null;
+  if (!meta) return { skipped: true, reason: `aggregator metadata unavailable (HTTP ${metaRes?.status ?? 'none'})` };
   if (meta.last_updated && meta.last_updated === (await kvGet(db, 'aggregator:dataset_version'))) {
     await kvSet(db, 'aggregator:last_sweep', now());
     return { skipped: true, reason: 'dataset unchanged' };
@@ -161,10 +165,12 @@ export async function sweepAggregator(db, settings, { fetchImpl = fetch, minHour
   const seenAll = new Set();
   const knownBoards = new Set((await all(db, 'SELECT id FROM boards')).map((b) => b.id));
   for (let i = 0; ; i++) {
-    const res = await fetchImpl(`${AGGREGATOR}/chunks/jobs_chunk_${i}.json.gz`);
-    if (res.status === 404) break;
-    if (!res.ok) throw new Error(`aggregator chunk ${i}: HTTP ${res.status}`);
-    const rows = JSON.parse(gunzipSync(Buffer.from(await res.arrayBuffer())).toString('utf8'));
+    const res = await fetchImpl(`${AGGREGATOR}/chunks/jobs_chunk_${i}.json.gz`).catch(() => null);
+    if (res?.status === 404) break;
+    // An incomplete sweep expires nothing and is not recorded as done: the next run tries again.
+    let rows = null;
+    if (res?.ok) { try { rows = JSON.parse(gunzipSync(Buffer.from(await res.arrayBuffer())).toString('utf8')); } catch { /* not a chunk */ } }
+    if (!rows) return { ...stats, incomplete: `chunk ${i}: ${res ? `HTTP ${res.status}` : 'no response'}${res?.ok ? ', not a JSON chunk' : ''}` };
     stats.chunks++;
     const matched = [];
     for (const r of rows) {

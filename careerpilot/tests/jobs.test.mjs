@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { all, one, openDb, run } from '../lib/db.mjs';
 import { describeMissing, expireMissing, reevaluateAll, touchKnown, upsertJob } from '../lib/jobs.mjs';
-import { boardFromPostingUrl, placesFilter } from '../lib/discover.mjs';
+import { boardFromPostingUrl, placesFilter, sweepAggregator } from '../lib/discover.mjs';
 import { locationNarrowing } from '../../providers/workday.mjs';
 import { createApplication } from '../lib/applications.mjs';
 import { DEFAULT_SETTINGS as settings } from '../lib/settings.mjs';
@@ -10,6 +10,22 @@ import { DEFAULT_SETTINGS as settings } from '../lib/settings.mjs';
 const posting = (over = {}) => ({
   url: 'https://jobs.lever.co/acme/1111', title: 'Junior Data Scientist', company: 'Acme',
   location: 'Bengaluru', description: 'Freshers welcome. Python, SQL.', ...over,
+});
+
+test('an aggregator error page skips the sweep instead of failing discovery, and an incomplete sweep expires nothing', async () => {
+  const db = await openDb({ url: ':memory:' });
+  const html = () => new Response('<!DOCTYPE html><html>Service unavailable</html>', { status: 200, headers: { 'content-type': 'text/html' } });
+  // The 2026-10-19 failure: metadata.json answered with an HTML page.
+  assert.equal((await sweepAggregator(db, settings, { fetchImpl: async () => html() })).skipped, true);
+  assert.equal((await sweepAggregator(db, settings, { fetchImpl: async () => new Response('down', { status: 503 }) })).skipped, true);
+  assert.equal((await sweepAggregator(db, settings, { fetchImpl: async () => { throw new TypeError('fetch failed'); } })).skipped, true);
+  // A live aggregator job, then a chunk that is an error page: nothing expires, and the sweep is not done.
+  await upsertJob(db, posting({ url: 'https://jobs.lever.co/acme/2222' }), { source: 'aggregator', settings });
+  const meta = () => new Response(JSON.stringify({ last_updated: 'v2' }), { status: 200 });
+  const r = await sweepAggregator(db, settings, { fetchImpl: async (u) => (/metadata/.test(u) ? meta() : html()) });
+  assert.match(r.incomplete, /chunk 0/);
+  assert.equal((await one(db, "SELECT status FROM jobs WHERE url = 'https://jobs.lever.co/acme/2222'")).status !== 'expired', true);
+  assert.equal(await one(db, "SELECT value FROM kv WHERE key = 'aggregator:last_sweep'"), undefined);
 });
 
 test('upsert is idempotent and keys on the canonical URL', async () => {
