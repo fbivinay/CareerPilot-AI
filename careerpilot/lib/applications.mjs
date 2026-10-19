@@ -16,10 +16,13 @@ import { all, audit, now, one, run } from './db.mjs';
 export const CAREERPILOT_APP = `a.method IN ('portal', 'email')`;
 // What the dashboard lists: the ones it queued, and the ones it sent itself (Workday) or filled for the
 // candidate to submit (apply-assist, on forms with a CAPTCHA). A queued portal application the candidate
-// then sent on their own (confirmed, but never submitted or filled by CareerPilot) is theirs. A posting
-// that closed before it was applied to is not shown at all (the candidate's choice, 2026-10-19); the
-// row stays, so the scanners and de-duplication still know it.
+// then sent on their own (confirmed, but never submitted or filled by CareerPilot) is theirs; one sent from
+// CareerPilot's answer sheet is its work (evidence "answer_sheet": Lever rejects any submit from an automated
+// browser, so the candidate pastes CareerPilot's answers into their own, 2026-10-19). A posting that closed
+// before it was applied to is not shown at all (the candidate's choice, 2026-10-19); the row stays, so the
+// scanners and de-duplication still know it.
 export const SHOWN_APP = `((a.method = 'email' OR a.evidence LIKE '%"type":"workday"%' OR a.evidence LIKE '%"type":"confirmation_page"%'
+  OR a.evidence LIKE '%"type":"answer_sheet"%'
   OR (a.method = 'portal' AND a.status IN ('ready','blocked','failed','withdrawn'))) AND a.status != 'expired')`;
 // Jobs CareerPilot found, not ones recorded from the candidate's own application mail, nor closed ones
 // unless CareerPilot applied there: an application does not vanish when its posting closes.
