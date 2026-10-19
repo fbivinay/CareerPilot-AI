@@ -3,17 +3,25 @@
 # run starts this workflow, which waits 30 minutes in the careerpilot-timer environment (a wait timer:
 # no runner is held while it waits) and then starts the pipeline again. Each new tick replaces a waiting
 # one, so while scheduled runs do fire this never fires; it only fills in when they stop.
+# Every pipeline run also starts a backstop tick, which waits 15 minutes longer and is replaced the same
+# way. It fires only when no pipeline run has started since (a start failed, or a run never got a runner),
+# and then starts the pipeline and itself again, so a stopped chain restarts itself every 45 minutes.
 # Off switch: gh workflow disable careerpilot-tick.yml
 name: careerpilot-tick
 
 on:
   workflow_dispatch:
+    inputs:
+      backstop:
+        description: 'Backstop: fires 15 minutes after the clock unless a newer pipeline run replaces it'
+        type: boolean
+        default: false
 
 permissions:
   actions: write # to start careerpilot-pipeline
 
 concurrency:
-  group: careerpilot-tick
+  group: ${{ inputs.backstop && 'careerpilot-backstop' || 'careerpilot-tick' }}
   cancel-in-progress: true
 
 jobs:
@@ -24,4 +32,13 @@ jobs:
       - name: Start the pipeline
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh workflow run careerpilot-pipeline.yml --repo "$GITHUB_REPOSITORY"
+          BACKSTOP: ${{ inputs.backstop }}
+        # The pipeline first: the backstop it re-arms afterwards replaces (cancels) this run.
+        run: |
+          retry() { for try in 1 2 3 4 5; do "$@" && return; sleep 60; done; return 1; }
+          if [ "$BACKSTOP" = true ]; then sleep 900; fi
+          retry gh workflow run careerpilot-pipeline.yml --repo "$GITHUB_REPOSITORY" || failed=1
+          if [ "$BACKSTOP" = true ]; then
+            retry gh workflow run careerpilot-tick.yml --repo "$GITHUB_REPOSITORY" -f backstop=true
+          fi
+          exit "${failed:-0}"
