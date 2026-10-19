@@ -523,7 +523,10 @@ async function myInformation(page, ctx) {
   // say "other job board" where the employer's list has no site option; one CareerPilot found on the
   // employer's own board never claims a job board.
   const viaListings = job.source === 'aggregator';
-  const wants = [...sourceWants(names), ...(viaListings ? [/^other job ?board$/i, /^(online )?job ?board$/i] : [])];
+  // The candidate's own answer for an employer whose list has no site of its own (answers.heard_via, by company).
+  const theirs = answers.heard_via?.[String(job.company).toLowerCase()];
+  const wants = theirs ? [new RegExp(`^${escapeRe(theirs)}$`, 'i')]
+    : [...sourceWants(names), ...(viaListings ? [/^other job ?board$/i, /^(online )?job ?board$/i] : [])];
   let source = await choose(page, 'source', [...wants, ...SOURCE_FALLBACK]); // a list shows everything at once
   if (source.missing) { // a search box instead of a dropdown: its top level first (HPE lists "HPE Career site"
     // only there), then the employer's own name, which finds its site
