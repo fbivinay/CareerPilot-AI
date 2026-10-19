@@ -86,3 +86,18 @@ test('job detail and application detail load for every listed row', async () => 
   for (const j of (await q.listJobs({ status: 'all' })).rows) assert.ok(await q.getJob(j.id), j.id);
   for (const a of (await q.listApplications({})).rows) assert.ok(await q.getApplication(a.id), a.id);
 });
+
+test('a read retries once on a passing server error; a write never retries', async () => {
+  const { all, one } = await import('../lib/db.mjs');
+  const flaky = (failures) => {
+    let calls = 0;
+    return { calls: () => calls, execute: async () => { calls++; if (calls <= failures) throw Object.assign(new Error('SERVER_ERROR'), { cause: { status: 502 } }); return { rows: [{ n: 1 }] }; } };
+  };
+  const db1 = flaky(1);
+  assert.deepEqual(await all(db1, 'SELECT 1 n'), [{ n: 1 }]);
+  assert.equal(db1.calls(), 2);
+  const db2 = flaky(1);
+  await assert.rejects(() => one(db2, 'UPDATE jobs SET status = ? RETURNING id', ['x']), /SERVER_ERROR/);
+  assert.equal(db2.calls(), 1);
+  await assert.rejects(() => all(flaky(2), 'SELECT 1'), /SERVER_ERROR/); // only once
+});

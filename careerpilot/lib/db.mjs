@@ -168,12 +168,25 @@ export async function getDb() {
 
 export const now = () => new Date().toISOString();
 
+// A read retries once on a passing server error (Turso answered 502 to the dashboard for a minute on
+// 2026-10-19); a write never does, since it may already have gone through.
+const transient = (err) => [502, 503, 504].includes(err?.cause?.status);
+export async function read(db, sql, args = []) {
+  try {
+    return await db.execute({ sql, args });
+  } catch (err) {
+    if (!transient(err) || !/^\s*(select|with)\b/i.test(sql)) throw err;
+    await new Promise((r) => setTimeout(r, 700));
+    return db.execute({ sql, args });
+  }
+}
+
 export async function all(db, sql, args = []) {
-  return (await db.execute({ sql, args })).rows;
+  return (await read(db, sql, args)).rows;
 }
 
 export async function one(db, sql, args = []) {
-  return (await db.execute({ sql, args })).rows[0];
+  return (await read(db, sql, args)).rows[0];
 }
 
 export async function run(db, sql, args = []) {

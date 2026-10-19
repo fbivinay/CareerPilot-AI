@@ -297,7 +297,7 @@ export function best(texts, wants) {
 
 // Single-choice dropdown: opens it and picks the best option. It always reports what was on offer, so
 // the trail shows the choice in context and a stop reason can say what the form wanted.
-async function choose(page, field, wants, scope = page) {
+async function choose(page, field, wants, scope = page, search = null) {
   const button = scope.locator(`${F(field)} button[aria-haspopup="listbox"]`).first();
   if (!(await button.count())) return { missing: true };
   const current = (await button.innerText()).trim();
@@ -314,8 +314,26 @@ async function choose(page, field, wants, scope = page) {
     last = n;
     await page.waitForTimeout(400);
   }
-  const texts = (await options.allInnerTexts()).map((t) => t.replace(/\s+/g, ' ').trim());
-  const i = best(texts, wants);
+  const read = async () => (await options.allInnerTexts()).map((t) => t.replace(/\s+/g, ' ').trim());
+  let texts = await read();
+  let i = best(texts, wants);
+  // A long list renders only the options in view (2026-10-19: PwC's Country stopped at "Aruba", SLI's
+  // sources at "Radio advertising"). Type the answer when it is known, to jump to it, then scroll through
+  // the list until a wanted option appears or nothing new does.
+  if (i < 0 && search) {
+    await page.keyboard.type(String(search), { delay: 80 });
+    await page.waitForTimeout(700);
+    texts = await read();
+    i = best(texts, wants);
+  }
+  for (let step = 0; i < 0 && step < 40 && texts.length; step++) {
+    await options.last().scrollIntoViewIfNeeded().catch(() => {});
+    await page.waitForTimeout(300);
+    const more = await read();
+    if (more.join('\n') === texts.join('\n')) break; // the end of the list
+    texts = more;
+    i = best(texts, wants);
+  }
   debug('choose', field, { current, offered: texts.length, pick: texts[i] ?? null });
   // The field can show the choice with different spacing ("Second-Degree(ISCED 7" for "Second-Degree (ISCED 7").
   const same = (a, b) => String(a).replace(/\s+/g, '') === String(b).replace(/\s+/g, '');
@@ -1363,7 +1381,7 @@ async function applyAnswer(page, q, a) {
     : a.yes ? [/^(yes|i agree|agree|i consent|i accept|accept|i acknowledge|acknowledge|opt-?in)\b/i, /^by (checking|ticking|selecting) (this|the) box\b(?!.*\b(do not|don'?t)\b)/i]
       : [/^(no|i do not|i don't|do not|disagree|decline|i will not|opt-?out)\b/i, /\b(do not|don'?t) (consent|agree|wish)\b/i];
   switch (q.kind) {
-    case 'dropdown': return choose(page, q.field, wantsYesNo ?? a.option ?? [new RegExp(`^${escapeRe(a.text ?? '')}$`, 'i')]);
+    case 'dropdown': return choose(page, q.field, wantsYesNo ?? a.option ?? [new RegExp(`^${escapeRe(a.text ?? '')}$`, 'i')], page, a.search ?? null);
     case 'date': return { chosen: (await setDate(page, page, q.field, a.date)) ? 'date set' : undefined };
     case 'text': case 'textarea': {
       // A yes/no question in a text box: "No" as it is; a "yes" there usually owes details ("If yes, please
