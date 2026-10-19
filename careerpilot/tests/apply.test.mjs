@@ -299,7 +299,11 @@ test('Barclays, Mastercard, Maersk, ICF, US Bank, Mobility, PwC and RELX questio
   assert.deepEqual(fr('The Institution where you completed your highest education qualification is located in which State?', ['Assam', 'Karnataka']), ['Karnataka']);
   assert.deepEqual(fr('The Institution where you completed your highest education qualification is located in which Country?', ['India', 'Nepal']), ['India']);
   assert.deepEqual(ask('Are you comfortable working from office or at client location?', 'dropdown', 'Fractal'), { yes: true });
-  assert.deepEqual(ask('Have you undergone any prior evaluation at Fractal or any of its entities in the form of test / interview (online or offline) in the last 6 months ?', 'dropdown', 'Fractal'), { yes: false });
+  // Applied there already (another role), never tested or interviewed: still no prior evaluation.
+  const evaluated = (evaluatedHere) => answerFor({ label: 'Have you undergone any prior evaluation at Fractal or any of its entities in the form of test / interview (online or offline) in the last 6 months ?', kind: 'dropdown', required: true },
+    { profile, answers, job: { company: 'Fractal' }, inIndia: true, appliedHere: true, evaluatedHere });
+  assert.deepEqual(evaluated(false), { yes: false });
+  assert.equal(evaluated(true), undefined);
   assert.deepEqual(ask('Please select "Yes" or "No" to indicate whether you have completed Fractal Data Science Professional Certificate. If the answer is yes, please attach the certificate.', 'dropdown', 'Fractal'), { yes: false });
   const role = answerFor({ label: 'Please select the role you are applying for', kind: 'dropdown', required: true },
     { profile, answers, job: { company: 'Fractal', title: 'Data Scientist (Computer Vision)' }, inIndia: true });

@@ -1175,7 +1175,7 @@ const QUESTION_RULES = [
   [/\bcomfortable working from (the )?office\b|\bwork(ing)? (from|at) (the )?(office|client location)\b/i,
     (c) => ((c.answers.work_arrangements ?? []).some((k) => /on.?site|office/i.test(k)) ? { yes: true } : undefined)],
   [/\bprior evaluation\b|\b(tests?|interviews?)\b.{0,60}\b(last|past) \d+ months\b/i,
-    (c) => (c.appliedHere === false && c.answers.previously_interviewed === false ? { yes: false } : undefined)],
+    (c) => (c.evaluatedHere === false && c.answers.previously_interviewed === false ? { yes: false } : undefined)],
   [/\b(completed|hold)\b.{0,60}\b(fractal data science professional certificate|analytics vidhya'?s? black belt)/i, (c) => yes(c.answers.fractal_av_certificates)],
   // Marketing opt-ins are never given: a tick box stays unticked and a required yes/no is answered no. A
   // required consent to the employer's terms or privacy notice is ticked (the candidate authorized both
@@ -1386,7 +1386,11 @@ export async function askContext(db, job, profile) {
   const appliedHere = Number(tracked?.n) > 0 || (Array.isArray(named) && named.some((n) => norm(n) === norm(job.company))) ? true
     : named == null ? undefined : false;
   const inIndia = /india|bengaluru|bangalore|hyderabad|pune|chennai|mumbai|delhi|gurgaon|gurugram|noida|kolkata/i.test(`${job.location ?? ''} ${job.url}`);
-  return { profile, answers, job, inIndia, appliedHere };
+  // Evaluated (tested or interviewed) by this employer: an application of CareerPilot's that got that far.
+  // Applying is not being evaluated (Fractal asks about tests and interviews).
+  const evaluated = await one(db, `SELECT count(*) n FROM applications a JOIN jobs j ON j.id = a.job_id WHERE lower(j.company) = lower(?)
+    AND a.status IN ('assessment', 'interview', 'offer')`, [job.company]);
+  return { profile, answers, job, inIndia, appliedHere, evaluatedHere: Number(evaluated?.n) > 0 };
 }
 
 // Runs the application up to Review; submits only when dryRun is false. Returns
@@ -1397,7 +1401,7 @@ export async function applyWorkday({ page, job, profile, resumePath, photoPath =
   const host = portalHost(job.url);
   const answers = profile.answers ?? {};
   const trail = [];
-  const { appliedHere, inIndia } = await askContext(db, job, profile);
+  const { appliedHere, evaluatedHere, inIndia } = await askContext(db, job, profile);
   const usable = (a) => a && (a.state === 'active' || a.state === 'unverified');
   // Signs in (when an account exists), then opens the application. Returns where it landed, or a stop.
   const begin = async () => {
@@ -1473,7 +1477,7 @@ export async function applyWorkday({ page, job, profile, resumePath, photoPath =
       return explore ? { stop: 'explored', step, fields: await formFields(page), errors: await pageErrors(page), trail }
         : { stop: 'blocked', step, reason: `The "${step}" step is not automated yet`, trail };
     }
-    const result = await fill(page, { profile, answers, job, host, resumePath, inIndia, draft, appliedHere });
+    const result = await fill(page, { profile, answers, job, host, resumePath, inIndia, draft, appliedHere, evaluatedHere });
     if (photoPath && (await uploadPhoto(page, photoPath))) result.photo = true;
     trail.push({ step, ...result });
     await shot(`filled-${step}`);
