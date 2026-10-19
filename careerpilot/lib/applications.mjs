@@ -16,11 +16,13 @@ import { all, audit, now, one, run } from './db.mjs';
 export const CAREERPILOT_APP = `a.method IN ('portal', 'email')`;
 // What the dashboard lists: the ones it queued, and the ones it sent itself (Workday) or filled for the
 // candidate to submit (apply-assist, on forms with a CAPTCHA). A queued portal application the candidate
-// then sent on their own (confirmed, but never submitted or filled by CareerPilot) is theirs.
-export const SHOWN_APP = `(a.method = 'email' OR a.evidence LIKE '%"type":"workday"%' OR a.evidence LIKE '%"type":"confirmation_page"%'
-  OR (a.method = 'portal' AND a.status IN ('ready','blocked','failed','expired','withdrawn')))`;
-// Jobs CareerPilot found, not ones recorded from the candidate's own application mail.
-export const SHOWN_JOB = `j.source NOT LIKE 'email%'`;
+// then sent on their own (confirmed, but never submitted or filled by CareerPilot) is theirs. A posting
+// that closed before it was applied to is not shown at all (the candidate's choice, 2026-10-19); the
+// row stays, so the scanners and de-duplication still know it.
+export const SHOWN_APP = `((a.method = 'email' OR a.evidence LIKE '%"type":"workday"%' OR a.evidence LIKE '%"type":"confirmation_page"%'
+  OR (a.method = 'portal' AND a.status IN ('ready','blocked','failed','withdrawn'))) AND a.status != 'expired')`;
+// Jobs CareerPilot found, not ones recorded from the candidate's own application mail, nor closed ones.
+export const SHOWN_JOB = `(j.source NOT LIKE 'email%' AND j.status != 'expired')`;
 // Mail about CareerPilot's work: linked to an application the dashboard shows, in a thread CareerPilot
 // started, or waiting for review because it could be about one of several of its applications. `e` is emails.
 export const SHOWN_EMAIL = `(e.application_id IN (SELECT a.id FROM applications a JOIN jobs j ON j.id = a.job_id WHERE ${SHOWN_APP})

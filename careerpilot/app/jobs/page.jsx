@@ -12,7 +12,7 @@ export default async function Jobs({ searchParams }) {
       <PageHeader title="Jobs" sub="Qualified jobs passed every rule; “Needs review” means pay or experience is not stated in the posting." />
       <Filters base="/jobs" params={params} fields={[
         { name: 'q', label: 'Search', placeholder: 'Title, company, city' },
-        { name: 'status', label: 'Status', default: 'qualified', options: [['qualified', 'Qualified'], ['all', 'All tracked'], ['excluded', 'Excluded'], ['expired', 'Expired'], ['duplicate', 'Duplicates']] },
+        { name: 'status', label: 'Status', default: 'qualified', options: [['qualified', 'Qualified'], ['all', 'All tracked'], ['excluded', 'Excluded'], ['duplicate', 'Duplicates']] },
         { name: 'category', label: 'Role', options: [['', 'All roles'], ...Object.entries(ROLE_LABELS)] },
         { name: 'type', label: 'Type', options: [['', 'All'], ['full_time', 'Full-time'], ['internship', 'Internship'], ['contract', 'Contract']] },
         { name: 'location', label: 'Location', options: [['', 'All India'], ['bengaluru', 'Bengaluru'], ['remote', 'Remote']] },
