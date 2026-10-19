@@ -1,8 +1,12 @@
+import { applyUrl } from '@/lib/prefill.mjs';
 import { listApplications } from '@/lib/queries.mjs';
 import { A, Badge, DropButton, Filters, PageHeader, Pager, ROLE_LABELS, Table, Td, fmtDate } from '../_ui/kit.jsx';
 import { dropJobAction } from '../actions.js';
 
 export const dynamic = 'force-dynamic';
+
+// The page with the application form (Lever's /apply, Ashby's /application); a URL it cannot read is linked as is.
+const formUrl = (url) => { try { return applyUrl(url); } catch { return url; } };
 
 const STATUS_OPTIONS = [['', 'All'], ['applied', 'Applied (any outcome)'], ['pending', 'Needs you (ready/blocked/failed)'], ['ready', 'Ready to apply'],
   ['blocked', 'Blocked'], ['failed', 'Failed'], ['submitted', 'Submitted'], ['confirmed', 'Confirmed'], ['responded', 'Heard back'],
@@ -25,7 +29,8 @@ export default async function Applications({ searchParams }) {
         {rows.map((a) => (
           <tr key={a.id} className="hover:bg-surface-2">
             <Td><A to={`/companies/${encodeURIComponent(a.company)}`}>{a.company}</A></Td>
-            <Td className="max-w-xs"><A to={`/applications/${a.id}`}>{a.title}</A>{a.blocked_reason && <div className="text-xs text-ink-3">{a.blocked_reason}</div>}</Td>
+            <Td className="max-w-xs"><A to={`/applications/${a.id}`}>{a.title}</A>{a.blocked_reason && <div className="text-xs text-ink-3">{a.blocked_reason}</div>}
+              {['ready', 'blocked', 'failed'].includes(a.status) && <div className="text-xs"><A to={formUrl(a.url)} external>Open form</A></div>}</Td>
             <Td><Badge value={a.status} />{['ready', 'blocked', 'failed'].includes(a.status) && <DropButton jobId={a.job_id} action={dropJobAction} />}</Td>
             <Td className="text-xs text-ink-2">{a.method}</Td>
             <Td className="whitespace-nowrap text-xs">{fmtDate(a.submitted_at)}</Td>
