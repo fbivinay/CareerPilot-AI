@@ -87,12 +87,13 @@ export function workdayLink(apps, msg) {
 // name CareerPilot knows it by (Greenhouse's "Mico" for the micoworks board, 2026-10-20): among the
 // applications on that platform, the one whose company starts with that name is meant.
 // ponytail: a name prefix on one platform; keep each board's display name if two employers ever collide.
-const PLATFORM_BOARDS = [[/greenhouse(-mail)?\.io$/i, 'greenhouse.io'], [/lever\.co$/i, 'lever.co'], [/ashbyhq\.com$/i, 'ashbyhq.com']];
+const PLATFORM_BOARDS = [[/(^|\.)greenhouse(-mail)?\.io$/i, 'greenhouse.io'], [/(^|\.)lever\.co$/i, 'lever.co'], [/(^|\.)ashbyhq\.com$/i, 'ashbyhq.com']];
+const onDomain = (h, d) => h === d || String(h ?? '').endsWith(`.${d}`);
 function boardNamed(apps, msg, stated) {
-  const board = PLATFORM_BOARDS.find(([re]) => re.test(String(msg.fromAddr ?? '').split('@')[1] ?? ''))?.[1];
+  const board = platformSender(msg.fromAddr) && PLATFORM_BOARDS.find(([re]) => re.test(String(msg.fromAddr ?? '').split('@')[1] ?? ''))?.[1];
   const k = companyKey(stated.company).replace(/ /g, '');
   if (!board || k.length < 3) return null;
-  const hits = apps.filter((a) => host(a.url)?.endsWith(board) && companyKey(a.company).replace(/ /g, '').startsWith(k));
+  const hits = apps.filter((a) => onDomain(host(a.url), board) && companyKey(a.company).replace(/ /g, '').startsWith(k));
   return hits.length === 1 ? { ...hits[0], how: 'platform name' } : hits.length ? { ambiguous: true, company: hits[0].company, how: 'several boards on platform' } : null;
 }
 

@@ -471,6 +471,9 @@ test('a hiring platform’s confirmation naming the employer by its own name con
   const r = await processMessage(db, mail, settings, { ourThreadIds: new Set() });
   assert.equal(r.transitioned, true);
   assert.equal((await one(db, 'SELECT status FROM applications WHERE id = ?', [mico])).status, 'confirmed');
+  // A look-alike of the platform's domain is not the platform.
+  const fake = await processMessage(db, { ...mail, id: 'g0', threadId: 'g0', fromAddr: 'no-reply@notgreenhouse-mail.io' }, settings, { ourThreadIds: new Set() });
+  assert.deepEqual([fake.transitioned, fake.review], [false, false]);
   // Two applications that could be meant go to review instead.
   await app('Micoworks Japan', 'https://job-boards.greenhouse.io/micoworksjp/jobs/2');
   await app('Micosoft', 'https://job-boards.greenhouse.io/micosoft/jobs/3');
