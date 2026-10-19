@@ -420,3 +420,13 @@ test('blocking questions are counted across applications, most blocking first', 
     ['Field of study for MSc in Big Data Analytics', 1],
   ]);
 });
+
+test('a number box must show the number typed', async () => {
+  const { sameNumber } = await import('../lib/apply/workday.mjs');
+  assert.ok(sameNumber('480,000', '480000'));
+  assert.ok(sameNumber('86181 87642', '8618187642'));
+  assert.ok(sameNumber('(86181) 87642', '8618187642'));
+  assert.ok(sameNumber('8.08', '8.08'));
+  assert.ok(!sameNumber('03', '0.3')); // Circles: a whole-number box dropped the point
+  assert.ok(!sameNumber('', '480000'));
+});

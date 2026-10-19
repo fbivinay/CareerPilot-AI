@@ -249,6 +249,11 @@ const F = (name) => `[data-automation-id="formField-${name}"]`;
 
 // The question's text box: its textarea when it has one (a block can also hold other inputs, and
 // Playwright's first() means first in the page, not first in the selector).
+// Whether a number box shows the number typed. Workday may group thousands ("480,000") or format a phone
+// number, but a box that takes whole numbers drops the point without a word: "0.3" became "03", three
+// years of experience (Circles, 2026-10-19; caught on the Review page).
+export const sameNumber = (shown, value) => Number(String(shown).replace(/[^\d.]/g, '')) === Number(value);
+
 async function setText(page, field, value, scope = page) {
   const group = scope.locator(F(field)).first();
   const area = group.locator('textarea');
@@ -263,6 +268,14 @@ async function setText(page, field, value, scope = page) {
     await input.press('Delete');
     await input.pressSequentially(String(value), { delay: 5 });
     await input.press('Tab');
+    if (!isArea && !sameNumber(await input.inputValue().catch(() => ''), value)) {
+      // Cleared and left unanswered, never sent as another number.
+      await input.click();
+      await input.press('Control+A');
+      await input.press('Delete');
+      await input.press('Tab');
+      return false;
+    }
   } else if ((await input.inputValue()) !== String(value)) {
     await input.fill(String(value));
     await input.press('Tab');
