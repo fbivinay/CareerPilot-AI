@@ -295,6 +295,29 @@ export function best(texts, wants) {
   return -1;
 }
 
+// A long list renders only some of its options (2026-10-19: PwC's Country stopped at "Aruba", SLI's
+// sources at "Radio advertising"), and on GitHub's runners scrolling the last one into view loaded no
+// more. Scrolls with the mouse wheel over the list, as a person does, half a list at a time, and gives
+// it two seconds to load more before taking it as complete.
+async function scrollFor(page, options, read, texts, wants, steps) {
+  let i = best(texts, wants);
+  for (let step = 0; i < 0 && step < steps && texts.length; step++) {
+    const box = await options.first().boundingBox();
+    if (!box) break;
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.wheel(0, Math.max(1, Math.floor(texts.length / 2)) * box.height);
+    let more = texts;
+    for (let t = 0; t < 8 && more.join('\n') === texts.join('\n'); t++) {
+      await page.waitForTimeout(250);
+      more = await read();
+    }
+    if (more.join('\n') === texts.join('\n')) break; // the end of the list
+    texts = more;
+    i = best(texts, wants);
+  }
+  return { texts, i };
+}
+
 // Single-choice dropdown: opens it and picks the best option. It always reports what was on offer, so
 // the trail shows the choice in context and a stop reason can say what the form wanted.
 async function choose(page, field, wants, scope = page, search = null) {
@@ -317,23 +340,14 @@ async function choose(page, field, wants, scope = page, search = null) {
   const read = async () => (await options.allInnerTexts()).map((t) => t.replace(/\s+/g, ' ').trim());
   let texts = await read();
   let i = best(texts, wants);
-  // A long list renders only the options in view (2026-10-19: PwC's Country stopped at "Aruba", SLI's
-  // sources at "Radio advertising"). Type the answer when it is known, to jump to it, then scroll through
-  // the list until a wanted option appears or nothing new does.
+  // Type the answer when it is known, to jump to it, then scroll through the list.
   if (i < 0 && search) {
     await page.keyboard.type(String(search), { delay: 80 });
     await page.waitForTimeout(700);
     texts = await read();
     i = best(texts, wants);
   }
-  for (let step = 0; i < 0 && step < 40 && texts.length; step++) {
-    await options.last().scrollIntoViewIfNeeded().catch(() => {});
-    await page.waitForTimeout(300);
-    const more = await read();
-    if (more.join('\n') === texts.join('\n')) break; // the end of the list
-    texts = more;
-    i = best(texts, wants);
-  }
+  ({ texts, i } = await scrollFor(page, options, read, texts, wants, 40));
   debug('choose', field, { current, offered: texts.length, pick: texts[i] ?? null });
   // The field can show the choice with different spacing ("Second-Degree(ISCED 7" for "Second-Degree (ISCED 7").
   const same = (a, b) => String(a).replace(/\s+/g, '') === String(b).replace(/\s+/g, '');
@@ -385,18 +399,9 @@ async function pick(page, field, search, wants, scope = page) {
     return kept ? { chosen: selected[best(selected, wants)] } : { options: selected };
   }
   const read = async () => (await options.allInnerTexts()).map((t) => t.replace(/\s+/g, ' ').trim());
-  let texts = await read();
-  let i = best(texts, wants);
-  // Some prompts ignore the typed text and list everything, rendering only what is in view (PwC's
-  // Citizenship Status, 2026-10-19: Afghanistan to Anguilla): scroll until a wanted option appears.
-  for (let step = 0; i < 0 && step < 60 && texts.length; step++) {
-    await options.last().scrollIntoViewIfNeeded().catch(() => {});
-    await page.waitForTimeout(300);
-    const more = await read();
-    if (more.join('\n') === texts.join('\n')) break; // the end of the list
-    texts = more;
-    i = best(texts, wants);
-  }
+  // Some prompts ignore the typed text and list everything (PwC's Citizenship Status, 2026-10-19:
+  // Afghanistan to Anguilla): scroll until a wanted option appears.
+  const { texts, i } = await scrollFor(page, options, read, await read(), wants, 60);
   debug('pick', field, `"${search}"`, { offered: texts.slice(0, 8), pick: texts[i] ?? null });
   if (i < 0) { await closePopup(page); return { options: texts.slice(0, 15) }; }
   await options.nth(i).click();
