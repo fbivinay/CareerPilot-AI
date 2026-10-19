@@ -65,6 +65,12 @@ export async function queue(db, settings, { retry = false, only = null, perCompa
   return { jobs, applied, capped };
 }
 
+// How many more portal applications today allows: India's day, the daily limit in Settings.
+export async function dailyBudget(db, settings) {
+  const sentToday = Number((await one(db, `SELECT count(*) n FROM applications WHERE method = 'portal' AND submitted_at >= ?`, [todayIST()])).n);
+  return Math.max(0, settings.limits.portalApplicationsPerDay - sentToday);
+}
+
 export const answersKeyOf = (profile) => createHash('sha256').update(JSON.stringify(profile.answers ?? {})).digest('hex').slice(0, 16);
 
 export async function autoApply(db, settings, { launch, submit = false, limit = 5, deadline = Infinity, gmail = null, shots = null, retry = false, only = null, perCompany = PER_COMPANY, env = process.env } = {}) {
@@ -74,8 +80,7 @@ export async function autoApply(db, settings, { launch, submit = false, limit = 
   if (!profile || !resume) return { skipped: 'profile or resume not imported (npm run setup -- profile)' };
   const answersKey = answersKeyOf(profile);
 
-  const sentToday = Number((await one(db, `SELECT count(*) n FROM applications WHERE method = 'portal' AND submitted_at >= ?`, [todayIST()])).n);
-  const budget = Math.min(limit, Math.max(0, settings.limits.portalApplicationsPerDay - sentToday));
+  const budget = Math.min(limit, await dailyBudget(db, settings));
   const stats = { considered: 0, attempted: 0, submitted: 0, review: 0, blocked: 0, needsYou: 0, errors: 0, skippedCompanyCap: 0,
     skippedNoDescription: 0, requalifiedOut: 0, budget };
   if (!budget) return { ...stats, skipped: 'daily limit reached' };

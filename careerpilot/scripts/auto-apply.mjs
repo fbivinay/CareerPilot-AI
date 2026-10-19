@@ -17,7 +17,7 @@ import { chromium } from 'playwright';
 import { getDb, kvSet, now } from '../lib/db.mjs';
 import { getSettings } from '../lib/settings.mjs';
 import { connectionStatus, gmailClient } from '../lib/gmail-oauth.mjs';
-import { answersKeyOf, autoApply, queue } from '../lib/apply/runner.mjs';
+import { answersKeyOf, autoApply, dailyBudget, queue } from '../lib/apply/runner.mjs';
 import { loadProfile } from '../lib/profile.mjs';
 import { log } from '../lib/log.mjs';
 
@@ -36,7 +36,9 @@ const settings = await getSettings(db);
 // skips installing one when nothing waits.
 if (process.argv.includes('--pending')) {
   const profile = await loadProfile(db);
-  console.log(profile && settings.automation.portalApplications ? (await queue(db, settings, { answersKey: answersKeyOf(profile) })).jobs.length : 0);
+  // What a run would attempt: the queue, within what today's daily limit still allows.
+  console.log(profile && settings.automation.portalApplications
+    ? Math.min((await queue(db, settings, { answersKey: answersKeyOf(profile) })).jobs.length, await dailyBudget(db, settings)) : 0);
   process.exit(0);
 }
 const status = await connectionStatus(db);
