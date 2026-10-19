@@ -18,6 +18,7 @@ on:
 
 permissions:
   contents: read
+  actions: write # to start careerpilot-apply when applications are queued
 
 concurrency:
   group: careerpilot-pipeline
@@ -66,3 +67,17 @@ jobs:
             exit 0
           fi
           node scripts/run.mjs "$STAGES"
+      # GitHub delays scheduled runs under load and drops some (two on 2026-10-19), so the pipeline starts
+      # the apply workflow itself as soon as applications are queued, rather than leaving it to its own cron.
+      - name: Start applying if anything is queued
+        working-directory: careerpilot
+        env:
+          TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+          TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+          APP_ENCRYPTION_KEY: ${{ secrets.APP_ENCRYPTION_KEY }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -z "$TURSO_DATABASE_URL" ]; then exit 0; fi
+          pending=$(node scripts/auto-apply.mjs --pending | tail -n 1)
+          echo "Applications queued: $pending"
+          if [ "${pending:-0}" != "0" ]; then gh workflow run careerpilot-apply.yml; fi
