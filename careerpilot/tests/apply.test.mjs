@@ -65,6 +65,10 @@ test('employer questions are answered only from the profile, in the unit they as
   assert.deepEqual(ask('Yes, I have read and consent to the terms and conditions', 'checkbox'), { yes: true });
   assert.deepEqual(ask('Terms and Conditions: I Agree', 'checkbox'), { yes: true }); // Circles: Workday's terms field, as read
   assert.equal(ask('I Agree', 'checkbox'), undefined); // an "I Agree" anywhere else says nothing about what is agreed
+  // Terms that give up rights or reach beyond the employer go to the candidate, however they are worded.
+  assert.equal(ask('Terms and Conditions: I agree to resolve disputes by binding arbitration', 'checkbox'), undefined);
+  assert.equal(ask('I consent to the privacy notice and to sharing my data with third-party partners', 'checkbox'), undefined);
+  assert.equal(ask('I accept the terms and waive any claim against the company', 'checkbox'), undefined);
   assert.equal(ask('I agree to receive job alerts and marketing emails', 'checkbox'), undefined);
   assert.ok(ask('Veteran Status').option[0].test('I do not wish to self-identify'));
   assert.deepEqual(dateRange('May 2026 - Jun 2026'), [{ month: 5, year: 2026 }, { month: 6, year: 2026 }]);

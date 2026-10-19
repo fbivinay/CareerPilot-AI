@@ -1185,8 +1185,11 @@ const QUESTION_RULES = [
   // Also a required "I have read the Privacy Notice" (Dentsu) or "… understand how my information will be
   // processed" (Visa), and a required consent to the tool the employer runs its hiring process with
   // (Logitech's automated interview scheduling).
+  // Never, whatever the box calls itself: giving up rights (arbitration, waivers, releases, indemnities)
+  // or consent beyond the employer's own use (third parties, partners, background or credit checks).
   [/\b(consent|agree|acknowledge|accept)\b.*\b(terms|conditions|privacy|policy|notice)\b|\b(terms|privacy)\b.*\b(consent|agree|accept)|\b(have read|reading|read and understood)\b.*\b(privacy|terms|notice|policy)\b|\bhow (my|your) (personal )?(information|data) (will be|is|are) (processed|used|handled)\b|automated (interview )?scheduling|scheduling (system|tool|assistant)/i,
-    (c) => (c.required && ['checkbox', 'dropdown', 'radio'].includes(c.kind) ? { yes: true } : undefined)],
+    (c) => (c.required && ['checkbox', 'dropdown', 'radio'].includes(c.kind)
+      && !/\b(arbitrat|waiv|releas|indemnif|third.part|partners?\b|background|credit)/i.test(c.label) ? { yes: true } : undefined)],
   // Consent to share the application with the employer itself (AllianceBernstein, under its Terms and
   // Conditions); never with third parties, partners or for marketing.
   [/^(?!.*\b(third.part\w*|partners?|affiliates?|vendors?|advertis\w*|marketing)\b).*\bconsent\b.{0,20}\bshar(e|ing)\b.{0,30}\b(information|data)\b.{0,10}\bwith\b/i,
@@ -1246,8 +1249,10 @@ const readQuestions = (page) => page.$$eval('[data-automation-id^="formField-"]'
     : g.querySelector('input[type=checkbox]') ? 'checkbox'
     : g.querySelector('input') ? 'text' : 'other';
   const field = g.getAttribute('data-automation-id').replace(/^formField-/, '');
-  // Workday's own terms field may say only "I Agree", the terms printed above it (Circles).
-  const named = field === 'acceptTermsAndAgreements' && !/terms|privacy|polic/i.test(label) ? `Terms and Conditions: ${label}` : label;
+  // Workday's own terms field may say only "I Agree", the terms printed above it (Circles). Only a bare
+  // agreement is named so; any other label is read as written.
+  const named = field === 'acceptTermsAndAgreements' && /^\s*(yes,?\s*)?(i\s+)?(agree|accept|acknowledge|consent)\.?\s*\*?\s*$/i.test(label)
+    ? `Terms and Conditions: ${label}` : label;
   return { field, label: named.replace(/\s*\*$/, ''), required: /\*$/.test(label), kind };
 }));
 
