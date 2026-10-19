@@ -27,7 +27,7 @@ export default async function Overview() {
         <Stat label="Ready to apply" value={o.ready} to="/applications?status=ready" hint="Waiting for your submit" />
         <Stat label="Blocked" value={o.blocked} to="/applications?status=blocked" tone={o.blocked ? 'warn' : undefined} hint="Missing answers" />
         <Stat label="Applied" value={o.applied} to="/applications?status=applied" hint="Submission proven" />
-        <Stat label="Confirmed" value={o.confirmed} to="/applications?status=confirmed" hint="Employer acknowledged" />
+        <Stat label="Acknowledged" value={o.acknowledged} to="/applications?status=acknowledged" hint={`Employer replied · ${o.applied - o.acknowledged} not yet`} />
       </div>
 
       <h2 className="mb-2 text-sm font-semibold text-ink-2">Outcomes</h2>

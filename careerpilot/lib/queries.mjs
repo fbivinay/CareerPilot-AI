@@ -10,10 +10,14 @@ import { answerPack } from './prepare.mjs';
 export const PAGE_SIZE = 50;
 
 const HEARD_BACK = ['assessment', 'interview', 'offer', 'rejected']; // a human decision, not an auto-acknowledgement
+// Every answer from the employer, automatic or not: Applied = Acknowledged + not acknowledged yet (the
+// candidate's reading, 2026-10-19: a rejection acknowledges the application too).
+const ACKNOWLEDGED = ['confirmed', ...HEARD_BACK];
 
 // Application status groups usable as ?status= in /applications.
 export const APP_GROUPS = {
   applied: APPLIED,
+  acknowledged: ACKNOWLEDGED,
   responded: HEARD_BACK,
   pending: ['ready', 'blocked', 'failed'],
 };
@@ -188,20 +192,20 @@ export async function overview() {
   const db = await getDb();
   const appIn = async (set) => count(db, `SELECT count(*) n FROM applications a JOIN jobs j ON j.id = a.job_id
     WHERE a.status IN (${placeholders(set)}) AND ${SHOWN_APP}`, set);
-  const [discovered, live, qualified, qualifiedHigh, ready, blocked, failed, applied, confirmed, assessment, interview, offer, rejected,
+  const [discovered, live, qualified, qualifiedHigh, ready, blocked, failed, applied, acknowledged, assessment, interview, offer, rejected,
     outreachSent, replies, review, unknownSends] = await Promise.all([
     count(db, `SELECT count(*) n FROM jobs j WHERE j.status != 'duplicate' AND ${SHOWN_JOB}`),
     count(db, `SELECT count(*) n FROM jobs j WHERE j.status IN ('qualified','excluded','new') AND ${SHOWN_JOB}`),
     count(db, `SELECT count(*) n FROM jobs j WHERE ${QUALIFIED_JOB} AND ${SHOWN_JOB}`),
     count(db, `SELECT count(*) n FROM jobs j WHERE ${QUALIFIED_JOB} AND j.confidence = 'high' AND ${SHOWN_JOB}`),
-    appIn(['ready']), appIn(['blocked']), appIn(['failed']), appIn(APPLIED), appIn(['confirmed']), appIn(['assessment']),
+    appIn(['ready']), appIn(['blocked']), appIn(['failed']), appIn(APPLIED), appIn(ACKNOWLEDGED), appIn(['assessment']),
     appIn(['interview']), appIn(['offer']), appIn(['rejected']),
     count(db, `SELECT count(*) n FROM outreach WHERE status = 'sent'`),
     count(db, `SELECT count(*) n FROM outreach WHERE replied_at IS NOT NULL`),
     count(db, `SELECT count(*) n FROM emails e WHERE e.needs_review = 1 AND e.reviewed = 0 AND ${SHOWN_EMAIL}`),
     count(db, `SELECT count(*) n FROM outreach WHERE status = 'unknown'`),
   ]);
-  return { discovered, live, qualified, qualifiedHigh, ready, blocked, failed, applied, confirmed, assessment, interview, offer, rejected,
+  return { discovered, live, qualified, qualifiedHigh, ready, blocked, failed, applied, acknowledged, assessment, interview, offer, rejected,
     outreachSent, replies, review, unknownSends, pending: ready + blocked + failed + review + unknownSends };
 }
 

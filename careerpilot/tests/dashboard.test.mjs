@@ -51,7 +51,7 @@ test('overview tiles equal their drill-down lists', async () => {
   const apps = async (f) => (await q.listApplications(f)).total;
   assert.equal(o.discovered, await jobs({ status: 'all' }));
   assert.equal(o.qualified, await jobs({ status: 'qualified' }));
-  for (const s of ['ready', 'blocked', 'confirmed', 'assessment', 'interview', 'offer', 'rejected']) assert.equal(o[s], await apps({ status: s }), s);
+  for (const s of ['ready', 'blocked', 'acknowledged', 'assessment', 'interview', 'offer', 'rejected']) assert.equal(o[s], await apps({ status: s }), s);
   assert.equal(o.applied, await apps({ status: 'applied' }));
   assert.equal(o.outreachSent, (await q.listOutreach({ status: 'sent' })).total);
   assert.equal(o.replies, (await q.listOutreach({ replied: '1' })).total);
