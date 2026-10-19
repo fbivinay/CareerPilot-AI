@@ -7,7 +7,7 @@ Workable and ~100 more) and URL canonicalization; this folder adds the cloud pip
 outreach, application tracking and the dashboard.
 
 ```
-GitHub Actions (every 3 h, PC off is fine)                      Vercel (read-only)
+GitHub Actions (every 30 min, PC off is fine)                   Vercel (dashboard)
   discover ─ daily aggregator sweep (1.4M ATS postings) ─┐       dashboard ── Turso
            └ ~350 employer boards via career-ops providers│
   ai       ─ free-tier LLM fit check (Groq → Gemini → OpenRouter, queue if none)
@@ -28,7 +28,7 @@ Your PC: setup, npm run apply:assist (portal prefill), local dashboard
 | Gmail API | Read + send (send only after the read-only test) | Access revoked, Google password changed, or 6 months unused → dashboard shows **Reconnect Gmail** |
 | Groq / Gemini / OpenRouter free tiers | Fit scoring, ambiguous email classification, email drafting | Quota hit → provider paused until reset; drafting falls back to a fact-only template, scoring is queued |
 | Your PC | `apply:assist`, setup, local dashboard | Only when you use them |
-| Vercel Hobby | Read-only dashboard (Mumbai region) | Redeploys on every push to main |
+| Vercel Hobby | Dashboard (Mumbai region) | Redeploys on every push to main |
 
 ## Honest limits
 
@@ -76,7 +76,7 @@ npm test
 | Email applications + outreach + follow-ups, caps, window, opt-out | ✅ | ✅ unit with fake Gmail | |
 | Application state machine + evidence + audit | ✅ | ✅ unit + dashboard | |
 | Portal prefill assistant | ✅ | ⏳ manual | Needs Chrome; never submits |
-| Dashboard, auth, drill-downs | ✅ | ✅ all pages render, auth rejects anon/forged | Read-only mode for Vercel |
+| Dashboard, auth, drill-downs | ✅ | ✅ all pages render, auth rejects anon/forged | Optional read-only mode (DASHBOARD_READONLY=1) |
 | Scheduled Actions run while PC is off | ✅ workflow | ✅ live since 2026-10-17 | |
 | Vercel deployment | ✅ | ✅ public pages open, dashboard needs sign-in | Read-only |
 

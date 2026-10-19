@@ -92,7 +92,7 @@ const commands = {
     }
   },
   vercel() {
-    const vars = { ...Object.fromEntries(VERCEL_VARS.map((n) => [n, process.env[n]])), DASHBOARD_READONLY: '1' };
+    const vars = { ...Object.fromEntries(VERCEL_VARS.map((n) => [n, process.env[n]])), DASHBOARD_READONLY: '0' }; // fully usable (the candidate's choice, 2026-10-19); '1' makes it read-only
     for (const [name, value] of Object.entries(vars)) {
       if (!value) { console.log(`skip ${name} (not set)`); continue; }
       try { execSync(`vercel env rm ${name} production --yes`, { cwd: ROOT, stdio: 'ignore' }); } catch { /* not set yet */ }

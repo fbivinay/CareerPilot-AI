@@ -112,14 +112,14 @@ company contacted at most twice per 21 days, one follow-up after 7 days. Consume
 Settings by about 5/day per week while replies are healthy and nothing bounces. Every email carries
 an opt-out line; an "unsubscribe" reply blocks that contact permanently.
 
-## 8. Vercel (read-only dashboard)
+## 8. Vercel (dashboard)
 
 Project `careerpilot` on the Hobby plan: root directory `careerpilot`, functions in Mumbai (`vercel.json`,
 next to the Turso database), connected to this repository, so every push to `main` redeploys it.
 `.vercelignore` keeps `.env`, `private/` and `.data/` from ever being uploaded by a CLI deploy.
 
 ```bash
-npm run setup -- vercel    # sets TURSO_DATABASE_URL, TURSO_AUTH_TOKEN, SESSION_SECRET, DASHBOARD_PASSWORD_HASH, DASHBOARD_READONLY=1
+npm run setup -- vercel    # sets TURSO_DATABASE_URL, TURSO_AUTH_TOKEN, SESSION_SECRET, DASHBOARD_PASSWORD_HASH, DASHBOARD_READONLY=0 (1 makes the deployed dashboard read-only)
 ```
 
 Gmail, AI and encryption keys are **not** on Vercel: the deployed dashboard can neither send mail nor
