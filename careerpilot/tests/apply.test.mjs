@@ -63,6 +63,8 @@ test('employer questions are answered only from the profile, in the unit they as
   assert.deepEqual(ask('Logitech uses an automated scheduling system to support you during the recruitment process. Your consent is required to proceed.'), { yes: true });
   // Consent yes, marketing never, self-identification declined.
   assert.deepEqual(ask('Yes, I have read and consent to the terms and conditions', 'checkbox'), { yes: true });
+  assert.deepEqual(ask('Terms and Conditions: I Agree', 'checkbox'), { yes: true }); // Circles: Workday's terms field, as read
+  assert.equal(ask('I Agree', 'checkbox'), undefined); // an "I Agree" anywhere else says nothing about what is agreed
   assert.equal(ask('I agree to receive job alerts and marketing emails', 'checkbox'), undefined);
   assert.ok(ask('Veteran Status').option[0].test('I do not wish to self-identify'));
   assert.deepEqual(dateRange('May 2026 - Jun 2026'), [{ month: 5, year: 2026 }, { month: 6, year: 2026 }]);

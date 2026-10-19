@@ -1245,7 +1245,10 @@ const readQuestions = (page) => page.$$eval('[data-automation-id^="formField-"]'
     : g.querySelector('textarea') ? 'textarea'
     : g.querySelector('input[type=checkbox]') ? 'checkbox'
     : g.querySelector('input') ? 'text' : 'other';
-  return { field: g.getAttribute('data-automation-id').replace(/^formField-/, ''), label: label.replace(/\s*\*$/, ''), required: /\*$/.test(label), kind };
+  const field = g.getAttribute('data-automation-id').replace(/^formField-/, '');
+  // Workday's own terms field may say only "I Agree", the terms printed above it (Circles).
+  const named = field === 'acceptTermsAndAgreements' && !/terms|privacy|polic/i.test(label) ? `Terms and Conditions: ${label}` : label;
+  return { field, label: named.replace(/\s*\*$/, ''), required: /\*$/.test(label), kind };
 }));
 
 // Ticks a checkbox the way a person does: a normal click, else a click on its label text. Returns
