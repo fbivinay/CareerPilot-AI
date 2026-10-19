@@ -75,6 +75,8 @@ try {
     try {
       await page.goto(applyUrl(app.url), { waitUntil: 'domcontentloaded' });
       await page.waitForTimeout(3000); // the form renders after the page loads
+      // BambooHR shows its form only after "Apply for This Job" (Saltmine, LJI).
+      if (await page.getByRole('button', { name: /^apply for this job$/i }).first().click({ timeout: 2000 }).then(() => true, () => false)) await page.waitForTimeout(2500);
       const { filled, resume: attached } = await prefillPage(page, answerPack(profile, app).fields, resumePath);
       console.log(`  Prefilled: ${filled.join(', ') || 'nothing recognised'}${attached ? '; resume attached' : '; attach the resume yourself'}.`);
       const ctx = await askContext(db, { ...app, id: app.job_id }, profile);

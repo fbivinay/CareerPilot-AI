@@ -435,3 +435,60 @@ test('a number box must show the number typed', async () => {
   assert.ok(!sameNumber('03', '0.3')); // Circles: a whole-number box dropped the point
   assert.ok(!sameNumber('', '480000'));
 });
+
+test('where the candidate lives, their degree, areas of interest and licences are answered from the profile', async () => {
+  const { answerFor } = await import('../lib/apply/workday.mjs');
+  const profile = { name: 'A', location: 'Bengaluru, Karnataka', education: [{ degree: 'MSc in Big Data Analytics' }], experience: [] };
+  const answers = { address_country: 'India', regulatory_licensed_role: false, willing_background_check: true };
+  const ask = (label, kind = 'dropdown') => answerFor({ label, kind, required: true }, { profile, answers, job: { company: 'Acme' }, inIndia: true });
+  const pick = (a, options) => options.filter((o) => a.option.some((re) => re.test(o)));
+  // 2026-10-19's portal forms (Greenhouse, Lever).
+  assert.equal(ask('Country').search, 'India');
+  assert.deepEqual(pick(ask('Country / Place of Residence'), ['Indonesia', 'India']), ['India']);
+  assert.equal(ask('Where are you currently located?', 'textarea').text, 'Bengaluru, Karnataka, India');
+  assert.deepEqual(ask('Are you residing in Bengaluru, Karnataka?'), { yes: true });
+  assert.deepEqual(pick(ask('Department(s) of Interest', 'checkbox'), ['Engineering', 'Product Management', 'Data Science']), ['Data Science']);
+  assert.deepEqual(pick(ask('Location of Interest', 'checkbox'), ['United States', 'India']), ['India']);
+  assert.equal(ask('Degree').search, 'Master');
+  assert.deepEqual(pick(ask('What active FINRA licenses do you possess? (Select all that apply)', 'checkbox'), ['Series 7', 'Broker', 'No FINRA licenses']), ['No FINRA licenses']);
+  assert.deepEqual(pick(ask('What is the current status of your FINRA license(s)?', 'checkbox'), ['Active', 'Pending', 'Not applicable']), ['Not applicable']);
+  assert.deepEqual(ask('I consent to the verification of my educational and employment details provided as part of the hiring process.'), { yes: true });
+  assert.ok(ask('How many total years of professional Data & Analytics experience do you have, including consulting or client-facing projects?', 'radio')
+    .option.some((re) => re.test('Less than one year')));
+});
+
+test('BambooHR-style questions (LJI, 2026-10-19) are answered from the profile; quizzes are not', async () => {
+  const { answerFor } = await import('../lib/apply/workday.mjs');
+  const profile = { name: 'A', location: 'Bengaluru, Karnataka', skills: { bi: ['Power BI', 'Tableau'] },
+    education: [{ degree: 'MSc in Big Data Analytics', institution: "St. Joseph's University, Bengaluru", dates: 'Aug 2025 - Jun 2027' },
+      { degree: 'BSc in Statistics & Economics', institution: 'St. Aloysius University, Mangaluru' }],
+    experience: [{ title: 'Data Intern', company: 'Acme, Bengaluru', dates: 'May 2026 - Jun 2026' }], projects: [{ name: 'P', stack: 'Python', points: ['x'] }] };
+  const answers = { address_country: 'India', reason_for_leaving_last_role: 'Internship completed' };
+  const ask = (label, kind = 'radio') => answerFor({ label, kind, required: true }, { profile, answers, job: { company: 'Lji' }, inIndia: true });
+  assert.equal(ask('Province', 'text').text, 'Karnataka');
+  assert.equal(ask('College/University', 'text').text, "St. Joseph's University");
+  assert.equal(ask('Your Stream of Graduation', 'text').text, 'Statistics & Economics');
+  assert.match(ask('Total work experience', 'textarea').text, /^Fresher; internships: Data Intern at Acme \(May 2026 - Jun 2026\)$/);
+  assert.match(ask('Current Employer', 'textarea').text, /^Not currently employed/);
+  assert.equal(ask('Reason for Job Change', 'textarea').text, 'Internship completed');
+  const pick = (a, options) => { for (const re of a.option) { const o = options.find((t) => re.test(t)); if (o) return o; } return null; };
+  assert.equal(pick(ask('Your Highest Qualification'), ['B.Tech/BE', 'M.Tech/MS', 'BCA/MCA', 'Others']), 'M.Tech/MS');
+  assert.deepEqual(ask('Working knowledge of a BI tool (Tableau, Power BI, Looker or similar)'), { yes: true });
+  assert.deepEqual(ask('Do you have at least 2 years of hands-on experience in data analysis or data science, including SQL?'), { yes: false });
+  assert.deepEqual(ask('Have you used Python (pandas, NumPy, or similar) to clean and analyze data?'), { yes: true });
+  assert.deepEqual(ask('I provide my consent to LJI to collect, use, store, process, and share my personal data for recruitment purposes.', 'checkbox'), { yes: true });
+  // The employer's statistics quiz is the candidate's to answer.
+  assert.equal(ask('Does a result with a confidence 97% mean the result is true 97% of the times?'), undefined);
+  assert.equal(ask('Rate your SQL skills on a scale of 1 to 10.', 'text'), undefined); // no rating in this profile
+});
+
+test("the candidate's skill ratings are given only on a scale of 10", async () => {
+  const { answerFor } = await import('../lib/apply/workday.mjs');
+  const ctx = { profile: { name: 'A' }, answers: { skill_ratings: { sql: 9, python: 9 } }, job: { company: 'X' }, inIndia: true };
+  const ask = (label, kind) => answerFor({ label, kind, required: true }, ctx);
+  assert.equal(ask('Rate your SQL skills on a scale of 1 to 10.', 'text').text, '9');
+  assert.equal(ask('How would you rate yourself in Python?', 'text'), undefined); // scale unknown
+  const opts = ['Beginner', 'Intermediate', 'Expert'];
+  assert.equal(opts.find((o) => ask('How would you rate yourself in Python?', 'radio').option[0].test(o)), undefined);
+  assert.equal(['7', '8', '9', '10'].find((o) => ask('How would you rate yourself in SQL?', 'radio').option[0].test(o)), '9');
+});

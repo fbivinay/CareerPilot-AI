@@ -44,7 +44,7 @@ async function fillOne(page, labels, value) {
 // question they answer, not an option's own label), its kind, whether it is required and already
 // answered, and its options. Each control is tagged data-cp-q (and options data-cp-opt) to be found again.
 // (Passed to page.evaluate: it runs in the page; it is not a string eval.)
-function readQuestions() {
+export function readQuestions() {
   const text = (n) => (n?.innerText ?? n?.textContent ?? '').replace(/\s+/g, ' ').trim();
   const shown = (el) => !!(el.offsetParent || el.getClientRects().length);
   const own = (el) => {
@@ -128,7 +128,9 @@ async function answerOne(page, q, a) {
   const wants = a.yes !== undefined ? [a.yes ? YES : NO] : a.option ?? (a.text != null ? [new RegExp(`^${escapeRe(a.text)}$`, 'i')] : []);
   switch (q.kind) {
     case 'text': case 'textarea': {
-      const text = a.text ?? (a.yes === false ? 'No' : null);
+      // A "yes" typed only where the question asks for no details (Rhombus: "… travel across all of India,
+      // are you able to meet this requirement?"); "If yes, please describe" is the candidate's.
+      const text = a.text ?? (a.yes === false ? 'No' : a.yes === true && !/\bif (yes|so)\b/i.test(q.label) ? 'Yes' : null);
       if (text == null) return false;
       await at.first().fill(String(text));
       return true;
@@ -185,7 +187,10 @@ export async function answerQuestions(page, ctx) {
   for (const q of await page.evaluate(readQuestions)) {
     if (q.filled || !q.label) continue;
     const kind = q.kind === 'select' || q.kind === 'combobox' ? 'dropdown' : q.kind === 'buttons' ? 'radio' : q.kind;
-    let a = answerFor({ label: q.label, kind, required: q.required }, ctx);
+    // Greenhouse's "Personalised Question" can carry its real question only in its options (Artefact:
+    // Male / Female / Prefer not to say).
+    const label = /^personali[sz]ed question$/i.test(q.label) && q.options?.some((o) => /^(male|female)$/i.test(o)) ? 'Gender' : q.label;
+    let a = answerFor({ label, kind, required: q.required }, ctx);
     if (a === undefined && ctx.draft && draftable({ ...q, kind })) { const text = await ctx.draft(q.label); if (text) a = { text }; }
     const done = a !== undefined && await answerOne(page, q, a).catch(() => false);
     if (done) answered.push(q.label.slice(0, 80));

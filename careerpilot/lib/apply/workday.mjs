@@ -974,7 +974,7 @@ const QUESTION_RULES = [
   // because its explanation mentions "pre-employment screening" too.
   [/\bstakeholders?\b/i, (c) => yes(c.answers.related_to_stakeholder)],
   // Before the convictions rule: Barclays' "people screening … criminal records …, are you happy to continue?"
-  [/background (check|verification)|\bbgv\b|\b(people|pre.?employment) screening\b.{0,300}\b(happy to continue|willing|consent|agree)\b/i,
+  [/background (check|verification)|\bbgv\b|\b(people|pre.?employment) screening\b.{0,300}\b(happy to continue|willing|consent|agree)\b|\bverification of (my )?(educational|education|academic) and employment\b/i,
     (c) => yes(c.answers.willing_background_check)],
   // The candidate's own record (answers of 2026-10-18; Barclays).
   [/\bcriminal (convictions?|records?|offen[cs]es?)\b|\bconvicted\b/i, (c) => yes(c.answers.criminal_record)],
@@ -1004,7 +1004,7 @@ const QUESTION_RULES = [
     return { yes: false, text: studies.length ? `No gaps: I have been studying continuously (${studies.join(', then ')}).` : 'No gaps.' };
   }],
   // The candidate's last role, and no current one (answers of 2026-10-18).
-  [/^reasons? for leaving\b|\bwhy (did|are) you (leave|leaving)\b/i, (c) => (c.answers.reason_for_leaving_last_role ? { text: c.answers.reason_for_leaving_last_role } : undefined)],
+  [/^reasons? for (leaving|(a |your )?(job )?change|changing (jobs?|employers?))\b|\bwhy (did|are) you (leave|leaving)\b/i, (c) => (c.answers.reason_for_leaving_last_role ? { text: c.answers.reason_for_leaving_last_role } : undefined)],
   [/\b(responsibilities|duties)\b.{0,30}\bcurrent (job|role|position|employment)\b|\bcurrent (job|role|position)\b.{0,20}\b(responsibilities|duties)\b/i, (c) => {
     if (employed(c) !== false) return undefined;
     const degree = studying(c.profile);
@@ -1075,7 +1075,13 @@ const QUESTION_RULES = [
   // Registration Number of your Highest Education Qualification", "… is located in which State?").
   [/^(?!.*\b(roll|seat|registration|enrol+ment|certificate|id|number|located)\b).*\bhighest (level of )?(education|qualification|degree)\b/i, (c) => {
     const [ed] = c.profile.education ?? [];
-    if (!ed || (c.kind !== 'text' && c.kind !== 'textarea')) return undefined;
+    if (!ed) return undefined;
+    // Options in Indian forms combine degrees ("B.Tech/BE / M.Tech/MS / BCA/MCA / Others", LJI): an MSc is
+    // the "MS" in "M.Tech/MS", and "Others" when no option names it.
+    if (c.kind !== 'text' && c.kind !== 'textarea') {
+      const short = /^m/i.test(ed.degree) ? 'm' : 'b';
+      return { option: [...degreeWants(ed.degree), new RegExp(`(^|\\/)\\s*${short}\\.?\\s?sc?\\.?\\s*(\\/|$)`, 'i'), /^others?$/i] };
+    }
     return { text: `${ed.degree}, ${ed.institution}${studying(c.profile) ? ' (pursuing)' : ''}` };
   }],
   // Total work experience in years; a question about one skill or tool ("with Python") is not this one.
@@ -1112,7 +1118,18 @@ const QUESTION_RULES = [
     // specified)", "Government Clearance Required? No".
     (/\b(certif\w*|clearance)\b/i.test(String(c.job.description ?? '').replace(/certifications \(if blank, certifications not specified\)|government clearance required\? no/gi, '')) ? undefined
       : { option: [/not applicable|n\/a|^none/i, /^yes\b/i], text: 'Not applicable: the job description lists none' })],
-  [/\byears of (relevant |total |work |working |professional |prior )?experience\b|\bexperience \(?in years\)?/i, (c) => {
+  // "Do you have at least 2 years of hands-on experience in …?" (LJI): the candidate's whole years of work.
+  [/\bat least (\d+|one|two|three|four|five)\+? years?\b.{0,100}\bexperience\b/i, (c) => {
+    const n = { one: 1, two: 2, three: 3, four: 4, five: 5 }[/\bat least (\w+)/i.exec(c.label)[1].toLowerCase()] ?? Number(/\bat least (\d+)/i.exec(c.label)?.[1]);
+    return Number.isFinite(n) ? { yes: workYears(c.profile) >= n } : undefined;
+  }],
+  // "Total work experience" in words (LJI): whole years, then the internships behind them.
+  [/^total (work )?experience$/i, (c) => {
+    const years = workYears(c.profile);
+    const jobs = (c.profile.experience ?? []).map((e) => `${e.title} at ${splitPlace(e.company)[0]} (${e.dates})`);
+    return c.kind === 'text' || c.kind === 'textarea' ? { text: `${years ? `${years} years` : 'Fresher'}${jobs.length ? `; internships: ${jobs.join('; ')}` : ''}` } : undefined;
+  }],
+  [/\byears of (relevant |total |work |working |professional |prior )?experience\b|\bexperience \(?in years\)?|\btotal years of [\w&,\s]{0,50}experience\b/i, (c) => {
     if (/\b(with|in|using|on) [A-Z]/.test(c.label)) return undefined;
     const years = workYears(c.profile);
     return { text: String(years), option: years ? [new RegExp(`^${years}\\b`)] : [/^0\b|fresher|less than (1|one)|< ?1|no experience|^none/i] };
@@ -1200,7 +1217,7 @@ const QUESTION_RULES = [
   // (Logitech's automated interview scheduling).
   // Never, whatever the box calls itself: giving up rights (arbitration, waivers, releases, indemnities)
   // or consent beyond the employer's own use (third parties, partners, background or credit checks).
-  [/\b(consent|agree|acknowledge|accept)\b.*\b(terms|conditions|privacy|policy|notice)\b|\b(terms|privacy)\b.*\b(consent|agree|accept)|\b(have read|reading|read and understood)\b.*\b(privacy|terms|notice|policy)\b|\bhow (my|your) (personal )?(information|data) (will be|is|are) (processed|used|handled)\b|automated (interview )?scheduling|scheduling (system|tool|assistant)/i,
+  [/\b(consent|agree|acknowledge|accept)\b.*\b(terms|conditions|privacy|policy|notice)\b|\b(terms|privacy)\b.*\b(consent|agree|accept)|\b(have read|reading|read and understood)\b.*\b(privacy|terms|notice|policy)\b|\bhow (my|your) (personal )?(information|data) (will be|is|are) (processed|used|handled)\b|automated (interview )?scheduling|scheduling (system|tool|assistant)|\bconsent\b.{0,80}\b(collect|use|store|process)\w*\b.{0,80}\bpersonal data\b.{0,120}\brecruitment\b/i,
     (c) => (c.required && ['checkbox', 'dropdown', 'radio'].includes(c.kind)
       && !/\b(arbitrat|waiv|releas|indemnif|third.part|partners?\b|background|credit)/i.test(c.label) ? { yes: true } : undefined)],
   // Consent to share the application with the employer itself (AllianceBernstein, under its Terms and
@@ -1225,6 +1242,56 @@ const QUESTION_RULES = [
   [/^local (family|last) name$|^local surname$/i, (c) => (c.answers.legal_family_name ? { text: c.answers.legal_family_name } : undefined)],
   [/^(current )?city( - local)?$/i, (c) => (c.profile.location ? { text: String(c.profile.location).split(',')[0].trim() } : undefined)],
   [/^(current )?location$/i, (c) => (c.profile.location ? { text: c.profile.location } : undefined)],
+  // Where the candidate lives, however a form words it (2026-10-19: Greenhouse's "Country", Cognite's
+  // "Country / Place of Residence", Rhombus's "Where are you currently located?", Headout's "Are you
+  // residing in Bengaluru, Karnataka?").
+  [/^(country( of residence)?|(country \/ )?place of residence|legal address - country)$/i,
+    (c) => (c.answers.address_country ? { text: c.answers.address_country, search: c.answers.address_country, option: [new RegExp(`^${escapeRe(c.answers.address_country)}\\b`, 'i')] } : undefined)],
+  [/^(where are you (currently )?(located|based)|what is your current location)\b/i,
+    (c) => (c.profile.location ? { text: [c.profile.location, c.answers.address_country].filter(Boolean).join(', ') } : undefined)],
+  [/\b(reside|residing|live|living|based|located) in (bengaluru|bangalore)\b/i, (c) => (c.profile.location ? { yes: /bengaluru|bangalore/i.test(c.profile.location) } : undefined)],
+  // Areas a careers form asks the candidate to pick (Resilinc's "Department(s) of Interest", "Location of
+  // Interest"): the candidate's field, and where they live.
+  [/\bdepartment(s|\(s\))? of interest\b/i, () => ({ option: [/^data science$/i] })],
+  [/\blocation(s|\(s\))? of interest\b/i, (c) => (c.answers.address_country ? { option: [new RegExp(`^${escapeRe(c.answers.address_country)}\\b`, 'i'), /\b(bengaluru|bangalore)\b/i] } : undefined)],
+  // A bare "Degree" (Greenhouse's education block) is the highest one.
+  [/^degree$|\blevel of degree\b/i, (c) => {
+    const degree = c.profile.education?.[0]?.degree;
+    return degree ? { search: /^m/i.test(degree) ? 'Master' : 'Bachelor', option: degreeWants(degree) } : undefined;
+  }],
+  // The rest of where they live and study, as a form asks it in its own words (LJI, BambooHR).
+  [/^(province|state|state ?\/ ?province|province ?\/ ?state|region)$/i, (c) => {
+    const state = String(c.profile.location ?? '').split(',')[1]?.trim();
+    return state ? { text: state, search: state, option: [new RegExp(`^${escapeRe(state)}\\b`, 'i')] } : undefined;
+  }],
+  [/^(college|university|college ?\/ ?university|university ?\/ ?college|institution( name)?)$/i,
+    (c) => (c.profile.education?.[0]?.institution ? { text: splitPlace(c.profile.education[0].institution)[0] } : undefined)],
+  [/\bstream of graduation\b|\bgraduation stream\b|\b(ug|undergraduate) (stream|specialization|major)\b/i, (c) => {
+    const ug = (c.profile.education ?? []).find((e) => /^b/i.test(e.degree));
+    return ug ? { text: ug.degree.replace(/^\w+\.?\s+in\s+/i, '') } : undefined;
+  }],
+  [/^current (employer|company|organi[sz]ation)( name)?$/i, (c) => {
+    if (c.kind !== 'text' && c.kind !== 'textarea') return undefined;
+    const now = (c.profile.experience ?? []).find((e) => /[-–]\s*(present|current|now)\b/i.test(e.dates ?? ''));
+    const degree = studying(c.profile);
+    return { text: now ? splitPlace(now.company)[0] : `Not currently employed${degree ? ` (${degree} student)` : ''}` };
+  }],
+  // Tools the candidate lists as skills, asked as yes/no (LJI: "Working knowledge of a BI tool (Tableau,
+  // Power BI, Looker or similar)", "Have you used Python (pandas, NumPy, or similar) …?").
+  [/\bworking knowledge of a bi tool\b|\b(knowledge|experience) (of|with|in) (tableau|power ?bi|looker)\b/i,
+    (c) => ({ yes: /tableau|power ?bi|looker/i.test(JSON.stringify(c.profile.skills ?? {})) })],
+  [/^have you used python\b/i, (c) => ({ yes: /\bpython\b/i.test(JSON.stringify([c.profile.experience, c.profile.projects])) })],
+  // The candidate's own ratings, given on a scale of 1 to 10 (2026-10-19: SQL 9, Python 9): used only where
+  // the form's scale is 10 (said in the question, or offered as options 1-10).
+  [/\brate\b.{0,40}\b(sql|python)\b|\b(sql|python)\b.{0,40}\b(rating|rate yourself)\b/i, (c) => {
+    const r = c.answers.skill_ratings?.[/\bsql\b/i.test(c.label) ? 'sql' : 'python'];
+    if (r == null) return undefined;
+    if (c.kind === 'text' || c.kind === 'textarea') return /\b1 ?(to|-) ?10\b|\bout of 10\b|\/ ?10\b/i.test(c.label) ? { text: String(r) } : undefined;
+    return { option: [new RegExp(`^${r}$`)] };
+  }],
+  // Securities licences: none (regulatory_licensed_role, 2026-10-18; Portage Point asks for FINRA's).
+  [/\bfinra licen[sc]es?\b/i, (c) => (c.answers.regulatory_licensed_role === false
+    ? { option: /\bstatus\b/i.test(c.label) ? [/^not applicable$/i] : [/^no finra licen[sc]es?$/i, /^none\b/i] } : undefined)],
   // A second or third location preference: the candidate's own order (Fractal; Bengaluru, Pune, Chennai).
   [/\blocation preference\s*[2-9]\b/i, (c) => {
     const city = (c.answers.location_preferences ?? [])[Number(/preference\s*([2-9])/i.exec(c.label)[1]) - 1];
