@@ -49,3 +49,28 @@ export function unverifiedNumbers(text, corpus) {
   const known = new Set(numbers(corpus));
   return numbers(text).filter((n) => !known.has(n));
 }
+
+// Technologies generated text may claim only when the profile names them: a drafted "I have practical
+// expertise in … TensorFlow" (Synechron, 2026-10-19) when the profile lists PyTorch and Keras. A sentence
+// speaking for the candidate ("I", "my", "me") may name only technologies the profile contains; one about
+// the employer's own stack may name others.
+const TECH = ['tensorflow', 'pytorch', 'keras', 'scikit-learn', 'xgboost', 'lightgbm', 'catboost', 'spark', 'pyspark', 'hadoop', 'hive',
+  'kafka', 'airflow', 'dbt', 'snowflake', 'databricks', 'bigquery', 'redshift', 'aws', 'azure', 'gcp', 'google cloud', 'docker',
+  'kubernetes', 'terraform', 'helm', 'jenkins', 'mlops', 'mlflow', 'kubeflow', 'sagemaker', 'vertex ai', 'langchain', 'llamaindex',
+  'hugging ?face', 'opencv', 'yolo', 'tableau', 'power bi', 'looker', 'mongodb', 'postgresql', 'mysql', 'oracle', 'java', 'scala',
+  'c\\+\\+', 'golang', 'rust', 'javascript', 'typescript', 'react', 'node\\.?js', 'fastapi', 'flask', 'django', 'sas', 'spss', 'matlab',
+  'elasticsearch', 'redis', 'cassandra', 'neo4j', 'pandas', 'numpy', 'fine-?tun\\w*', 'reinforcement learning', 'computer vision',
+  'pinecone', 'faiss', 'chromadb', 'weaviate', 'graphql', 'microservices', 'ci/cd', 'linux', 'excel'];
+export function unclaimedTech(text, profile) {
+  const known = JSON.stringify(profile);
+  const out = new Set();
+  for (const sentence of String(text).split(/(?<=[.!?])\s+|\n+/)) {
+    if (!/\b(i|my|me|i'm|i've)\b/i.test(sentence)) continue;
+    for (const t of TECH) {
+      const re = new RegExp(`(?<![\\w+])(${t})(?![\\w+])`, 'i');
+      const m = re.exec(sentence);
+      if (m && !re.test(known)) out.add(m[1]);
+    }
+  }
+  return [...out];
+}
