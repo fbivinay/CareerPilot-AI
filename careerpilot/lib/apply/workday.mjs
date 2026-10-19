@@ -955,9 +955,10 @@ const QUESTION_RULES = [
   [/\b(work|residency|residence) permit\b/i, (c) => (c.inIndia && /^india/i.test(c.answers.citizenship ?? '')
     ? { option: [/not applicable|^n\/?a$/i, /^yes\b/i] } : undefined)],
   [/\bsponsor|\b(require|need) (a )?visa\b/i, (c) => (c.inIndia ? yes(c.answers.needs_visa_sponsorship) : undefined)],
-  // Citizenship status for a job in India (Maersk): an Indian citizen.
+  // Citizenship status for a job in India (Maersk): an Indian citizen. Where the options are countries
+  // (PwC, 2026-10-19), the country itself, typed to reach it in the long list.
   [/\bcitizenship status\b/i, (c) => (c.inIndia && /^india/i.test(c.answers.citizenship ?? '')
-    ? { text: 'Indian citizen', option: [/\bindian?\b.*\bcitizen|\bcitizen\b.*\bindia/i, /^citizen( of (the |this )?country)?$/i] } : undefined)],
+    ? { text: 'Indian citizen', search: 'India', option: [/\bindian?\b.*\bcitizen|\bcitizen\b.*\bindia/i, /^citizen( of (the |this )?country)?$/i, /^india\b/i] } : undefined)],
   // A citizen of the job's country: an Indian citizen, for a job in India (AllianceBernstein).
   [/\bcitizen\b.{0,40}\bcountry (where|in which)\b.{0,60}\b(role|job|position)\b/i, (c) => (c.inIndia && /^india/i.test(c.answers.citizenship ?? '') ? { yes: true } : undefined)],
   [/(legal|lawful)\w* (right|authori[sz]\w*|eligib\w*|permi\w*) to work|authori[sz]ed to work|work authori[sz]ation|eligible to work|right to work/i,
@@ -1276,6 +1277,17 @@ const QUESTION_RULES = [
   [/^(where are you (currently )?(located|based)|what is your current location)\b/i,
     (c) => (c.profile.location ? { text: [c.profile.location, c.answers.address_country].filter(Boolean).join(', ') } : undefined)],
   [/\b(reside|residing|live|living|based|located) in (bengaluru|bangalore)\b/i, (c) => (c.profile.location ? { yes: /bengaluru|bangalore/i.test(c.profile.location) } : undefined)],
+  // Birth and marital status, the candidate's answers of 2026-10-19 (PwC). A city also under its older name
+  // ("Mangalore", "Bangalore") in a list.
+  [/\b(country|territory)( ?\/ ?territory)? of birth\b|\bbirth ?country\b/i, (c) => (c.answers.birth_country
+    ? { text: c.answers.birth_country, search: c.answers.birth_country, option: [new RegExp(`^${escapeRe(c.answers.birth_country)}\\b`, 'i')] } : undefined)],
+  [/\b(city|place|town) of birth\b|\bbirth ?(city|place)\b/i, (c) => {
+    const city = c.answers.birth_city;
+    if (!city) return undefined;
+    const old = { mangaluru: 'Mangalore', bengaluru: 'Bangalore' }[city.toLowerCase()];
+    return { text: city, search: city, option: [new RegExp(`^(${escapeRe(city)}${old ? `|${old}` : ''})\\b`, 'i')] };
+  }],
+  [/\bmarital status\b/i, (c) => (c.answers.marital_status ? { text: c.answers.marital_status, option: [new RegExp(`^${escapeRe(c.answers.marital_status)}\\b`, 'i')] } : undefined)],
   // Areas a careers form asks the candidate to pick (Resilinc's "Department(s) of Interest", "Location of
   // Interest"): the candidate's field, and where they live.
   [/\bdepartment(s|\(s\))? of interest\b/i, () => ({ option: [/^data science$/i] })],

@@ -501,3 +501,16 @@ test('a transition timeline is when the candidate can start, not a yes/no about 
     'No notice period, non-compete or garden leave; I can join from 10 November 2026.');
   assert.equal(ask({ notice_period: 30, restrictive_covenants: false, earliest_joining_date: '2026-11-10' }), undefined); // the candidate's to word
 });
+
+test('birth country and city, marital status and a country-list citizenship are answered from the profile (PwC)', async () => {
+  const { answerFor } = await import('../lib/apply/workday.mjs');
+  const ctx = { profile: { name: 'A' }, answers: { birth_country: 'India', birth_city: 'Mangaluru', marital_status: 'Single', citizenship: 'India' }, job: { company: 'Pwc' }, inIndia: true };
+  const ask = (label, kind = 'dropdown') => answerFor({ label, kind, required: true }, ctx);
+  const pick = (a, options) => { for (const re of a.option) { const o = options.find((t) => re.test(t)); if (o) return o; } return null; };
+  assert.equal(pick(ask('Country / Territory of Birth'), ['British Indian Ocean Territory', 'India', 'Indonesia']), 'India');
+  assert.equal(ask('City of Birth', 'text').text, 'Mangaluru');
+  assert.equal(pick(ask('City of Birth'), ['Bangalore', 'Mangalore', 'Mysore']), 'Mangalore');
+  assert.equal(pick(ask('Marital Status'), ['Divorced (India)', 'Married (India)', 'Single (India)']), 'Single (India)');
+  assert.equal(pick(ask('Citizenship Status'), ['Afghanistan', 'India', 'Indonesia']), 'India');
+  assert.equal(ask('Citizenship Status').search, 'India');
+});
