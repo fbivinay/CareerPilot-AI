@@ -83,6 +83,19 @@ export function workdayLink(apps, msg) {
   return domain === 'myworkday.com' || local === 'workday' ? one(justBefore(titled(submitted)), 'workday title+time') : null;
 }
 
+// A hiring platform's mail names the employer as it calls itself, which can be just the start of the board
+// name CareerPilot knows it by (Greenhouse's "Mico" for the micoworks board, 2026-10-20): among the
+// applications on that platform, the one whose company starts with that name is meant.
+// ponytail: a name prefix on one platform; keep each board's display name if two employers ever collide.
+const PLATFORM_BOARDS = [[/greenhouse(-mail)?\.io$/i, 'greenhouse.io'], [/lever\.co$/i, 'lever.co'], [/ashbyhq\.com$/i, 'ashbyhq.com']];
+function boardNamed(apps, msg, stated) {
+  const board = PLATFORM_BOARDS.find(([re]) => re.test(String(msg.fromAddr ?? '').split('@')[1] ?? ''))?.[1];
+  const k = companyKey(stated.company).replace(/ /g, '');
+  if (!board || k.length < 3) return null;
+  const hits = apps.filter((a) => host(a.url)?.endsWith(board) && companyKey(a.company).replace(/ /g, '').startsWith(k));
+  return hits.length === 1 ? { ...hits[0], how: 'platform name' } : hits.length ? { ambiguous: true, company: hits[0].company, how: 'several boards on platform' } : null;
+}
+
 async function linkEmail(db, msg, { stated = applicationDetails(msg), strict = false } = {}) {
   const byThread = await one(db, `SELECT a.id app_id, a.job_id FROM applications a WHERE a.gmail_thread_id = ? AND ${CAREERPILOT_APP}`, [msg.threadId])
     ?? await one(db, `SELECT o.job_id, a.id app_id FROM outreach o LEFT JOIN applications a ON a.job_id = o.job_id
@@ -99,6 +112,8 @@ async function linkEmail(db, msg, { stated = applicationDetails(msg), strict = f
     const named = apps.filter((a) => samePosting(a, stated));
     if (named.length === 1) return { ...named[0], how: 'stated' };
     if (named.length) return { ambiguous: true, company: named[0].company, how: 'several roles at company' };
+    const onBoard = boardNamed(apps, msg, stated);
+    if (onBoard) return onBoard;
     // A confirmation naming a posting CareerPilot did not apply to is about another application (perhaps
     // the candidate's own); a rejection or update naming a slightly different title still falls back to
     // the company below.

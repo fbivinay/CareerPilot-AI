@@ -454,3 +454,26 @@ test('a blocked application the candidate marks done counts as applied, and its 
   assert.ok(await ack(own.id)); // a ready one the candidate sent on their own stays theirs
   assert.deepEqual(await shown(), [`${done.id}:confirmed`, `${early.id}:confirmed`]);
 });
+
+test('a hiring platform’s confirmation naming the employer by its own name confirms the application at its board', async () => {
+  // Greenhouse's mail says "Mico"; CareerPilot knows the employer by its board, micoworks (2026-10-20).
+  const db = await openDb({ url: ':memory:' });
+  const app = async (company, url, status = 'submitted') => {
+    const job = await upsertJob(db, { url, company, title: 'Data Science Intern', location: 'Bengaluru', description: 'Freshers welcome' }, { source: 'greenhouse', settings });
+    const a = await createApplication(db, job.id, { status: 'blocked', method: 'portal' });
+    if (status !== 'blocked') await transition(db, a, status, { evidence: { type: 'done' }, by: 'candidate' });
+    return a.id;
+  };
+  const mico = await app('Micoworks', 'https://job-boards.greenhouse.io/micoworks/jobs/5456507008');
+  await app('Micon Labs', 'https://jobs.lever.co/miconlabs/1'); // the same start of a name, on another platform
+  const mail = { id: 'g1', threadId: 'g1', fromAddr: 'no-reply@us.greenhouse-mail.io', fromName: '', authenticated: true, date: new Date().toISOString(),
+    subject: 'Thank you for applying to Mico', text: 'R VINAY, Thanks for applying to Mico. Your application has been received and we will review it right away.' };
+  const r = await processMessage(db, mail, settings, { ourThreadIds: new Set() });
+  assert.equal(r.transitioned, true);
+  assert.equal((await one(db, 'SELECT status FROM applications WHERE id = ?', [mico])).status, 'confirmed');
+  // Two applications that could be meant go to review instead.
+  await app('Micoworks Japan', 'https://job-boards.greenhouse.io/micoworksjp/jobs/2');
+  await app('Micosoft', 'https://job-boards.greenhouse.io/micosoft/jobs/3');
+  const r2 = await processMessage(db, { ...mail, id: 'g2', threadId: 'g2' }, settings, { ourThreadIds: new Set() });
+  assert.deepEqual([r2.transitioned, r2.review], [false, true]);
+});
