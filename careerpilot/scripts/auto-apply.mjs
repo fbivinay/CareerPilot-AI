@@ -5,6 +5,8 @@
 //   --limit N        at most N applications this run (default 5; the daily limit in Settings still applies)
 //   --retry          also retry applications blocked earlier with the same answers (after a code fix)
 //   --only a,b       only these companies (development)
+//   --past-company-limit   past the limit of 3 applications per company, for a run the candidate chose
+//                    (2026-10-19: a 4th at Amgen and HPE, a 4th and 5th at Barclays)
 //   --shots DIR      save a screenshot of every step (local debugging only: screenshots show your details)
 // Outcomes land on each application in the dashboard: submitted with Workday's confirmation, or blocked
 // with the exact questions that need your answer.
@@ -34,6 +36,7 @@ const gmail = status.canRead ? await gmailClient(db) : null; // reads Workday's 
 const launch = () => chromium.launch(process.env.CI ? { headless: true } : { channel: 'chrome', headless: true });
 const t0 = Date.now();
 const result = await autoApply(db, settings, { launch, submit, limit, deadline, gmail, shots, retry: process.argv.includes('--retry'),
-  only: arg('--only')?.split(',').map((x) => x.trim().toLowerCase()) ?? null });
+  only: arg('--only')?.split(',').map((x) => x.trim().toLowerCase()) ?? null,
+  perCompany: process.argv.includes('--past-company-limit') ? Infinity : undefined });
 log.info('stage done', { stage: 'apply', ms: Date.now() - t0, submit, result });
 await kvSet(db, 'run:apply', { ok: !result.errors, at: now(), ms: Date.now() - t0, result });
