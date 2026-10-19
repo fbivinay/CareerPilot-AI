@@ -70,6 +70,10 @@ test('Workday confirmations: recognised, and linked by portal, requisition id, t
     'Dear A, \nThank you for your interest in Examplecorp. We have\r\n received your application for the Analyst I - R1600001\r\n position.'), 'application_confirmation');
   assert.equal(c('examplecorp@myworkday.com', 'Examplecorp - Application Update',
     'Dear A, Thank you for your interest in the Data Analyst position. Your application will be taken into careful consideration.'), 'application_confirmation');
+  assert.equal(c('excorp@myworkday.com', 'Your Examplecorp Careers Application Is In!',
+    'Thanks for your interest in the Analyst. Our Talent Acquisition team will review your background.'), 'application_confirmation');
+  assert.equal(c('excorp@myworkday.com', 'Application received for AI/ML Engineer',
+    'Dear A, Thank you for your recent application for the AI/ML Engineer position at Examplecorp.'), 'application_confirmation');
   assert.equal(c('examplecorp@myworkday.com', 'Examplecorp Inc. - Thank you for applying',
     'We have successfully received your submission to the following position: R-100001 Associate Data Scientist (Open) .'), 'application_confirmation');
 

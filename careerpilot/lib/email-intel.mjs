@@ -60,7 +60,8 @@ const SIGNALS = [
     weak: [/\b(assessment|assignment|coding test)\b/],
   }],
   ['application_confirmation', {
-    strong: [/\b(thank you|thanks)( again)? for (applying|your application|submitting your application|your (online )?submission)\b/,
+    strong: [/\b(thank you|thanks)( again)? for (applying|your (recent )?application|submitting your application|your (online )?submission)\b/,
+      /^application received\b/, /\byour\b.{0,40}\bapplication is in\b/,
       /\b(we('ve| have)|has been) received your application\b/, /\bwe('ve| have) successfully received your (application|submission)\b/,
       /\byour application will be (taken into (careful )?consideration|reviewed|considered)\b/,
       /\byour application (has been|was) (received|submitted|sent)\b/, /\byour application was sent to\b/,
