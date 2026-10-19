@@ -379,6 +379,10 @@ test('an open question is drafted from the job and profile only; a draft with an
   // The employer's own stack in a sentence of its own is not a claim.
   assert.equal(await ask('Acme ships TensorFlow models, and I work in Python.', 'What draws you to Acme?'), null); // shares the claim's sentence
   assert.equal(await ask('Acme ships TensorFlow models. I work in Python.', 'Describe why Acme appeals to you.'), 'Acme ships TensorFlow models. I work in Python.');
+  // A role the profile does not show, even as an aspiration (Synechron's next draft, the same day).
+  assert.equal(await ask('I will build on my internship experience guiding junior contributors.', 'Why this team?'), null);
+  assert.equal(await ask('Acme will let me grow my leadership skills.', 'What do you hope to gain?'), null);
+  assert.equal(await ask('I want to lead innovative projects at Acme.', 'Where do you see yourself?'), null);
 });
 
 test('a degree is matched to its own entry or its level’s bucket, never to another degree at that level', async () => {

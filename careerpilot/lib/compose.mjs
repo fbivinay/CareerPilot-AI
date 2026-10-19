@@ -1,7 +1,7 @@
 // Email composition from verified facts only. The LLM draft is accepted only if every number
 // in it appears in the profile or the job description; otherwise a deterministic template is used.
 import { aiJson, AiUnavailable } from './ai.mjs';
-import { factCorpus, profileFacts, unclaimedTech, unverifiedNumbers } from './profile.mjs';
+import { factCorpus, profileFacts, unclaimed, unverifiedNumbers } from './profile.mjs';
 
 const OPT_OUT_LINE = 'If you would prefer not to hear from me again, just reply "unsubscribe" and I will not contact you further.';
 
@@ -109,7 +109,7 @@ export async function draftAnswer(db, { profile, job, question }, settings, ai =
     }, { settings, ...ai });
     const answer = typeof draft.answer === 'string' ? draft.answer.trim() : '';
     if (!answer || /\[|\{|lorem|your name/i.test(answer) || answer.length > 1500) return null;
-    if (unclaimedTech(answer, profile).length) return null; // a skill the profile does not have
+    if (unclaimed(answer, profile).length) return null; // a skill or role the profile does not show
     return unverifiedNumbers(answer, factCorpus(profile, `${job.title} ${job.company} ${job.description ?? ''} ${question}`)).length ? null : answer;
   } catch (err) {
     if (err instanceof AiUnavailable) return null;
@@ -136,7 +136,7 @@ export async function composeEmail(db, { profile, job, kind, contactName }, sett
       maxTokens: 600,
     }, { settings });
     const corpus = factCorpus(profile, `${job.title} ${job.company} ${job.description ?? ''}`);
-    const bad = [...unverifiedNumbers(draft.subject + ' ' + draft.body, corpus), ...unclaimedTech(draft.body, profile)];
+    const bad = [...unverifiedNumbers(draft.subject + ' ' + draft.body, corpus), ...unclaimed(draft.body, profile)];
     if (bad.length || /\[|\{|lorem|your name/i.test(draft.body) || draft.body.length > 1800) {
       return { ...fallback, note: `AI draft rejected (unverified: ${bad.join(', ') || 'format'})` };
     }

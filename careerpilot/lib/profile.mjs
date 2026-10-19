@@ -61,12 +61,18 @@ const TECH = ['tensorflow', 'pytorch', 'keras', 'scikit-learn', 'xgboost', 'ligh
   'c\\+\\+', 'golang', 'rust', 'javascript', 'typescript', 'react', 'node\\.?js', 'fastapi', 'flask', 'django', 'sas', 'spss', 'matlab',
   'elasticsearch', 'redis', 'cassandra', 'neo4j', 'pandas', 'numpy', 'fine-?tun\\w*', 'reinforcement learning', 'computer vision',
   'pinecone', 'faiss', 'chromadb', 'weaviate', 'graphql', 'microservices', 'ci/cd', 'linux', 'excel'];
-export function unclaimedTech(text, profile) {
+// Roles and habits likewise: "building on my internship experience guiding junior contributors" (Synechron,
+// the same day) when no entry mentions mentoring or leading anyone. An aspiration ("grow my leadership
+// skills") is dropped too; the question is then left to the candidate.
+const ROLES = ['mentor\\w*', 'coach(?:ed|ing)', 'leadership', '(?:lead|leading|led) (?:\\w+ ){0,2}(?:teams?|projects?|initiatives?|groups?)',
+  'manag(?:ed|ing) (?:\\w+ ){0,2}teams?', 'guid(?:ed|ing) (?:\\w+ ){0,2}(?:juniors?|interns?|teams?|members|contributors|colleagues)',
+  'junior (?:contributors|colleagues|members|developers|engineers|analysts)', 'publish\\w*'];
+export function unclaimed(text, profile) {
   const known = JSON.stringify(profile);
   const out = new Set();
   for (const sentence of String(text).split(/(?<=[.!?])\s+|\n+/)) {
     if (!/\b(i|my|me|i'm|i've)\b/i.test(sentence)) continue;
-    for (const t of TECH) {
+    for (const t of [...TECH, ...ROLES]) {
       const re = new RegExp(`(?<![\\w+])(${t})(?![\\w+])`, 'i');
       const m = re.exec(sentence);
       if (m && !re.test(known)) out.add(m[1]);
