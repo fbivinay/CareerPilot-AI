@@ -1,0 +1,27 @@
+# Fallback clock for careerpilot-pipeline. GitHub started none of the pipeline's scheduled runs from
+# 04:52 UTC on 2026-10-19 (no incident reported; re-enabling the workflow did not help), so every pipeline
+# run starts this workflow, which waits 30 minutes in the careerpilot-timer environment (a wait timer:
+# no runner is held while it waits) and then starts the pipeline again. Each new tick replaces a waiting
+# one, so while scheduled runs do fire this never fires; it only fills in when they stop.
+# Off switch: gh workflow disable careerpilot-tick.yml
+name: careerpilot-tick
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: write # to start careerpilot-pipeline
+
+concurrency:
+  group: careerpilot-tick
+  cancel-in-progress: true
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    environment: careerpilot-timer # wait timer: 30 minutes (repository settings → Environments)
+    steps:
+      - name: Start the pipeline
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run careerpilot-pipeline.yml --repo "$GITHUB_REPOSITORY"

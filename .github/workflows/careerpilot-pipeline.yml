@@ -29,6 +29,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      # GitHub started no scheduled run from 04:52 UTC on 2026-10-19, so each run also starts
+      # careerpilot-tick, which starts the next run 30 minutes later unless a newer run comes first.
+      - name: Start the 30-minute fallback clock
+        continue-on-error: true # a disabled careerpilot-tick (its off switch) must not stop this run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run careerpilot-tick.yml --repo "$GITHUB_REPOSITORY"
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
