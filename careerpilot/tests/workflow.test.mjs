@@ -480,3 +480,18 @@ test('a hiring platform’s confirmation naming the employer by its own name con
   const r2 = await processMessage(db, { ...mail, id: 'g2', threadId: 'g2' }, settings, { ourThreadIds: new Set() });
   assert.deepEqual([r2.transitioned, r2.review], [false, true]);
 });
+
+test('an employer’s own mail naming itself without its board’s “careers” suffix updates the application', async () => {
+  // Headout's rejection says "Headout"; CareerPilot knows the employer by its board, headoutcareers (2026-10-20).
+  const db = await openDb({ url: ':memory:' });
+  const job = await upsertJob(db, { url: 'https://job-boards.greenhouse.io/headoutcareers/jobs/1', company: 'Headoutcareers', title: 'Product Analyst',
+    location: 'Bengaluru', description: 'Freshers welcome' }, { source: 'greenhouse', settings });
+  const a = await createApplication(db, job.id, { status: 'blocked', method: 'portal' });
+  await transition(db, a, 'submitted', { evidence: { type: 'confirmation_page' }, by: 'apply-assist' });
+  const r = await processMessage(db, { id: 'h1', threadId: 'h1', fromAddr: 'life@headout.com', fromName: '', authenticated: true, date: new Date().toISOString(),
+    subject: 'Update on your application for Product Analyst at Headout',
+    text: 'Hi R Vinay, Thank you for expressing your interest in the Product Analyst role at Headout. Unfortunately, we have to inform you that this time we won’t be able to take your application forward.' },
+  settings, { ourThreadIds: new Set() });
+  assert.equal(r.transitioned, true);
+  assert.equal((await one(db, 'SELECT status FROM applications WHERE id = ?', [a.id])).status, 'rejected');
+});

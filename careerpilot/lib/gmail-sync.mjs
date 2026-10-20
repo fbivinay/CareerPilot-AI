@@ -39,9 +39,11 @@ export function mentionsCompany(hay, company) {
 }
 
 const host = (u) => { try { return new URL(u).host; } catch { return null; } };
+// A job board's name can carry a suffix the employer's own mail leaves out: headoutcareers is Headout (2026-10-20).
+const boardKey = (c) => companyKey(c).replace(/ /g, '').replace(/(careers?|jobs?)$/, '');
 const sameCompany = (x, y) => {
-  const a = companyKey(x), b = companyKey(y);
-  return a.length >= 3 && b.length >= 3 && (a === b || mentionsCompany(a, y) || mentionsCompany(b, x));
+  const a = companyKey(x), b = companyKey(y), k = boardKey(x);
+  return a.length >= 3 && b.length >= 3 && (a === b || mentionsCompany(a, y) || mentionsCompany(b, x) || (k.length >= 3 && k === boardKey(y)));
 };
 // Whether a tracked job is the posting a confirmation names. Two postings on one job site are different
 // even with the same title (foundit lists "Analyst I" at Aon under two ids).

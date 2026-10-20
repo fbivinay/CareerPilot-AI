@@ -30,12 +30,16 @@ export default async function Overview() {
         <Stat label="Acknowledged" value={o.acknowledged} to="/applications?status=acknowledged" hint={`Employer replied · ${o.applied - o.acknowledged} not yet`} />
       </div>
 
-      <h2 className="mb-2 text-sm font-semibold text-ink-2">Outcomes</h2>
+      <h2 className="mb-2 text-sm font-semibold text-ink-2">Outcomes <span className="font-normal text-ink-3">· applications CareerPilot sent, and blocked ones you marked done</span></h2>
       <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
         <Stat label="Assessments" value={o.assessment} to="/applications?status=assessment" />
         <Stat label="Interviews" value={o.interview} to="/applications?status=interview" tone={o.interview ? 'good' : undefined} />
         <Stat label="Offers" value={o.offer} to="/applications?status=offer" tone={o.offer ? 'good' : undefined} />
         <Stat label="Rejections" value={o.rejected} to="/applications?status=rejected" />
+      </div>
+
+      <h2 className="mb-2 text-sm font-semibold text-ink-2">Email</h2>
+      <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
         <Stat label="Outreach sent" value={o.outreachSent} to="/outreach?status=sent" hint={`${pct(o.replies, o.outreachSent)} replied`} />
         <Stat label="Emails to review" value={o.review} to="/inbox?review=1" tone={o.review ? 'warn' : undefined} />
       </div>

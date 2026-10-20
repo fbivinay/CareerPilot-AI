@@ -37,7 +37,8 @@ const SIGNALS = [
   }],
   ['rejection', {
     strong: [/\bnot (be )?(moving|move|going) forward with your (application|candidacy|profile)\b/,
-      /\b(decided|chosen|decision) (not )?to (move|proceed|go) forward with (other|another|different) candidates?\b/,
+      /\b(decided|chosen|decision) (not )?to (move|proceed|go) forward with (other |another |different )?candidates?\b/,
+      /\b(won't|will not|unable to|not able to)( be able to)? take your (application|candidacy|profile) (forward|further)\b/,
       /\bmove forward with (other|another|different) candidates?\b/,
       /\bregret to inform\b[^.!?]{0,150}\b(application|candidacy|candidature|position|role|profile|shortlisted|selected|interview|opportunity)\b/,
       /\b(have|has) not been (selected|shortlisted)\b/, /\bwill not be (proceeding|progressing|moving forward)\b/,
@@ -112,7 +113,8 @@ export function classifyEmail(msg, { ourThreadIds = new Set() } = {}) {
   const subject = String(msg.subject ?? '');
   const fromAddr = String(msg.fromAddr ?? '');
   const own = unwrap(stripQuoted(msg.text)).slice(0, 8000);
-  const parts = sentences(`${subject}\n${own}`.toLowerCase()).filter((p) => !DISCLAIMER.test(p));
+  // Curly apostrophes ("won’t", Headout) read as straight ones, so the phrases need one spelling only.
+  const parts = sentences(`${subject}\n${own}`.toLowerCase().replace(/[‘’]/g, "'")).filter((p) => !DISCLAIMER.test(p));
   const inOurThread = ourThreadIds.has(msg.threadId);
   if (/^(mailer-daemon|postmaster)@/i.test(fromAddr)
     && /delivery status notification|undeliverable|delivery (has )?failed|address not found|returned mail|failure notice|could not be delivered/i.test(subject)) {

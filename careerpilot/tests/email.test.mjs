@@ -19,6 +19,11 @@ test('rejections, including polite ones that also thank the candidate', () => {
   assert.equal(c('Your application to Acme', 'Thank you for applying. Unfortunately, we have decided to move forward with other candidates whose experience more closely matches our needs.').category, 'rejection');
   assert.equal(c('Update on your application', 'After careful consideration, we will not be moving forward with your application at this time, but should another role match your profile we will reach out.').category, 'rejection');
   assert.equal(c('Acme application', 'We regret to inform you that you have not been shortlisted.').category, 'rejection');
+  // Real mail, 2026-10-20: Capco names no "other" candidates; Headout writes "won’t" with a curly apostrophe.
+  assert.deepEqual(c('Follow-up from your Internship Application at Capco', 'After careful consideration, we have decided to move forward with candidates whose qualifications are more closely aligned with this role.', 'no-reply@capco.com'),
+    { category: 'rejection', confidence: 0.9 });
+  assert.deepEqual(c('Update on your application for Product Analyst at Headout', 'Unfortunately, we have to inform you that this time we won’t be able to take your application forward.', 'life@headout.com'),
+    { category: 'rejection', confidence: 0.9 });
   // "Unfortunately" alone is only a hint: low confidence, so it goes to review.
   assert.deepEqual(c('Delay', 'Unfortunately our hiring team is travelling this week, so reviews will take longer.'), { category: 'rejection', confidence: 0.6 });
 });
