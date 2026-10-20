@@ -33,19 +33,19 @@ export default async function Inbox({ searchParams }) {
               <Td><Badge value={e.category} />{e.classified_by?.startsWith('ai') && <div className="text-xs text-ink-3">{e.classified_by}</div>}</Td>
               <Td className="text-xs">
                 {e.application_id ? <A to={`/applications/${e.application_id}`}>{e.job_company ?? 'application'}: {e.title}</A> : (
-                  <form action={linkEmailToApplication} className="flex gap-1">
+                  <form action={linkEmailToApplication} className="flex items-center gap-2">
                     <input type="hidden" name="id" value={e.id} />
-                    <select name="applicationId" className="max-w-[10rem] rounded border border-line bg-surface px-1 py-0.5">
+                    <select name="applicationId" className="field max-w-[10rem] px-2 py-0.5 text-xs">
                       {apps.map((a) => <option key={a.id} value={a.id}>{a.company} – {a.title}</option>)}
                     </select>
-                    <button className="rounded border border-line px-1.5">Link</button>
+                    <button className="btn-ghost btn-sm">Link</button>
                   </form>
                 )}
               </Td>
               <Td className="whitespace-nowrap text-xs">
                 {e.thread_id && <A to={gmailLink(e.thread_id)} external>Gmail</A>}
                 {e.needs_review && !e.reviewed ? (
-                  <form action={markEmailReviewed}><input type="hidden" name="id" value={e.id} /><button className="mt-1 text-accent hover:underline">Mark reviewed</button></form>
+                  <form action={markEmailReviewed}><input type="hidden" name="id" value={e.id} /><button className="mt-1 font-semibold text-accent hover:underline">Mark reviewed</button></form>
                 ) : null}
               </Td>
             </tr>

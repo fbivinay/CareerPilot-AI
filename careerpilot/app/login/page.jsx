@@ -5,9 +5,10 @@ export const metadata = { title: 'Sign in · CareerPilot' };
 export default async function LoginPage({ searchParams }) {
   const { next } = await searchParams;
   return (
-    <div className="mx-auto mt-24 max-w-sm rounded-xl border border-line bg-surface p-6">
-      <h1 className="text-lg font-semibold">CareerPilot</h1>
-      <p className="mt-1 text-sm text-ink-2">Private dashboard. Sign in to continue.</p>
+    <div className="card mx-auto mt-16 max-w-md p-7 sm:p-9">
+      <span className="badge">Private dashboard</span>
+      <h1 className="h2 mt-5"><span className="d-line"><span>CareerPilot</span></span></h1>
+      <p className="mt-2 text-ink-2">Sign in to continue.</p>
       <LoginForm next={typeof next === 'string' ? next : '/'} />
     </div>
   );

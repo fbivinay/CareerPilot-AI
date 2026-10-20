@@ -8,10 +8,10 @@ export default async function Outreach({ searchParams }) {
   const params = await searchParams;
   const tab = params.tab === 'contacts' ? 'contacts' : 'messages';
   const tabs = (
-    <div className="flex gap-1 text-sm">
+    <div className="flex gap-3">
       {['messages', 'contacts'].map((t) => (
         <a key={t} href={href('/outreach', {}, { tab: t === 'messages' ? null : t })}
-          className={`rounded-md px-3 py-1.5 ${tab === t ? 'bg-accent-soft text-accent font-medium' : 'text-ink-2 hover:text-ink'}`}>{t === 'messages' ? 'Messages' : 'Contacts'}</a>
+          className={`btn-ghost px-4 py-1.5 text-sm ${tab === t ? 'bg-ink text-cream' : ''}`}>{t === 'messages' ? 'Messages' : 'Contacts'}</a>
       ))}
     </div>
   );
@@ -21,13 +21,13 @@ export default async function Outreach({ searchParams }) {
     return (
       <>
         <PageHeader title="Outreach" sub="Contacts come only from addresses printed in job postings, people who emailed you, or ones you add.">{tabs}</PageHeader>
-        <Card title="Add a contact you met or were introduced to" className="mb-4">
+        <Card title="Add a contact you met or were introduced to" className="mb-8">
           <form action={addContact} className="flex flex-wrap items-end gap-2">
             {[['email', 'Email', 'name@company.com'], ['name', 'Name', ''], ['company', 'Company', '']].map(([n, l, p]) => (
               <label key={n} className="flex flex-col gap-1 text-xs text-ink-2">{l}
-                <input name={n} required={n === 'email'} placeholder={p} className="rounded-md border border-line bg-surface px-2 py-1.5 text-sm text-ink" /></label>
+                <input name={n} required={n === 'email'} placeholder={p} className="field" /></label>
             ))}
-            <button className="rounded-md border border-line px-3 py-1.5 text-sm hover:border-accent">Add</button>
+            <button className="btn-ghost px-4 py-1.5 text-sm">Add</button>
           </form>
         </Card>
         <Table head={['Contact', 'Company', 'Source', 'Domain verified', 'Emails sent', 'Status']}>

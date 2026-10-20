@@ -15,8 +15,8 @@ export default async function Email({ searchParams }) {
     <>
       <PageHeader title="Email" sub="Job emails you and CareerPilot sent, and the replies they got. Every number opens the list it counts." />
 
-      <h2 className="mb-2 text-sm font-semibold text-ink-2">Sent</h2>
-      <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+      <h2 className="kicker mb-3">Sent</h2>
+      <div className="mb-10 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
         <Stat label="Job emails sent" value={c.all} to="/email" hint="One per conversation" />
         <Stat label="Sent by you" value={c.you} to={to({ by: 'you' })} />
         <Stat label="Sent by CareerPilot" value={c.careerpilot} to={to({ by: 'careerpilot' })} />
@@ -25,8 +25,8 @@ export default async function Email({ searchParams }) {
         <Stat label="Bounced" value={c.bounce} to={to({ reply: 'bounce' })} tone={c.bounce ? 'bad' : undefined} hint="Address did not exist" />
       </div>
 
-      <h2 className="mb-2 text-sm font-semibold text-ink-2">Replies</h2>
-      <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+      <h2 className="kicker mb-3">Replies</h2>
+      <div className="mb-10 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
         <Stat label="Assessments" value={c.assessment} to={to({ reply: 'assessment' })} />
         <Stat label="Interviews" value={c.interview} to={to({ reply: 'interview' })} tone={c.interview ? 'good' : undefined} />
         <Stat label="Offers" value={c.offer} to={to({ reply: 'offer' })} tone={c.offer ? 'good' : undefined} />

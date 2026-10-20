@@ -10,16 +10,16 @@ const NOTICES = {
   'not-configured': ['warn', 'The Google OAuth client is not configured yet (see the steps below).'],
   'test-first': ['warn', 'Run the read-only test first; sending can only be enabled after it passes.'],
 };
-const TONE = { good: 'bg-good-soft text-good', warn: 'bg-warn-soft text-warn', bad: 'bg-bad-soft text-bad' };
+const TONE = { good: 'bg-teal', warn: 'bg-yellow', bad: 'bg-pink' };
 
 const fmt = (iso) => (iso ? new Date(iso).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' }) : '');
-const Button = ({ children, ...p }) => <button {...p} className="rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50">{children}</button>;
-const LinkButton = ({ href, children }) => <a href={href} className="inline-block rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-white">{children}</a>;
+const Button = ({ children, ...p }) => <button {...p} className="btn-primary px-4 py-1.5 text-sm">{children}</button>;
+const LinkButton = ({ href, children }) => <a href={href} className="btn-primary px-4 py-1.5 text-sm">{children}</a>;
 
 function Step({ n, title, done, children }) {
   return (
     <li className="flex gap-3">
-      <span className={`mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${done ? 'bg-good text-white' : 'bg-surface-2 text-ink-2'}`}>{done ? '✓' : n}</span>
+      <span className={`mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border-2 border-line font-display text-xs font-black ${done ? 'bg-teal' : 'bg-surface-2 text-ink-2'}`}>{done ? '✓' : n}</span>
       <div className="min-w-0 flex-1 text-sm"><div className="font-medium">{title}</div><div className="mt-1 space-y-2 text-ink-2">{children}</div></div>
     </li>
   );
@@ -33,8 +33,8 @@ export function GmailPanel({ status, notice, error }) {
 
   return (
     <div className="space-y-4">
-      {banner && <p className={`rounded-md px-3 py-2 text-sm ${TONE[banner[0]]}`}>{banner[1]}</p>}
-      {status.error && <p className={`rounded-md px-3 py-2 text-sm ${TONE.bad}`}>{status.error} Reconnect below.</p>}
+      {banner && <p className={`tile px-4 py-2.5 text-sm font-medium ${TONE[banner[0]]}`}>{banner[1]}</p>}
+      {status.error && <p className={`tile px-4 py-2.5 text-sm font-medium ${TONE.bad}`}>{status.error} Reconnect below.</p>}
       <ol className="space-y-4">
         <Step n={1} title="Connect Gmail (read-only)" done={status.canRead}>
           {!status.configured ? (
@@ -57,7 +57,7 @@ export function GmailPanel({ status, notice, error }) {
           )}
           {test && !test.ok && <p className="text-bad">Test failed: {test.error}</p>}
           {test?.ok && (
-            <div className="rounded-md border border-line p-3">
+            <div className="rounded-2xl border-2 border-line p-3">
               <p className="text-good">Passed: read {test.fetched} messages from {test.email}.</p>
               <p className="mt-1">By category: {Object.entries(test.categories).map(([k, v]) => `${k.replace(/_/g, ' ')} ${v}`).join(' · ') || 'no messages in the last 14 days'}</p>
               {test.samples.length > 0 && (

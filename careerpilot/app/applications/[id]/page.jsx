@@ -15,10 +15,10 @@ export default async function ApplicationPage({ params }) {
   return (
     <>
       <PageHeader title={`${app.title}`} sub={<><A to={`/companies/${encodeURIComponent(app.company)}`}>{app.company}</A> · <A to={`/jobs/${app.job_id}`}>job details</A></>}>
-        <a href={app.url} target="_blank" rel="noopener noreferrer" className="rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-white">Open posting ↗</a>
+        <a href={app.url} target="_blank" rel="noopener noreferrer" className="btn-primary px-4 py-1.5 text-sm">Open posting ↗</a>
       </PageHeader>
-      <div className="grid gap-4 lg:grid-cols-3">
-        <div className="space-y-4 lg:col-span-2">
+      <div className="grid gap-6 lg:grid-cols-3">
+        <div className="space-y-6 lg:col-span-2">
           <Card title="Status">
             <div className="flex flex-wrap items-center gap-3">
               <Badge value={app.status} />
@@ -28,20 +28,20 @@ export default async function ApplicationPage({ params }) {
             <form action={setApplicationStatus} className="mt-4 flex flex-wrap items-end gap-2">
               <input type="hidden" name="id" value={app.id} />
               <label className="flex flex-col gap-1 text-xs text-ink-2">Update status
-                <select name="status" className="rounded-md border border-line bg-surface px-2 py-1.5 text-sm text-ink">
+                <select name="status" className="field">
                   {NEXT.map((s) => <option key={s} value={s}>{s}</option>)}
                 </select>
               </label>
               <label className="flex flex-1 flex-col gap-1 text-xs text-ink-2">Note / proof (e.g. “submitted on portal, ref #123”)
-                <input name="note" className="rounded-md border border-line bg-surface px-2 py-1.5 text-sm text-ink" />
+                <input name="note" className="field" />
               </label>
-              <button className="rounded-md border border-line px-3 py-1.5 text-sm hover:border-accent">Save</button>
+              <button className="btn-ghost px-4 py-1.5 text-sm">Save</button>
             </form>
           </Card>
           <Card title="Evidence">
             {evidence.length ? (
               <ul className="space-y-2 text-sm">{evidence.map((e, i) => (
-                <li key={i} className="rounded-md bg-surface-2 px-3 py-2">
+                <li key={i} className="rounded-xl bg-surface-2 px-3 py-2">
                   <Badge value={e.to} /> <span className="text-ink-2">{fmtDateTime(e.at)} · {e.type?.replace('_', ' ')}</span>
                   {e.subject && <div>“{e.subject}” from {e.from}</div>}
                   {e.recipient && <div>Sent to {e.recipient}</div>}
@@ -75,7 +75,7 @@ export default async function ApplicationPage({ params }) {
             </Table>
           </Card>
         </div>
-        <div className="space-y-4">
+        <div className="space-y-6">
           <Card title="Details">
             <KV items={[
               ['Method', app.method], ['Resume used', app.resume_version], ['Created', fmtDateTime(app.created_at)],

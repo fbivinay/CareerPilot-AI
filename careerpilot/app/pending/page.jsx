@@ -28,12 +28,12 @@ export default async function Pending() {
     <>
       <PageHeader title="Pending" sub="CareerPilot's work that is waiting, most urgent first." />
       {problems.length > 0 && (
-        <Card title="System problems" className="mb-4 border-bad">
+        <Card title="System problems" className="mb-6 border-bad">
           <ul className="space-y-1 text-sm">{problems.map(([t, e]) => <li key={t}><strong>{t}:</strong> <span className="text-ink-2">{e}</span></li>)}</ul>
         </Card>
       )}
       {questions.length > 0 && (
-        <Card title="Questions blocking applications" className="mb-4">
+        <Card title="Questions blocking applications" className="mb-6">
           <p className="mb-2 text-sm text-ink-2">CareerPilot never guesses these. Each answer is given once and reused for every employer.</p>
           <ol className="space-y-1.5 text-sm">
             {questions.map((q) => (
@@ -46,11 +46,11 @@ export default async function Pending() {
         </Card>
       )}
       {unknown.length > 0 && (
-        <Card title="Interrupted sends: check Gmail Sent before anything is retried" className="mb-4">
+        <Card title="Interrupted sends: check Gmail Sent before anything is retried" className="mb-6">
           <ul className="space-y-1 text-sm">{unknown.map((o) => <li key={o.id}><A to={`/outreach/${o.id}`}>{o.subject}</A> → {o.email}</li>)}</ul>
         </Card>
       )}
-      <div className="grid gap-4 lg:grid-cols-2">
+      <div className="grid gap-6 lg:grid-cols-2">
         <Card title={`Interviews, assessments & offers (last 14 days): ${upcoming.length}`}>
           {upcoming.length ? (
             <ul className="space-y-2 text-sm">{upcoming.map((e) => {
@@ -68,7 +68,7 @@ export default async function Pending() {
           ) : <p className="text-sm text-ink-3">All clear.</p>}
         </Card>
       </div>
-      <h2 className="mb-2 mt-6 text-sm font-semibold text-ink-2">
+      <h2 className="kicker mb-3 mt-10">
         CareerPilot&apos;s queue ({appTotal}){appTotal > apps.length && <> · showing the top {apps.length}, <A to="/applications?status=pending">see all</A></>}
       </h2>
       <Table head={['Role', 'Company', 'Status', 'What is needed', '']} empty="Nothing queued right now.">

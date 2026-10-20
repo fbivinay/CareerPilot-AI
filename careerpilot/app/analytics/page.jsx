@@ -28,7 +28,7 @@ export default async function Analytics() {
   return (
     <>
       <PageHeader title="Analytics" sub="Response rate = applications with a human decision (assessment, interview, offer or rejection) ÷ applications submitted." />
-      <div className="grid gap-4 lg:grid-cols-2">
+      <div className="grid gap-6 lg:grid-cols-2">
         <Card title="Funnel">
           <Bars rows={[
             { label: 'Discovered', value: n(f.discovered), to: '/jobs?status=all' },
@@ -48,21 +48,21 @@ export default async function Analytics() {
               ['Offer rate', pct(n(f.offers), n(f.applied)), '/applications?status=offer'],
               ['Outreach reply rate', pct(n(a.outreach.replied), n(a.outreach.sent)), '/outreach?replied=1'],
             ].map(([l, v, to]) => (
-              <a key={l} href={to} className="rounded-lg border border-line p-3 hover:border-accent">
-                <div className="text-[13px] text-ink-2">{l}</div><div className="mt-1 text-2xl font-semibold tabular-nums">{v}</div>
+              <a key={l} href={to} className="tile tile-hover p-3">
+                <div className="text-[12px] font-bold uppercase tracking-[0.08em]">{l}</div><div className="figure mt-1.5 text-[28px] leading-none">{v}</div>
               </a>
             ))}
           </div>
-          <h3 className="mb-2 mt-5 text-xs font-medium text-ink-2">Applications submitted per day (last 28 days)</h3>
+          <h3 className="kicker mb-2 mt-6 text-ink-2">Applications submitted per day (last 28 days)</h3>
           <Bars rows={a.weekly.map((w) => ({ label: w.d, value: n(w.n), to: '/applications?status=applied&sort=submitted' }))} />
           {!a.weekly.length && <p className="text-sm text-ink-3">None yet.</p>}
         </Card>
       </div>
-      <h2 className="mb-2 mt-6 text-sm font-semibold text-ink-2">By source</h2>
+      <h2 className="kicker mb-3 mt-10">By source</h2>
       <Breakdown rows={a.bySource} label="Source" link={(k) => href('/applications', { source: k, status: 'applied' })} />
-      <h2 className="mb-2 mt-6 text-sm font-semibold text-ink-2">By role</h2>
+      <h2 className="kicker mb-3 mt-10">By role</h2>
       <Breakdown rows={a.byRole} label="Role" link={(k) => href('/applications', { category: k, status: 'applied' })} />
-      <h2 className="mb-2 mt-6 text-sm font-semibold text-ink-2">By resume version</h2>
+      <h2 className="kicker mb-3 mt-10">By resume version</h2>
       <Table head={['Resume', 'Applied', 'Heard back', 'Response rate', 'Interviews']} empty="No submitted applications yet.">
         {a.byResume.map((r) => (
           <tr key={r.k}><Td><A to={href('/applications', { resume: r.k, status: 'applied' })}>{r.k}</A></Td><Td>{fmtNum(r.applied)}</Td><Td>{fmtNum(r.responded)}</Td>

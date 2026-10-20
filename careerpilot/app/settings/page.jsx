@@ -12,7 +12,7 @@ function Field({ name, label, value, hint, type = 'number', step }) {
   return (
     <label className="flex flex-col gap-1 text-sm">
       <span className="text-ink-2">{label}</span>
-      <input name={name} type={type} step={step} defaultValue={value} required={type === 'number'} className="rounded-md border border-line bg-surface px-2 py-1.5 text-ink" />
+      <input name={name} type={type} step={step} defaultValue={value} required={type === 'number'} className="field" />
       {hint && <span className="text-xs text-ink-3">{hint}</span>}
     </label>
   );
@@ -21,7 +21,7 @@ function Field({ name, label, value, hint, type = 'number', step }) {
 function Toggle({ name, label, checked, hint }) {
   return (
     <label className="flex items-start gap-2 text-sm">
-      <input type="checkbox" name={name} defaultChecked={checked} className="mt-1" />
+      <input type="checkbox" name={name} defaultChecked={checked} className="mt-0.5 size-[17px] shrink-0 cursor-pointer accent-pink" />
       <span>{label}{hint && <span className="block text-xs text-ink-3">{hint}</span>}</span>
     </label>
   );
@@ -35,14 +35,14 @@ export default async function Settings({ searchParams }) {
   return (
     <>
       <PageHeader title="Settings" sub="Changes apply on the next scheduled run; stored jobs are re-scored automatically when rules change." />
-      <div id="gmail" className="mb-4 scroll-mt-20">
+      <div id="gmail" className="mb-8 scroll-mt-24">
         <Card title="Gmail">
           <GmailPanel status={await connectionStatus(await getDb())} notice={gmailNotice} error={Object.hasOwn(CONNECT_ERRORS, gmailError ?? '') ? CONNECT_ERRORS[gmailError] : null} />
         </Card>
       </div>
-      {saved && <p className="mb-4 rounded-md bg-good-soft px-3 py-2 text-sm text-good">Saved.</p>}
-      {readOnly && <p className="mb-4 rounded-md bg-warn-soft px-3 py-2 text-sm text-warn">This deployment is read-only. Change settings from your local dashboard.</p>}
-      <form action={updateSettings} className="grid gap-4 lg:grid-cols-2">
+      {saved && <p className="tile mb-8 bg-teal px-4 py-2.5 text-sm font-semibold">Saved.</p>}
+      {readOnly && <p className="tile mb-8 bg-yellow px-4 py-2.5 text-sm font-semibold">This deployment is read-only. Change settings from your local dashboard.</p>}
+      <form action={updateSettings} className="grid gap-6 lg:grid-cols-2">
         <Card title="Compensation (applied only when the posting discloses pay)">
           <div className="grid grid-cols-2 gap-3">
             <Field name="fullTimeMinLpa" label="Full-time minimum (LPA)" value={s.compensation.fullTimeMinLpa} step="0.5" />
@@ -99,7 +99,7 @@ export default async function Settings({ searchParams }) {
           ]} />
         </Card>
         <div className="lg:col-span-2">
-          <button disabled={readOnly} className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-white disabled:opacity-50">Save settings</button>
+          <button disabled={readOnly} className="btn-primary px-6 py-2.5">Save settings</button>
         </div>
       </form>
     </>

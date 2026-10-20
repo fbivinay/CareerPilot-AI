@@ -12,10 +12,10 @@ export default async function OutreachPage({ params }) {
   return (
     <>
       <PageHeader title={o.subject} sub={<>To {o.name ? `${o.name} <${o.email}>` : o.email}{o.company && <> · <A to={`/companies/${encodeURIComponent(o.company)}`}>{o.company}</A></>}</>}>
-        {o.gmail_thread_id && <a href={gmailLink(o.gmail_thread_id)} target="_blank" rel="noopener noreferrer" className="rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-white">Open thread in Gmail ↗</a>}
+        {o.gmail_thread_id && <a href={gmailLink(o.gmail_thread_id)} target="_blank" rel="noopener noreferrer" className="btn-primary px-4 py-1.5 text-sm">Open thread in Gmail ↗</a>}
       </PageHeader>
-      <div className="grid gap-4 lg:grid-cols-3">
-        <div className="space-y-4 lg:col-span-2">
+      <div className="grid gap-6 lg:grid-cols-3">
+        <div className="space-y-6 lg:col-span-2">
           {messages.map((m) => (
             <Card key={m.id} title={`${m.kind === 'followup' ? 'Follow-up' : m.kind === 'application' ? 'Email application' : 'Introduction'} · ${fmtDateTime(m.sent_at ?? m.created_at)}`} action={<Badge value={m.status} />}>
               {m.error && <p className="mb-2 text-sm text-bad">{m.error}</p>}
@@ -23,7 +23,7 @@ export default async function OutreachPage({ params }) {
             </Card>
           ))}
         </div>
-        <div className="space-y-4">
+        <div className="space-y-6">
           <Card title="Details">
             <KV items={[
               ['Job', o.job_id && <A key="j" to={`/jobs/${o.job_id}`}>{o.title}</A>],

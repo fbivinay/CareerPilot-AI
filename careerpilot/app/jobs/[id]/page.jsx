@@ -13,21 +13,21 @@ export default async function JobPage({ params }) {
   return (
     <>
       <PageHeader title={job.title} sub={<><A to={`/companies/${encodeURIComponent(job.company)}`}>{job.company}</A> · {job.location || 'Location not stated'}</>}>
-        <div className="flex flex-wrap gap-2">
-          <a href={job.url} target="_blank" rel="noopener noreferrer" className="rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-white">Open original posting ↗</a>
+        <div className="flex flex-wrap items-start gap-3">
+          <a href={job.url} target="_blank" rel="noopener noreferrer" className="btn-primary px-4 py-1.5 text-sm">Open original posting ↗</a>
           {application
-            ? <a href={`/applications/${application.id}`} className="rounded-md border border-line px-3 py-1.5 text-sm">Application: <Badge value={application.status} /></a>
-            : <form action={startApplication}><input type="hidden" name="jobId" value={job.id} /><button className="rounded-md border border-line px-3 py-1.5 text-sm hover:border-accent">Track an application</button></form>}
-          {job.status === 'qualified' && <form action={setJobStatus}><input type="hidden" name="id" value={job.id} /><input type="hidden" name="action" value="exclude" /><button className="rounded-md border border-line px-3 py-1.5 text-sm text-ink-2 hover:border-bad hover:text-bad">Not interested</button></form>}
+            ? <a href={`/applications/${application.id}`} className="btn-ghost px-4 py-1.5 text-sm">Application: <Badge value={application.status} /></a>
+            : <form action={startApplication}><input type="hidden" name="jobId" value={job.id} /><button className="btn-ghost px-4 py-1.5 text-sm">Track an application</button></form>}
+          {job.status === 'qualified' && <form action={setJobStatus}><input type="hidden" name="id" value={job.id} /><input type="hidden" name="action" value="exclude" /><button className="btn-ghost px-4 py-1.5 text-sm hover:text-bad">Not interested</button></form>}
           {job.status !== 'duplicate' && (!application || ['ready', 'blocked', 'failed'].includes(application.status)) && <DropButton jobId={job.id} action={dropJobAction} />}
-          {job.status === 'excluded' && <form action={setJobStatus}><input type="hidden" name="id" value={job.id} /><input type="hidden" name="action" value="reevaluate" /><button className="rounded-md border border-line px-3 py-1.5 text-sm">Re-evaluate</button></form>}
+          {job.status === 'excluded' && <form action={setJobStatus}><input type="hidden" name="id" value={job.id} /><input type="hidden" name="action" value="reevaluate" /><button className="btn-ghost px-4 py-1.5 text-sm">Re-evaluate</button></form>}
         </div>
       </PageHeader>
 
-      <div className="grid gap-4 lg:grid-cols-3">
-        <div className="space-y-4 lg:col-span-2">
+      <div className="grid gap-6 lg:grid-cols-3">
+        <div className="space-y-6 lg:col-span-2">
           <Card title="Why this job">
-            {job.exclusion_reason && <p className="mb-3 rounded-md bg-surface-2 px-3 py-2 text-sm"><strong>Excluded:</strong> {job.exclusion_reason}</p>}
+            {job.exclusion_reason && <p className="mb-3 rounded-xl bg-surface-2 px-3 py-2 text-sm"><strong>Excluded:</strong> {job.exclusion_reason}</p>}
             <ul className="list-disc space-y-1 pl-5 text-sm">{reasons.map((r) => <li key={r}>{r}</li>)}</ul>
             {job.ai_summary && <p className="mt-3 text-sm text-ink-2"><strong className="text-ink">AI fit {job.ai_score}/100:</strong> {job.ai_summary}</p>}
           </Card>
@@ -52,7 +52,7 @@ export default async function JobPage({ params }) {
             </Table>
           </Card>
         </div>
-        <div className="space-y-4">
+        <div className="space-y-6">
           <Card title="Details">
             <KV items={[
               ['Status', <Badge key="s" value={job.status} />],

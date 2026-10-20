@@ -20,7 +20,7 @@ function Logo({ src, name, size = 20, width = size }) {
   // Logos are drawn for their owner's own header, so some are white and some dark: a white tile in both
   // themes, with a hairline shadow that outlines white glyphs, keeps every one of them visible.
   return (
-    <span className="inline-flex shrink-0 items-center justify-center rounded border border-line bg-white p-0.5" style={{ width, height: size }}>
+    <span className="inline-flex shrink-0 items-center justify-center rounded-md border-2 border-line bg-white p-0.5" style={{ width, height: size }}>
       {/* eslint-disable-next-line @next/next/no-img-element -- remote logos, no optimisation needed */}
       <img src={src} alt="" referrerPolicy="no-referrer" onError={() => setFailed(true)} className="max-h-full max-w-full object-contain"
         style={{ filter: 'drop-shadow(0 0 0.6px rgba(0,0,0,0.55))' }} />
@@ -47,7 +47,7 @@ export function PlacesDonut({ total, places }) {
   const shown = active == null ? null : rows[active];
   return (
     <div className="flex flex-col items-center gap-5 sm:flex-row sm:items-start">
-      <div className="relative shrink-0" style={{ width: 160, height: 160 }}>
+      <div className="d-pop relative shrink-0" style={{ width: 160, height: 160 }}>
         <svg viewBox="0 0 160 160" width="160" height="160" role="img" aria-label={`Applications by site: ${rows.map((r) => `${r.label} ${r.count}`).join(', ')}`}>
           <g transform="rotate(-90 80 80)">
             {arcs.map((a, i) => (
@@ -61,12 +61,12 @@ export function PlacesDonut({ total, places }) {
         <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center text-center">
           {shown ? (
             <>
-              <span className="text-xl font-semibold">{shown.count}</span>
-              <span className="text-xs text-ink-2">{pctOf(shown.count, total)}% · {shown.label}</span>
+              <span className="figure text-[26px] leading-none">{shown.count}</span>
+              <span className="mt-1 text-xs text-ink-2">{pctOf(shown.count, total)}% · {shown.label}</span>
             </>
           ) : (
             <>
-              <span className="text-2xl font-semibold">{total}</span>
+              <span className="figure text-[30px] leading-none">{total}</span>
               <span className="text-xs text-ink-2">applications</span>
             </>
           )}
@@ -76,8 +76,8 @@ export function PlacesDonut({ total, places }) {
         {rows.map((r, i) => (
           <li key={r.label}>
             <button type="button" onPointerEnter={() => setActive(i)} onPointerLeave={() => setActive(null)} onFocus={() => setActive(i)} onBlur={() => setActive(null)}
-              className={`grid w-full grid-cols-[10px_20px_1fr_auto_3rem] items-center gap-2 rounded-md px-1.5 py-1 text-left text-sm ${active === i ? 'bg-surface-2' : ''}`}>
-              <span className="h-2.5 w-2.5 rounded-sm" style={{ background: r.color }} aria-hidden="true" />
+              className={`grid w-full grid-cols-[12px_20px_1fr_auto_3rem] items-center gap-2 rounded-xl px-1.5 py-1 text-left text-sm ${active === i ? 'bg-surface-2' : ''}`}>
+              <span className="h-3 w-3 rounded-[3px] border-[1.5px] border-line" style={{ background: r.color }} aria-hidden="true" />
               {r.label === 'Others' ? <span /> : <Logo src={r.logo} name={r.label} />}
               <span className="truncate">{r.label}{r.note && <span className="ml-1 text-xs text-ink-3">({r.note})</span>}</span>
               <span className="tabular-nums font-medium">{r.count}</span>
@@ -94,14 +94,14 @@ export function TopCompanies({ total, companies }) {
   const max = Math.max(1, ...companies.shown.map((c) => c.count));
   return (
     <ol className="space-y-2">
-      {companies.shown.map((c) => (
+      {companies.shown.map((c, i) => (
         <li key={c.label}>
           <Link href={`/companies/${encodeURIComponent(c.label)}`} title={`${c.name}: ${c.count} applications`}
-            className="group grid grid-cols-[44px_minmax(6rem,10rem)_1fr_auto] items-center gap-3 rounded-md px-1 py-1 hover:bg-surface-2">
+            className="group grid grid-cols-[44px_minmax(6rem,10rem)_1fr_auto] items-center gap-3 rounded-xl px-1 py-1 hover:bg-surface-2">
             <Logo src={c.logo} name={c.name} size={28} width={44} />
             <span className="truncate text-sm group-hover:underline">{c.name}</span>
-            <span className="h-2 rounded-[4px] bg-surface-2">
-              <span className="block h-2 rounded-[4px]" style={{ width: `${(100 * c.count) / max}%`, background: 'var(--bar)' }} />
+            <span className="h-3 overflow-hidden rounded-full border-2 border-line bg-surface-2">
+              <span className="d-grow block h-full rounded-full" style={{ width: `${(100 * c.count) / max}%`, background: 'var(--bar)', animationDelay: `${0.2 + i * 0.05}s` }} />
             </span>
             <span className="min-w-10 text-right text-sm tabular-nums">{c.count}</span>
           </Link>

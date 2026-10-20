@@ -10,18 +10,21 @@ export default async function Overview() {
   return (
     <>
       <PageHeader title="Overview" sub="Every number opens the list it counts.">
-        <form action={logout}><button className="text-sm text-ink-2 hover:text-ink">Sign out</button></form>
+        <form action={logout}><button className="btn-ghost px-4 py-1.5 text-sm">Sign out</button></form>
       </PageHeader>
 
       {o.pending > 0 && (
-        <a href="/pending" className="mb-5 flex items-center justify-between rounded-xl border border-warn bg-warn-soft px-4 py-3 text-sm text-warn">
-          <span><strong>{o.pending}</strong> items need your attention (applications to submit, emails to review).</span>
-          <span>Open pending →</span>
+        <a href="/pending" className="tile tile-hover mb-10 flex flex-wrap items-center justify-between gap-3 bg-yellow px-5 py-4">
+          <span className="font-medium">
+            <span className="figure mr-2 inline-block -rotate-2 rounded-[12px] border-[3px] border-ink bg-cream px-2.5 py-0.5 text-[22px] shadow-[3px_3px_0_var(--ink)]">{o.pending}</span>
+            items need your attention (applications to submit, emails to review).
+          </span>
+          <span className="font-display font-extrabold">Open pending →</span>
         </a>
       )}
 
-      <h2 className="mb-2 text-sm font-semibold text-ink-2">Pipeline</h2>
-      <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+      <h2 className="kicker mb-3">Pipeline</h2>
+      <div className="mb-10 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
         <Stat label="Jobs tracked" value={o.discovered} to="/jobs?status=all" hint="All sources, duplicates merged" />
         <Stat label="Qualified" value={o.qualified} to="/jobs?status=qualified" hint={`${o.applied} applied · ${o.qualified - o.applied} to apply`} />
         <Stat label="Ready to apply" value={o.ready} to="/applications?status=ready" hint="CareerPilot submits these" />
@@ -30,8 +33,8 @@ export default async function Overview() {
         <Stat label="Acknowledged" value={o.acknowledged} to="/applications?status=acknowledged" hint={`Employer replied · ${o.applied - o.acknowledged} not yet`} />
       </div>
 
-      <h2 className="mb-2 text-sm font-semibold text-ink-2">Outcomes <span className="font-normal text-ink-3">· applications CareerPilot sent, and blocked ones you marked done</span></h2>
-      <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+      <h2 className="kicker mb-3">Outcomes <span className="ml-1 font-sans text-[12.5px] font-medium normal-case tracking-normal">· applications CareerPilot sent, and blocked ones you marked done</span></h2>
+      <div className="mb-10 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
         <Stat label="Assessments" value={o.assessment} to="/applications?status=assessment" />
         <Stat label="Interviews" value={o.interview} to="/applications?status=interview" tone={o.interview ? 'good' : undefined} />
         <Stat label="Offers" value={o.offer} to="/applications?status=offer" tone={o.offer ? 'good' : undefined} />
@@ -40,8 +43,8 @@ export default async function Overview() {
 
       {waiting.length > 0 && (
         <>
-          <h2 className="mb-2 text-sm font-semibold text-ink-2">No confirmation</h2>
-          <Card title={`${waiting.length} submitted, not acknowledged by the employer yet`} className="mb-6">
+          <h2 className="kicker mb-3">No confirmation</h2>
+          <Card title={`${waiting.length} submitted, not acknowledged by the employer yet`} className="mb-10">
             <ul className="divide-y divide-line text-sm">
               {waiting.map((a) => (
                 <li key={a.id} className="flex items-baseline justify-between gap-3 py-1.5">
@@ -56,15 +59,15 @@ export default async function Overview() {
 
       {where.total > 0 && (
         <>
-          <h2 className="mb-2 text-sm font-semibold text-ink-2">Where your applications go</h2>
-          <div className="mb-6 grid gap-4 lg:grid-cols-2">
+          <h2 className="kicker mb-3">Where your applications go</h2>
+          <div className="mb-10 grid gap-6 lg:grid-cols-2">
             <Card title="By site"><PlacesDonut total={where.total} places={where.places} /></Card>
             <Card title="Top companies"><TopCompanies total={where.total} companies={where.companies} /></Card>
           </div>
         </>
       )}
 
-      <div className="grid gap-4 lg:grid-cols-2">
+      <div className="grid gap-6 lg:grid-cols-2">
         <Card title="Automation runs">
           <KV items={[
             ['Last run', s.last ? `${fmtDateTime(s.last.at)}${s.last.failed ? ' (with errors)' : ''}` : 'Never'],

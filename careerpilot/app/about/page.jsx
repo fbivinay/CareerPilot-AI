@@ -5,8 +5,8 @@ export const metadata = { title: 'About · CareerPilot' };
 // Public (no sign-in): Google's OAuth consent screen links here as the app's home page.
 export default function AboutPage() {
   return (
-    <article className="mx-auto mt-16 max-w-2xl space-y-4 leading-relaxed">
-      <h1 className="text-2xl font-semibold">CareerPilot</h1>
+    <article className="card mx-auto mt-6 max-w-2xl space-y-4 p-7 leading-relaxed sm:p-10">
+      <h1 className="h2"><span className="d-line"><span>CareerPilot</span></span></h1>
       <p>
         CareerPilot is a private, single-user job-search assistant. Its owner runs it for their own job
         search; there is no sign-up and there are no other users.

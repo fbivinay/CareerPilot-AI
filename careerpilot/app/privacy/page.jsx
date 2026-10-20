@@ -4,7 +4,7 @@ export const metadata = { title: 'Privacy policy · CareerPilot' };
 
 const Section = ({ title, children }) => (
   <section className="space-y-2">
-    <h2 className="text-lg font-semibold">{title}</h2>
+    <h2 className="font-display text-xl font-extrabold tracking-[-0.02em]">{title}</h2>
     {children}
   </section>
 );
@@ -12,9 +12,9 @@ const Section = ({ title, children }) => (
 // Public (no sign-in): linked from Google's OAuth consent screen. Keep it in step with what the code does.
 export default function PrivacyPage() {
   return (
-    <article className="mx-auto mt-16 max-w-2xl space-y-6 leading-relaxed">
+    <article className="card mx-auto mt-6 max-w-2xl space-y-6 p-7 leading-relaxed sm:p-10">
       <div>
-        <h1 className="text-2xl font-semibold">Privacy policy</h1>
+        <h1 className="h2"><span className="d-line"><span>Privacy policy</span></span></h1>
         <p className="mt-1 text-sm text-ink-2">Last updated 17 October 2026</p>
       </div>
       <p>
