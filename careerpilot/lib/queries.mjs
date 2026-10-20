@@ -229,20 +229,18 @@ export async function overview() {
   const appIn = async (set) => count(db, `SELECT count(*) n FROM applications a JOIN jobs j ON j.id = a.job_id
     WHERE a.status IN (${placeholders(set)}) AND ${SHOWN_APP}`, set);
   const [discovered, live, qualified, qualifiedHigh, ready, blocked, failed, applied, acknowledged, assessment, interview, offer, rejected,
-    outreachSent, replies, review, unknownSends] = await Promise.all([
+    review, unknownSends] = await Promise.all([
     count(db, `SELECT count(*) n FROM jobs j WHERE j.status != 'duplicate' AND ${SHOWN_JOB}`),
     count(db, `SELECT count(*) n FROM jobs j WHERE j.status IN ('qualified','excluded','new') AND ${SHOWN_JOB}`),
     count(db, `SELECT count(*) n FROM jobs j WHERE ${QUALIFIED_JOB} AND ${SHOWN_JOB}`),
     count(db, `SELECT count(*) n FROM jobs j WHERE ${QUALIFIED_JOB} AND j.confidence = 'high' AND ${SHOWN_JOB}`),
     appIn(['ready']), appIn(['blocked']), appIn(['failed']), appIn(APPLIED), appIn(ACKNOWLEDGED), appIn(['assessment']),
     appIn(['interview']), appIn(['offer']), appIn(['rejected']),
-    count(db, `SELECT count(*) n FROM outreach WHERE status = 'sent'`),
-    count(db, `SELECT count(*) n FROM outreach WHERE replied_at IS NOT NULL`),
     count(db, `SELECT count(*) n FROM emails e WHERE e.needs_review = 1 AND e.reviewed = 0 AND ${SHOWN_EMAIL}`),
     count(db, `SELECT count(*) n FROM outreach WHERE status = 'unknown'`),
   ]);
   return { discovered, live, qualified, qualifiedHigh, ready, blocked, failed, applied, acknowledged, assessment, interview, offer, rejected,
-    outreachSent, replies, review, unknownSends, pending: ready + blocked + failed + review + unknownSends };
+    review, unknownSends, pending: ready + blocked + failed + review + unknownSends };
 }
 
 // ---- Where CareerPilot's applications go: the employer's own site (named by its application system),

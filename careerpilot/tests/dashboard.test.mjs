@@ -58,8 +58,6 @@ test('overview tiles equal their drill-down lists', async () => {
   assert.equal(o.qualified, await jobs({ status: 'qualified' }));
   for (const s of ['ready', 'blocked', 'acknowledged', 'assessment', 'interview', 'offer', 'rejected']) assert.equal(o[s], await apps({ status: s }), s);
   assert.equal(o.applied, await apps({ status: 'applied' }));
-  assert.equal(o.outreachSent, (await q.listOutreach({ status: 'sent' })).total);
-  assert.equal(o.replies, (await q.listOutreach({ replied: '1' })).total);
   assert.equal(o.review, (await q.listEmails({ review: '1' })).total);
   assert.equal(o.pending, o.ready + o.blocked + o.failed + o.review + o.unknownSends);
   assert.ok(o.discovered > 0 && o.applied > 0 && o.interview > 0);
