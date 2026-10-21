@@ -42,7 +42,7 @@ export function Nav() {
     <header className="sticky top-0 z-40 border-b-[3px] border-ink bg-teal">
       <div className="mx-auto flex min-h-[66px] max-w-7xl items-center gap-4 px-4 sm:gap-6 sm:px-6">
         <Brand />
-        <nav aria-label="Main" className="no-bar flex min-w-0 flex-1 items-center gap-1 overflow-x-auto py-2 pr-2 [mask-image:linear-gradient(to_right,black_90%,transparent)] xl:justify-end xl:[mask-image:none]">
+        <nav aria-label="Main" className="fade-more no-bar flex min-w-0 flex-1 items-center justify-end-safe gap-1 overflow-x-auto py-2 pr-2">
           {LINKS.map(([href, label]) => {
             const active = href === '/' ? path === '/' : path.startsWith(href);
             return (

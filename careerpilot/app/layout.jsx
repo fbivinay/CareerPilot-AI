@@ -16,8 +16,8 @@ export const viewport = { themeColor: '#0e9e88' };
 
 export default function RootLayout({ children }) {
   return (
-    <html lang="en" className={`${archivo.variable} ${inter.variable}`}>
-      <body className="flex min-h-screen flex-col font-sans antialiased">
+    <html lang="en" className={`h-full ${archivo.variable} ${inter.variable}`}>
+      <body className="flex min-h-full flex-col font-sans antialiased">
         <Nav />
         <main className="mx-auto w-full max-w-7xl flex-1 px-4 pb-20 pt-10 sm:px-6">{children}</main>
         <Footer />
