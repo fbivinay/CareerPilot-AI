@@ -5,7 +5,7 @@
 import { randomUUID } from 'node:crypto';
 import { writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { all, audit, kvGet, now, one, run } from './db.mjs';
+import { all, audit, kvGet, kvSet, now, one, run } from './db.mjs';
 import { createApplication, getApplication, transition } from './applications.mjs';
 import { applicationEmail, contactsFromJob, forRecruiting, upsertContact } from './contacts.mjs';
 import { composeEmail, followUpEmail } from './compose.mjs';
@@ -239,6 +239,32 @@ export async function sendBulk(db, gmail, raw, env = process.env) {
     results.push({ email, ok: r.ok, error: r.error });
   }
   return { results };
+}
+
+// The dashboard host holds no Gmail or encryption key (scripts/setup.mjs), so the Email page only queues the
+// addresses and starts careerpilot-bulk.yml on GitHub, whose `bulk` stage sends them (every pipeline run drains
+// the queue too, if that start fails).
+export async function queueBulk(db, raw) {
+  const addresses = parseAddresses(raw);
+  if (!addresses.length) return { error: 'No email addresses found.' };
+  if (addresses.length > MAX_BULK) return { error: `${addresses.length} addresses: send at most ${MAX_BULK} at a time.` };
+  await kvSet(db, 'bulk:queue', [...new Set([...(await kvGet(db, 'bulk:queue', [])), ...addresses])]);
+  return { queued: addresses.length };
+}
+
+// ponytail: queue is one kv value; an address queued in the instant between the read and the write below is
+// kept (the write removes only what was sent), but two runs at once could both send it. The workflow's
+// concurrency group keeps runs one at a time.
+export async function sendQueued(db, gmail, env = process.env) {
+  const done = [];
+  for (let batch; (batch = (await kvGet(db, 'bulk:queue', [])).slice(0, MAX_BULK)).length;) {
+    const res = await sendBulk(db, gmail, batch.join(' '), env);
+    if (res.error) { await kvSet(db, 'bulk:last', { at: now(), error: res.error }); return res; }
+    await kvSet(db, 'bulk:queue', (await kvGet(db, 'bulk:queue', [])).filter((a) => !batch.includes(a)));
+    done.push(...res.results);
+    await kvSet(db, 'bulk:last', { at: now(), results: done });
+  }
+  return { sent: done.filter((r) => r.ok).length, skipped: done.filter((r) => !r.ok).length };
 }
 
 // Manual contact entry from the dashboard (e.g. a recruiter met at an event).

@@ -15,7 +15,7 @@ import { GmailAuthError } from '../lib/gmail.mjs';
 import { connectionStatus, gmailClient, markAuthFailure } from '../lib/gmail-oauth.mjs';
 import { syncGmail } from '../lib/gmail-sync.mjs';
 import { prepareApplications, sendBlockedAlert, sendDigest } from '../lib/prepare.mjs';
-import { runOutreach } from '../lib/outreach.mjs';
+import { runOutreach, sendQueued } from '../lib/outreach.mjs';
 import { log } from '../lib/log.mjs';
 
 const envFile = path.resolve(import.meta.dirname, '..', '.env');
@@ -49,6 +49,8 @@ const STAGES = {
   gmail: needsGmail((db, settings) => syncGmail(db, gmail, settings, { deadline: deadline - 90_000, me: gmailStatus.email,
     pushTopic: process.env.GMAIL_PUSH_TOPIC || null })),
   prepare: (db, settings) => prepareApplications(db, settings),
+  // Addresses pasted on the Email page (queued there; careerpilot-bulk.yml runs only this stage).
+  bulk: needsSending((db) => sendQueued(db, gmail)),
   outreach: needsSending((db, settings) => runOutreach(db, gmail, settings, { deadline: deadline - 60_000 })),
   // Blocked applications are emailed on every run; the digest goes once a day.
   digest: needsSending(async (db, settings) => ({ blocked: await sendBlockedAlert(db, gmail, { to: gmailStatus.email }),

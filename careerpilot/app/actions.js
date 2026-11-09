@@ -7,9 +7,9 @@ import { COOKIE, MAX_AGE, createSession, verifySession } from '@/lib/session.mjs
 import { createApplication, dropJob, markDone, transition } from '@/lib/applications.mjs';
 import { applyEvaluation } from '@/lib/evaluate.mjs';
 import { DEFAULT_SETTINGS, getSettings, saveSettings } from '@/lib/settings.mjs';
-import { addManualContact, sendBulk } from '@/lib/outreach.mjs';
+import { addManualContact, queueBulk } from '@/lib/outreach.mjs';
 import { verifyPassword } from '@/lib/password.mjs';
-import { connectionStatus, disconnect, gmailClient, runReadTest } from '@/lib/gmail-oauth.mjs';
+import { connectionStatus, disconnect, dispatchWorkflow, gmailClient, runReadTest } from '@/lib/gmail-oauth.mjs';
 
 const readOnly = () => process.env.DASHBOARD_READONLY === '1';
 
@@ -176,15 +176,17 @@ export async function sendGmailSelfTest() {
   return { ok: true, sentTo: status.email };
 }
 
-// The candidate's own email with the resume, one message per pasted address (Email page).
+// The candidate's own email with the resume, one message per pasted address (Email page). Queued here and
+// sent on GitHub, which holds the Gmail key this host does not.
 export async function sendBulkEmail(_prev, formData) {
   await requireSession();
   const db = await getDb();
-  const status = await connectionStatus(db);
-  if (!status.canSend) return { error: 'Gmail sending is not enabled. Connect Gmail in Settings.' };
-  const result = await sendBulk(db, await gmailClient(db), formData.get('addresses'));
+  if (!(await connectionStatus(db)).canSend) return { error: 'Gmail sending is not enabled. Connect Gmail in Settings.' };
+  const result = await queueBulk(db, formData.get('addresses'));
+  if (result.error) return result;
+  const started = process.env.GITHUB_DISPATCH_TOKEN ? (await dispatchWorkflow('careerpilot-bulk.yml').catch(() => null))?.ok : false;
   revalidatePath('/email');
-  return result;
+  return { ...result, started };
 }
 
 export async function disconnectGmail() {

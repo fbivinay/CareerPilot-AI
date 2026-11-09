@@ -4,7 +4,6 @@ import { BulkSend } from './bulk-send.jsx';
 import { A, Badge, Filters, PageHeader, Pager, Stat, Table, Td, fmtDateTime, gmailLink, href, pct } from '../_ui/kit.jsx';
 
 export const dynamic = 'force-dynamic';
-export const maxDuration = 300; // a batch of sends runs inside one request
 
 // A reply in the colour of the application status it matches; any other reply is just "Replied".
 const REPLY = { rejection: ['rejected', 'Rejected'], interview: ['interview', 'Interview'], assessment: ['assessment', 'Assessment'],
@@ -12,14 +11,16 @@ const REPLY = { rejection: ['rejected', 'Rejected'], interview: ['interview', 'I
 
 export default async function Email({ searchParams }) {
   const params = await searchParams;
-  const [{ rows, total, page, counts: c }, template] = await Promise.all([sentEmails(params), getDb().then((db) => kvGet(db, 'outreach:template'))]);
+  const db = await getDb();
+  const [{ rows, total, page, counts: c }, template, queue, last] = await Promise.all([sentEmails(params), kvGet(db, 'outreach:template'),
+    kvGet(db, 'bulk:queue', []), kvGet(db, 'bulk:last')]);
   const to = (patch) => href('/email', {}, patch);
   return (
     <>
       <PageHeader title="Email" sub="Job emails you and CareerPilot sent, and the replies they got. Every number opens the list it counts." />
 
       <h2 className="kicker mb-3">Send your email</h2>
-      <BulkSend subject={template?.subject} />
+      <BulkSend subject={template?.subject} pending={queue.length} last={last} />
 
       <h2 className="kicker mb-3">Sent</h2>
       <div className="mb-10 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">

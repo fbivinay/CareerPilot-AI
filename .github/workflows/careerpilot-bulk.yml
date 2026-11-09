@@ -1,0 +1,51 @@
+# Emails pasted on the dashboard's Email page: the dashboard queues the addresses (it holds no Gmail key) and
+# starts this workflow, which sends the candidate's own email with the resume to each one separately.
+# Every careerpilot-pipeline run drains the queue too, if this start fails.
+name: careerpilot-bulk
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: careerpilot-bulk
+  cancel-in-progress: false
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Restore dependencies
+        id: deps
+        uses: actions/cache@v4
+        with:
+          path: |
+            node_modules
+            careerpilot/node_modules
+          key: deps-${{ runner.os }}-${{ hashFiles('package.json', 'careerpilot/package-lock.json') }}
+      - name: Install dependencies
+        if: steps.deps.outputs.cache-hit != 'true'
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+        run: |
+          npm install --ignore-scripts --no-audit --no-fund
+          npm ci --prefix careerpilot --ignore-scripts --no-audit --no-fund
+      - name: Send queued emails
+        working-directory: careerpilot
+        env:
+          RUN_BUDGET_MINUTES: '6'
+          TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+          TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+          APP_ENCRYPTION_KEY: ${{ secrets.APP_ENCRYPTION_KEY }}
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+        run: |
+          if [ -z "$TURSO_DATABASE_URL" ]; then exit 0; fi
+          node scripts/run.mjs bulk

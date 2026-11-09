@@ -5,7 +5,7 @@ import { SHOWN_APP, canTransition, createApplication, markDone, transition } fro
 import { classifyEmail, parseJobAlert, stripQuoted } from '../lib/email-intel.mjs';
 import { processMessage } from '../lib/gmail-sync.mjs';
 import { applicationEmail, domainMatchesCompany, emailsInText, forRecruiting } from '../lib/contacts.mjs';
-import { blockReason, inSendWindow, parseAddresses, runOutreach, sendBulk } from '../lib/outreach.mjs';
+import { blockReason, inSendWindow, parseAddresses, queueBulk, runOutreach, sendBulk, sendQueued } from '../lib/outreach.mjs';
 import { buildMime } from '../lib/gmail.mjs';
 import { relevantHighlights, templateEmail } from '../lib/compose.mjs';
 import { unverifiedNumbers, factCorpus } from '../lib/profile.mjs';
@@ -514,4 +514,21 @@ test('pasted addresses each get their own email with the resume, once', async ()
   assert.deepEqual(again.results, [{ email: 'a@b.co', ok: false, error: 'already sent' }, { email: 'x@y.io', ok: true, error: undefined }]);
   assert.equal(messages.length, 3);
   assert.match((await sendBulk(db, gmail, 'no addresses here', env)).error, /No email addresses/);
+});
+
+test('addresses queued on the dashboard are all sent by the bulk stage, then the queue is empty', async () => {
+  const { kvGet, kvSet } = await import('../lib/db.mjs');
+  const db = await openDb({ url: ':memory:' });
+  const messages = [];
+  const gmail = { send: async (m) => { messages.push(m); return { id: `g${messages.length}`, threadId: `t${messages.length}` }; } };
+  await kvSet(db, 'outreach:template', { subject: 'S', text: 'Hello' });
+  const env = { APP_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString('base64') };
+  await vaultPut(db, 'profile', JSON.stringify(profile), env);
+  await vaultPut(db, 'resume.pdf', Buffer.from('%PDF-1.7 test'), env);
+  assert.deepEqual(await queueBulk(db, 'a@b.co\nc@d.co'), { queued: 2 });
+  await queueBulk(db, 'c@d.co e@f.co');
+  assert.deepEqual(await sendQueued(db, gmail, env), { sent: 3, skipped: 0 });
+  assert.deepEqual(messages.map((m) => m.to), ['a@b.co', 'c@d.co', 'e@f.co']);
+  assert.deepEqual(await kvGet(db, 'bulk:queue'), []);
+  assert.equal((await kvGet(db, 'bulk:last')).results.length, 3);
 });
