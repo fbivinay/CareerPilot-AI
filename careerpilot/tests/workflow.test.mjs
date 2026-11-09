@@ -5,7 +5,7 @@ import { SHOWN_APP, canTransition, createApplication, markDone, transition } fro
 import { classifyEmail, parseJobAlert, stripQuoted } from '../lib/email-intel.mjs';
 import { processMessage } from '../lib/gmail-sync.mjs';
 import { applicationEmail, domainMatchesCompany, emailsInText, forRecruiting } from '../lib/contacts.mjs';
-import { blockReason, inSendWindow, runOutreach } from '../lib/outreach.mjs';
+import { blockReason, inSendWindow, parseAddresses, runOutreach, sendBulk } from '../lib/outreach.mjs';
 import { buildMime } from '../lib/gmail.mjs';
 import { relevantHighlights, templateEmail } from '../lib/compose.mjs';
 import { unverifiedNumbers, factCorpus } from '../lib/profile.mjs';
@@ -494,4 +494,24 @@ test('an employer’s own mail naming itself without its board’s “careers”
   settings, { ourThreadIds: new Set() });
   assert.equal(r.transitioned, true);
   assert.equal((await one(db, 'SELECT status FROM applications WHERE id = ?', [a.id])).status, 'rejected');
+});
+
+test('pasted addresses each get their own email with the resume, once', async () => {
+  const { kvSet } = await import('../lib/db.mjs');
+  assert.deepEqual(parseAddresses('HR <hr@acme.in>, a@b.co\nhr@acme.in; x@y.io'), ['hr@acme.in', 'a@b.co', 'x@y.io']);
+  const db = await openDb({ url: ':memory:' });
+  const messages = [];
+  const gmail = { send: async (m) => { messages.push(m); return { id: `g${messages.length}`, threadId: `t${messages.length}` }; } };
+  await kvSet(db, 'outreach:template', { subject: 'Reaching Out Regarding Job Opportunities', text: 'Hello', html: '<p>Hello</p>' });
+  const env = { APP_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString('base64') };
+  await vaultPut(db, 'profile', JSON.stringify(profile), env);
+  await vaultPut(db, 'resume.pdf', Buffer.from('%PDF-1.7 test'), env);
+  const first = await sendBulk(db, gmail, 'hr@acme.in, a@b.co', env);
+  assert.deepEqual(first.results.map((r) => r.ok), [true, true]);
+  assert.deepEqual(messages.map((m) => m.to), ['hr@acme.in', 'a@b.co']); // one message per address
+  assert.ok(messages.every((m) => m.subject === 'Reaching Out Regarding Job Opportunities' && m.attachments.length === 1));
+  const again = await sendBulk(db, gmail, 'a@b.co x@y.io', env);
+  assert.deepEqual(again.results, [{ email: 'a@b.co', ok: false, error: 'already sent' }, { email: 'x@y.io', ok: true, error: undefined }]);
+  assert.equal(messages.length, 3);
+  assert.match((await sendBulk(db, gmail, 'no addresses here', env)).error, /No email addresses/);
 });

@@ -209,6 +209,38 @@ export async function recordBounce(db, { threadId, emailId }) {
   return sent;
 }
 
+// Addresses pasted on the Email page, in any form (one per line, commas, "Name <a@b.com>"), deduplicated.
+export const MAX_BULK = 50; // Gmail send quota is ~54 a minute; a batch must finish inside one request
+export function parseAddresses(raw) {
+  return [...new Set((String(raw ?? '').match(/[^\s@<>,;:"'()[\]]+@[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}/gi) ?? []).map((a) => a.toLowerCase()))];
+}
+
+// The candidate's own email (outreach:template, with the resume) to addresses they paste on the Email page:
+// one Gmail message per address, so no recipient ever sees another. An address CareerPilot already sent it to,
+// or one that bounced, is skipped.
+export async function sendBulk(db, gmail, raw, env = process.env) {
+  const addresses = parseAddresses(raw);
+  if (!addresses.length) return { error: 'No email addresses found.' };
+  if (addresses.length > MAX_BULK) return { error: `${addresses.length} addresses: send at most ${MAX_BULK} at a time.` };
+  const template = await kvGet(db, 'outreach:template');
+  const profile = await loadProfile(db, env);
+  const resume = await loadResumePdf(db, env);
+  if (!template?.subject || !template?.text || !profile || !resume) return { error: 'The email template, profile or resume is missing.' };
+  const results = [];
+  for (const email of addresses) {
+    const contact = await upsertContact(db, { email, sourceType: 'manual', domainMatch: true });
+    if (contact.opted_out) { results.push({ email, ok: false, error: 'bounced before or opted out' }); continue; }
+    if (await one(db, `SELECT 1 FROM outreach WHERE contact_id = ? AND kind = 'direct' AND status IN ('sent', 'sending', 'unknown', 'bounced')`, [contact.id])) {
+      results.push({ email, ok: false, error: 'already sent' });
+      continue;
+    }
+    const r = await send(db, gmail, { contact, job: null, kind: 'direct', subject: template.subject, body: template.text, html: template.html ?? null,
+      attach: true, composer: 'template:candidate' }, profile, resume);
+    results.push({ email, ok: r.ok, error: r.error });
+  }
+  return { results };
+}
+
 // Manual contact entry from the dashboard (e.g. a recruiter met at an event).
 export async function addManualContact(db, { email, name, company }) {
   return upsertContact(db, { email, name, company, sourceType: 'manual', domainMatch: true });

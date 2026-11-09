@@ -7,7 +7,7 @@ import { COOKIE, MAX_AGE, createSession, verifySession } from '@/lib/session.mjs
 import { createApplication, dropJob, markDone, transition } from '@/lib/applications.mjs';
 import { applyEvaluation } from '@/lib/evaluate.mjs';
 import { DEFAULT_SETTINGS, getSettings, saveSettings } from '@/lib/settings.mjs';
-import { addManualContact } from '@/lib/outreach.mjs';
+import { addManualContact, sendBulk } from '@/lib/outreach.mjs';
 import { verifyPassword } from '@/lib/password.mjs';
 import { connectionStatus, disconnect, gmailClient, runReadTest } from '@/lib/gmail-oauth.mjs';
 
@@ -174,6 +174,17 @@ export async function sendGmailSelfTest() {
     text: `This is a test from your CareerPilot dashboard (${now()}). Sending is enabled for ${status.email}. No one else received this message.` });
   await audit(db, 'gmail', 'connection', 'self_test_sent', { detail: { gmailId: res.id } });
   return { ok: true, sentTo: status.email };
+}
+
+// The candidate's own email with the resume, one message per pasted address (Email page).
+export async function sendBulkEmail(_prev, formData) {
+  await requireSession();
+  const db = await getDb();
+  const status = await connectionStatus(db);
+  if (!status.canSend) return { error: 'Gmail sending is not enabled. Connect Gmail in Settings.' };
+  const result = await sendBulk(db, await gmailClient(db), formData.get('addresses'));
+  revalidatePath('/email');
+  return result;
 }
 
 export async function disconnectGmail() {
