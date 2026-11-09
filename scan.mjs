@@ -38,7 +38,6 @@
  */
 
 import {
-  appendFileSync,
   closeSync,
   existsSync,
   fchmodSync,
@@ -56,18 +55,21 @@ import {
 import { randomUUID } from 'crypto';
 import { fileURLToPath } from 'url';
 import path from 'path';
-import * as yaml from 'js-yaml';
+import { loadYaml } from './lib/yaml-document.mjs';
 
 import { makeHttpCtx } from './providers/_http.mjs';
+import { formatHttpCacheWindow, httpCacheStats, resolveHttpCacheTtlMs, withHttpCache } from './providers/_http-cache.mjs';
 import { buildTrustValidator } from './providers/_trust-validator.mjs';
 import { loadProviders, resolveProvider } from './providers/_registry.mjs';
+import { openProviderIdCache, PROVIDER_ID_CACHE_DIR } from './provider-id-cache.mjs';
 import { mergeProviderPlugins } from './plugins/_engine.mjs';
 import { classifyFetchError } from './verify-portals.mjs';
+import { portalTopLevelTypos } from './validate-portals.mjs';
 import { fingerprintText, findCrossListings } from './fingerprint-core.mjs';
 import { computeListingFingerprint } from './listing-fingerprint.mjs';
 import { resolveColumns, parseTrackerRow, normalizeTextKey, extractReqNumber, REQ_NUMBER_RE } from './tracker-parse.mjs';
 import { workdayDedupKey, stripWorkdayRepostSuffix, isWorkdayJobUrl } from './providers/workday.mjs';
-import { normalizeCompany } from './tracker-utils.mjs';
+import { normalizeCompany, appendLedgerRows } from './tracker-utils.mjs';
 import { normalizeCompanyName } from './invite-match.mjs';
 import { withPipelineLock } from './pipeline-lock.mjs';
 import { compileKeyword, compilePositiveKeyword, compileContentKeyword, buildTitleFilter, foldTitle } from './title-keywords.mjs';
@@ -76,14 +78,23 @@ import { withPortalHealthLock } from './portal-health-lock.mjs';
 import { localToday } from './lib/local-today.mjs';
 import { printScanSummaryHeader } from './lib/scan-summary-marker.mjs';
 import { isMainModule } from './lib/is-main-module.mjs';
-import { SCAN_HISTORY_COLUMNS, parseScanHistoryLine } from './lib/scan-history-columns.mjs';
+import { SCAN_HISTORY_COLUMNS, parseScanHistoryLine, scanHistoryDataLines } from './lib/scan-history-columns.mjs';
 import { escapeFormulaCell } from './lib/tsv-formula-escape.mjs';
+import { sectionKind } from './lib/pipeline-sections.mjs';
 import { promoteKnownFragmentIdentity, LANGUAGE_PARAMS, languageSubtag } from './url-key.mjs';
-import { getCareerOpsRoot } from './path-resolver.mjs';
+import { getCareerOpsRoot, getProfilePath, hasProfileOverride } from './path-resolver.mjs';
 import { checkLivenessViaApi } from './liveness-api.mjs';
+import { resolveExperienceFilter, applyExperienceFilter } from './jd-years.mjs';
 
 const CODE_ROOT = path.dirname(fileURLToPath(import.meta.url));
-const DATA_ROOT = getCareerOpsRoot();
+export const DATA_ROOT = getCareerOpsRoot();
+// Preserve the actual shell environment before dotenv adds data-root values to
+// process.env. The browser resolver uses this snapshot to distinguish an
+// explicit shell path (which keeps cwd-relative behavior) from a path read from
+// DATA_ROOT/.env (which must resolve relative to that file's directory). The
+// helper also retains Windows' case-insensitive environment lookup when the
+// result becomes an ordinary object.
+export const BROWSER_PROCESS_ENV = snapshotBrowserProcessEnv();
 
 try {
   const { config } = await import('dotenv');
@@ -96,13 +107,16 @@ try {
   // dotenv is optional — fall back to process.env if not installed
 }
 
-const parseYaml = yaml.load;
+const parseYaml = loadYaml;
 
 // ── Config ──────────────────────────────────────────────────────────
 import { resolveTrackerPath } from './path-resolver.mjs';
+import { browserLaunchOptions, snapshotBrowserProcessEnv } from './lib/browser-launch.mjs';
 
 export const PORTALS_PATH = process.env.CAREER_OPS_PORTALS || path.join(DATA_ROOT, 'portals.yml');
-const PROFILE_PATH = process.env.CAREER_OPS_PROFILE || path.join(DATA_ROOT, 'config/profile.yml');
+// An explicit override wins; otherwise the root fixed above, since the .env just
+// loaded may name another CAREER_OPS_ROOT that getProfilePath() would follow.
+const PROFILE_PATH = hasProfileOverride() ? getProfilePath() : getProfilePath(DATA_ROOT);
 // Overridable for the same reason the two inputs above are (#2271). A second
 // search lane - a bridge/income track, a career-change track, a partner sharing
 // the checkout - already gets its own portals.yml and profile, but without these
@@ -117,6 +131,17 @@ const PROFILE_PATH = process.env.CAREER_OPS_PROFILE || path.join(DATA_ROOT, 'con
 export const SCAN_HISTORY_PATH = process.env.CAREER_OPS_SCAN_HISTORY || path.join(DATA_ROOT, 'data/scan-history.tsv');
 export const PIPELINE_PATH = process.env.CAREER_OPS_PIPELINE || path.join(DATA_ROOT, 'data/pipeline.md');
 
+// The closing hint names the lane's inbox when CAREER_OPS_PIPELINE is set.
+// `/career-ops pipeline` alone reads data/pipeline.md unless the agent's own
+// environment carries the same variable, so a lane run that only says "run
+// pipeline" sends the user to the other lane's inbox (#6379).
+export function pipelineRunHint(lane = process.env.CAREER_OPS_PIPELINE) {
+  const file = lane?.trim();
+  return file
+    ? `→ Run /career-ops pipeline ${file} to evaluate new offers (this lane's inbox, not data/pipeline.md).`
+    : '→ Run /career-ops pipeline to evaluate new offers.';
+}
+
 export const APPLICATIONS_PATH = resolveTrackerPath(DATA_ROOT);
 const PROVIDERS_DIR = path.resolve(CODE_ROOT, 'providers');
 
@@ -129,6 +154,7 @@ const PROVIDERS_DIR = path.resolve(CODE_ROOT, 'providers');
 // to leave a stray data/ in whatever cwd it ran from.
 
 const CONCURRENCY = 10;
+const PROGRESS_EVERY = 25;
 
 export function isIgnorableDirectoryFsyncError(err, platform = process.platform) {
   return ['EINVAL', 'ENOTSUP', 'ENOSYS'].includes(err?.code)
@@ -373,7 +399,8 @@ export function matchedTitleKeywords(title, titleFilter) {
 //   - `block` matches → reject
 //   - `allow` empty → pass (already cleared block)
 //   - `allow` non-empty → must match at least one keyword, OR the TITLE carries
-//     an explicit remote marker (see titleSignalsRemote below)
+//     an explicit remote marker (see titleSignalsRemote below), unless
+//     `remote_title_fallback: false` disables that final rescue.
 
 // Normalize a keyword list from portals.yml: tolerates a bare string
 // (wrapped to a 1-item array), null/undefined (→ []), and non-string
@@ -492,18 +519,37 @@ const USPS_STATES = Object.freeze([
 function compileUsStateAbbrev(abbr) {
   const escaped = abbr.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const re = new RegExp(`(?:,\\s*${escaped}(?![\\p{L}\\p{M}\\p{N}])|(?:^|[^\\p{L}\\p{M}\\p{N}])${escaped}[^\\p{L}\\p{M}\\p{N}]*$)`, 'u');
-  return (lower) => re.test(withoutCountryCodeSlot(lower));
+  return (lower) => placesWithoutCountryCode(lower).some((place) => re.test(place));
 }
 
 // "City, Region, CC" ends in an ISO country code, and several of those are
 // also USPS codes: "Bengaluru, Karnataka, IN" read as Indiana and "Toronto,
 // ON, CA" as California, so always_allow beat the user's own block entry.
-// A two-letter last part after two or more parts is the country slot, never
-// a state. "Austin, TX, US" still keeps TX.
-function withoutCountryCodeSlot(lower) {
-  const parts = lower.split(',');
-  if (parts.length < 3 || !/^\s*\p{L}{2}\s*$/u.test(parts.at(-1))) return lower;
-  return parts.slice(0, -1).join(',');
+// A two-letter last part after two or more parts is the country slot. So is
+// the last part of "Austin TX, US" or "Perth WA, AU", where a state code ends
+// the city part. "Santa Fe, NM" and "Dublin, OH" keep their state. "LA, CA"
+// is two state codes, so the last part is the state, not a country. So is
+// a state code written twice, as in "Brooklyn, NY, NY". A place
+// with a country slot other than US has no US state at all, so "Perth WA, AU"
+// does not read as Washington. Providers join several places with "; "
+// (Lever) or " · " (Jobvite), and each place gets its own check, so the TX in
+// "Austin TX · Toronto, ON, CA" counts even though it is not at the end.
+const USPS_CODES = new Set(USPS_STATES.map(([, abbr]) => abbr));
+
+function placesWithoutCountryCode(lower) {
+  return lower.split(/[;·]/).flatMap((place) => {
+    const parts = place.split(',');
+    const code = parts.at(-1).trim();
+    if (parts.length < 2 || !/^\p{L}{2}$/u.test(code)) return [place];
+    if (parts.length === 2) {
+      const cityTail = /(?:^|[^\p{L}\p{M}\p{N}])(\p{L}{2})\s*$/u.exec(parts[0]);
+      if (!cityTail || !USPS_CODES.has(cityTail[1])) return [place];
+      if (USPS_CODES.has(code)) return [place];
+    } else if (USPS_CODES.has(code) && parts.at(-2).trim() === code) {
+      return [place];
+    }
+    return code === 'us' ? [parts.slice(0, -1).join(',')] : [];
+  });
 }
 
 const US_STATE_ALWAYS_ALLOW_MATCHERS = USPS_STATES.flatMap(([name, abbr]) => [
@@ -647,7 +693,7 @@ export function buildLocationFilter(locationFilter) {
     // Last resort only. Deliberately placed AFTER `block` so a remote title can
     // never rescue a blocked location — "Program Manager - Remote" in Bengaluru
     // stays rejected. This widens `allow`, never `block`.
-    return titleSignalsRemote(title);
+    return locationFilter.remote_title_fallback !== false && titleSignalsRemote(title);
   };
 }
 
@@ -1271,7 +1317,7 @@ export function addDays(dateStr, days) {
 export function loadCandidateCountry(profilePath = PROFILE_PATH) {
   if (!existsSync(profilePath)) return '';
   try {
-    const raw = yaml.load(readFileSync(profilePath, 'utf-8')) || {};
+    const raw = loadYaml(readFileSync(profilePath, 'utf-8')) || {};
     const country = raw?.location?.country;
     return typeof country === 'string' ? country.trim() : '';
   } catch {
@@ -1279,10 +1325,31 @@ export function loadCandidateCountry(profilePath = PROFILE_PATH) {
   }
 }
 
+// config/profile.yml `candidate.years_of_experience`, the candidate's side of
+// experience_filter. Unset reads as undefined, and resolveExperienceFilter then
+// keeps the filter off and says why. A value that is set but not a number, or
+// a profile that does not parse, is named here: "no years are set" would send
+// the user looking for a key they already wrote.
+export function loadCandidateYears(profilePath = PROFILE_PATH) {
+  if (!existsSync(profilePath)) return undefined;
+  let raw;
+  try {
+    raw = loadYaml(readFileSync(profilePath, 'utf-8')) || {};
+  } catch (err) {
+    console.warn(`⚠️  experience_filter could not read ${profilePath}: ${String(err?.message ?? err).split('\n')[0]}`);
+    return undefined;
+  }
+  const years = raw?.candidate?.years_of_experience;
+  if (years === undefined || years === null) return undefined;
+  if (typeof years === 'number' && Number.isFinite(years)) return years;
+  console.warn(`⚠️  candidate.years_of_experience in ${profilePath} must be a number, got ${JSON.stringify(years)}`);
+  return undefined;
+}
+
 export function loadReApplyWindows(profilePath = PROFILE_PATH) {
   if (!existsSync(profilePath)) return {};
   try {
-    const raw = yaml.load(readFileSync(profilePath, 'utf-8')) || {};
+    const raw = loadYaml(readFileSync(profilePath, 'utf-8')) || {};
     const windows = raw.re_apply_windows || {};
     const validWindows = {};
     for (const [company, win] of Object.entries(windows)) {
@@ -1479,28 +1546,52 @@ const RECHECKABLE_SCAN_HISTORY_STATUSES = new Set(['added', 'skipped_expired']);
  * Every other skipped status describes the posting: a dead URL stays dead
  * until the configured recheck window releases it (see
  * RECHECKABLE_SCAN_HISTORY_STATUSES), a blocked host stays blocked, so pinning
- * saves a later scan the work. These
- * two describe the user's CONFIG instead — `location_filter` and
- * `max_posting_age_days` are thresholds they edit. Pinning would mean a role
- * dropped under the old threshold never resurfaces under the new one, which is
- * the opposite of what recording the drop is for.
+ * saves a later scan the work. These four describe something else.
  *
- * Pinning would also buy nothing: both cuts run on data the provider already
- * returned, before any liveness verification, so a re-scan of one of these URLs
- * costs no extra request.
+ * `skipped_title`, `skipped_location` and `skipped_age` describe the user's
+ * CONFIG — `title_filter`, `location_filter` and `max_posting_age_days` are
+ * settings they edit. Pinning would mean a role dropped under the old setting
+ * never resurfaces under the new one, which is the opposite of what recording
+ * the drop is for: a keyword added to `title_filter.positive` has to hand back
+ * the titles it now matches. For those three, not pinning is also free: each
+ * cut runs on data the provider already returned, before any liveness
+ * verification, so a re-scan of one of these URLs costs no extra request.
+ *
+ * `skipped_no_apply_control` describes the CHECK: the browser classifier did
+ * not see an Apply control, which is not proof the posting is closed. On
+ * boards whose button it does not recognise, pinning would drop a live posting
+ * once and never offer it again (#4832). Unlike the other two, this verdict
+ * comes from a browser load, so every `--verify` scan re-opens the posting for
+ * as long as the provider lists it. That is the accepted price: a slower
+ * `--verify` beats a posting lost for good, and it shrinks as the classifier
+ * learns each board, since a posting that reads `active` gets an `added` row
+ * and stops coming back.
+ *
+ * `skipped_content`, `skipped_visa` and `skipped_country_eligibility` are
+ * scan-dayforce.mjs's rows for its `content_filter`, visa and
+ * `country_eligibility_filter` cuts: CONFIG again, by the same reasoning as the
+ * first three. They were missing here, so they fell through to the permanent
+ * pin, and widening one of those filters never handed back a Dayforce posting
+ * it had dropped. (scan.mjs counts the same cuts and records no row for them.)
  *
  * `collectSeenCompanyRoles` needs no companion change — it already seeds from
  * `added` rows alone.
  */
 const OBSERVATIONAL_SCAN_HISTORY_STATUSES = new Set([
+  'skipped_title',
   'skipped_location',
   'skipped_age',
+  'skipped_no_apply_control',
+  'skipped_content',
+  'skipped_visa',
+  'skipped_country_eligibility',
+  'skipped_experience',
 ]);
 
 /**
  * The offers not yet recorded under `status`, one per URL.
  *
- * The location and posting-age cuts run before dedup, and their rows never
+ * The title, location and posting-age cuts run before dedup, and their rows never
  * pin a URL (OBSERVATIONAL_SCAN_HISTORY_STATUSES), so without this every scan
  * appended the same rows again. A URL already carrying a row with the same
  * status is skipped, and so is a second listing of one URL within this scan.
@@ -1513,7 +1604,7 @@ const OBSERVATIONAL_SCAN_HISTORY_STATUSES = new Set([
  */
 export function unrecordedOffers(offers, status, scanHistoryText = '') {
   const recorded = new Set();
-  for (const line of scanHistoryText.split('\n').slice(1)) { // skip header
+  for (const line of scanHistoryDataLines(scanHistoryText)) {
     const [url, , , , , rowStatus] = line.split('\t');
     if (url && rowStatus === status) recorded.add(normalizeUrlForDedup(url));
   }
@@ -1541,6 +1632,7 @@ function daysBetweenIsoDates(start, end) {
 // explicitly; only the default moves.
 export function shouldDedupScanHistoryRow({ firstSeen, status = 'added' }, { recheckAfterDays = null, today = localToday() } = {}) {
   if (PERMANENT_SCAN_HISTORY_STATUSES.has(status)) return true;
+  if (OBSERVATIONAL_SCAN_HISTORY_STATUSES.has(status)) return false;
   if (status.startsWith('cooldown:')) {
     const parts = status.split(':');
     const cooldownUntil = parts[parts.length - 1];
@@ -1838,7 +1930,7 @@ const PIPELINE_CHECKBOX_STRICT_RE = /^- \[[ x]\]\s+/;
 
 /**
  * A labeled trailing segment of a pipeline entry, as written by the two writers
- * that emit one: `formatPipelineOffer` here (`posted:`, `trust:`, `note:`) and
+ * that emit one: `formatPipelineOffer` here (`posted:`, `trust:`, `yrs:`, `note:`) and
  * `appendRankAnnotation` in `rank-pipeline.mjs` (`rank:`).
  *
  * Labeled segments are appended after the positional columns, so one slides into
@@ -1865,7 +1957,7 @@ const PIPELINE_CHECKBOX_STRICT_RE = /^- \[[ x]\]\s+/;
  * segment invents a city for a role and lets it resurface, while a genuine
  * location beginning `Posted: ` / `Rank: ` does not occur.
  */
-const PIPELINE_LABELED_SEGMENT_RE = /^(?:posted|trust|note|rank):\s/iu;
+const PIPELINE_LABELED_SEGMENT_RE = /^(?:posted|trust|yrs|note|rank):\s/iu;
 
 /**
  * The `~~…~~` wrapper an expired entry is written with.
@@ -1965,9 +2057,9 @@ function extractPipelineUrl(line) {
  *   writes — is it the location. A report-led processed entry (`#143 | {url} |
  *   … | 4.2/5 | PDF ✅`) puts the SCORE in that position, and keying on it would
  *   invent a city for an already-processed role.
- * - A labeled segment (`posted:` / `trust:` / `note:` / `rank:`) slides into that
+ * - A labeled segment (`posted:` / `trust:` / `yrs:` / `note:` / `rank:`) slides into that
  *   position when the offer carried no location and no compensation, so it is
- *   skipped too. Only those four labels count — see
+ *   skipped too. Only those five labels count — see
  *   {@link PIPELINE_LABELED_SEGMENT_RE} for why a bare `word:` prefix does not.
  *
  * Both fall back to `''` (location unknown), which `companyRoleDedupKey` reads as
@@ -2026,17 +2118,15 @@ export function collectSeenUrls(sources = {}, policy = {}, { extraTokensFor } = 
   };
 
   // scan-history.tsv
-  // Skip line 0 only when it is the header; a headerless legacy file starts with a data row.
-  const historyLines = scanHistoryText.split('\n');
-  if (historyLines[0].startsWith('url\t')) historyLines.shift();
-  for (const line of historyLines) {
+  // Line 0 only when it is the header; a headerless legacy file starts with a data row.
+  for (const line of scanHistoryDataLines(scanHistoryText)) {
     const { url, first_seen: firstSeen, portal, status: rawStatus, title, language, listing_key: listingKey } = parseScanHistoryLine(line);
     const status = rawStatus || 'added';
     if (!url) continue;
-    // Not pinned and not a recheck candidate either: the row records a config
-    // rejection, and the URL was never queued, so counting it as "eligible
-    // again" would overstate what the TTL released. See
-    // OBSERVATIONAL_SCAN_HISTORY_STATUSES.
+    // Not pinned, no listing identity, and not a recheck candidate either: the
+    // row records a config rejection or an inconclusive Apply-control check,
+    // and the URL was never queued, so counting it as "eligible again" would
+    // overstate what the TTL released. See OBSERVATIONAL_SCAN_HISTORY_STATUSES.
     if (OBSERVATIONAL_SCAN_HISTORY_STATUSES.has(status)) continue;
     if (shouldDedupScanHistoryRow({ firstSeen, status }, policy)) {
       const urlToken = normalizeUrlForDedup(url);
@@ -2044,9 +2134,10 @@ export function collectSeenUrls(sources = {}, policy = {}, { extraTokensFor } = 
       const recorded = languageFormsForDedup(language);
       recordUrlVariant(variants, urlToken, recorded.length ? recorded : languageFormsFromUrl(url), title);
       // Only accepted or intentionally deferred posting rows can teach this
-      // scan a strong identity. Verification rejections such as expired or
-      // missing-apply-control URLs may pin that URL, but must not suppress a
-      // different live alias with the same provider identity.
+      // scan a strong identity. A verification rejection such as an expired
+      // URL may pin that URL, but must not suppress a different live alias
+      // with the same provider identity. (A missing Apply control never gets
+      // here: its row is observational and pins nothing, see above.)
       const identityMayPromote = status === 'added' || status.startsWith('cooldown:');
       if (identityMayPromote) addIdentityPromotableUrl(urlToken, listingKey);
       if (extraTokensFor && identityMayPromote) {
@@ -2872,7 +2963,7 @@ export function collectSeenCompanyRoles(sources = {}, policy = {}, canonicalize 
   // and (trailing) requisition_id + language. This is the source that carries a
   // location for every scanned posting, and so the one that makes the opt-in key
   // discriminate between two cities of one role.
-  for (const line of scanHistoryText.split('\n').slice(1)) { // skip header
+  for (const line of scanHistoryDataLines(scanHistoryText)) {
     const row = parseScanHistoryLine(line);
     const status = row.status || 'added';
     if (!row.url) continue;
@@ -2915,7 +3006,7 @@ export function collectSeenCompanyRoles(sources = {}, policy = {}, canonicalize 
  */
 export function collectPostingAttributes(scanHistoryText) {
   const attributes = new Map();
-  for (const line of scanHistoryText.split('\n').slice(1)) {
+  for (const line of scanHistoryDataLines(scanHistoryText)) {
     const row = parseScanHistoryLine(line);
     const requisitionId = row.requisition_id.trim();
     const language = row.language.trim();
@@ -3078,6 +3169,11 @@ export function formatPipelineOffer(offer) {
   // posted:, before note:, for a stable serialization.
   const trust = formatTrustSegment(offer);
   if (trust) line = `${line} | ${trust}`;
+  // Labeled years-of-experience segment (experience_filter): the JD's stated
+  // requirement ("5+", "3-5", "none stated", "unread"). Absent when the filter
+  // is off, so such a row stays byte-identical. After trust:, before note:.
+  const yrs = typeof offer.years?.label === 'string' ? sanitizeMarkdownField(offer.years.label) : '';
+  if (yrs) line = `${line} | yrs: ${yrs}`;
   // Optional free-text ranking signal (e.g. a curated-list flag an importer
   // attaches). Labeled — not positional like location/compensation — so it can
   // ride on any row shape (bare URL, 3-, 4-, or 5-column) without a reader
@@ -3332,11 +3428,6 @@ Paste job URLs below as \`- [ ] {url}\` then run \`/career-ops pipeline\`.
 ## Processed
 `;
 
-// Current section names (English). Legacy Spanish names are checked as fallback
-// so existing pipeline.md files created before this change keep working.
-const PENDING_MARKERS = ['## Pending', '## Pendientes'];
-const PROCESSED_MARKERS = ['## Processed', '## Procesadas'];
-
 // Locked (pipeline-lock.mjs) so scan.mjs, scan-ats-full.mjs, and plugins.mjs
 // (pipeline mode) — the three current callers — can never interleave their
 // read-modify-write and silently drop each other's offers.
@@ -3351,21 +3442,18 @@ export async function appendToPipeline(offers, { pipelinePath = PIPELINE_PATH } 
       ? readFileSync(pipelinePath, 'utf-8')
       : PIPELINE_SKELETON;
 
-    const marker = PENDING_MARKERS.find(m => text.includes(m)) ?? null;
-    const idx = marker !== null ? text.indexOf(marker) : -1;
+    const headings = [...text.matchAll(/^##[ \t].*$/gm)];
+    const pending = headings.find(h => sectionKind(h[0]) === 'pending');
 
-    if (idx === -1) {
+    if (!pending) {
       // No Pending section found — insert one before Processed (or at end)
-      const procIdx = PROCESSED_MARKERS.reduce((found, m) => {
-        const i = text.indexOf(m);
-        return (found === -1 || (i !== -1 && i < found)) ? i : found;
-      }, -1);
-      const insertAt = procIdx === -1 ? text.length : procIdx;
+      const processed = headings.find(h => sectionKind(h[0]) === 'processed');
+      const insertAt = processed ? processed.index : text.length;
       const block = `\n## Pending\n\n` + offers.map(formatPipelineOffer).join('\n') + '\n\n';
       text = text.slice(0, insertAt) + block + text.slice(insertAt);
     } else {
       // Find the end of existing Pending content (next ## or end)
-      const afterMarker = idx + marker.length;
+      const afterMarker = pending.index + pending[0].length;
       const nextSection = text.indexOf('\n## ', afterMarker);
       const insertAt = nextSection === -1 ? text.length : nextSection;
 
@@ -3387,13 +3475,14 @@ export async function appendToPipeline(offers, { pipelinePath = PIPELINE_PATH } 
 // Both surface as rows that silently stop counting, because every reader skips
 // a malformed line quietly.
 //
-// `alreadyLocked` is for the one caller whose APPEND is decided by a READ of
-// this same file — check-liveness's expired-verdict recorder, which must hold
-// the lock across both or its plan is a check-then-act (a concurrent scanner
-// appending in between makes it write a row that is no longer needed). The
-// lock is not reentrant, so that caller cannot simply wrap this call; it takes
-// the lock itself and passes true. Everything else must leave it alone: true
-// with no lock actually held reintroduces both races described above.
+// `alreadyLocked` is for the callers whose APPEND is decided by a READ of this
+// same file — check-liveness's expired-verdict recorder and
+// appendUnrecordedToScanHistory below — which must hold the lock across both
+// or their plan is a check-then-act (a concurrent scanner appending in between
+// makes them write a row that is no longer needed). The lock is not reentrant,
+// so such a caller cannot simply wrap this call; it takes the lock itself and
+// passes true. Everything else must leave it alone: true with no lock actually
+// held reintroduces both races described above.
 export async function appendToScanHistory(offers, date, status = 'added', { alreadyLocked = false } = {}) {
   const write = () => {
     // Ensure file + header exist. The header is SCAN_HISTORY_COLUMNS, the same
@@ -3406,11 +3495,32 @@ export async function appendToScanHistory(offers, date, status = 'added', { alre
 
     const lines = offers.map(o => formatScanHistoryRow(o, date, status)).join('\n') + '\n';
 
-    appendFileSync(SCAN_HISTORY_PATH, lines, 'utf-8');
+    appendLedgerRows(SCAN_HISTORY_PATH, lines);
   };
 
   if (alreadyLocked) write();
   else await withPipelineLock(SCAN_HISTORY_PATH, write);
+}
+
+/**
+ * appendToScanHistory for a skip bucket a scanner refills on every run: only
+ * the offers not yet recorded under `status` are written (unrecordedOffers),
+ * so the file grows with new postings rather than with scans (#2695). This is
+ * how scan.mjs records its own skips; the scanners beside it appended theirs
+ * straight, re-recording every skipped posting on every run.
+ *
+ * @param {Array<object>} offers
+ * @param {string} date
+ * @param {string} status
+ * @returns {Promise<number>} rows written
+ */
+export async function appendUnrecordedToScanHistory(offers, date, status) {
+  if (offers.length === 0) return 0;
+  return withPipelineLock(SCAN_HISTORY_PATH, async () => {
+    const fresh = unrecordedOffers(offers, status, readIfExists(SCAN_HISTORY_PATH));
+    if (fresh.length > 0) await appendToScanHistory(fresh, date, status, { alreadyLocked: true });
+    return fresh.length;
+  });
 }
 
 // ── Company blacklist (#1742) ───────────────────────────────────────
@@ -3662,7 +3772,7 @@ export function appendScanRunSummary(c, filePath = SCAN_RUNS_PATH) {
     // filtered_country_eligibility (#2093) appended at the END for the same reason.
     c.filteredCountryEligibility ?? 0,
   ].join('\t') + '\n';
-  appendFileSync(filePath, row, 'utf-8');
+  appendLedgerRows(filePath, row);
 }
 
 // ── Portal health persistence (#1744) ───────────────────────────────
@@ -3692,8 +3802,40 @@ export async function appendPortalHealth(healthRecords, filePath = PORTAL_HEALTH
     for (const r of healthRecords) {
       lines += [r.timestamp, r.company, r.status].join('\t') + '\n';
     }
-    if (lines) appendFileSync(filePath, lines, 'utf-8');
+    if (lines) appendLedgerRows(filePath, lines);
   });
+}
+
+/**
+ * Apply an entry's `max_response_mb` to the ctx a provider fetches with.
+ *
+ * fetchJson / fetchText / fetchResponse refuse a body over
+ * DEFAULT_MAX_BODY_BYTES (_http.mjs) unless the call passes `maxBytes`. A
+ * board that is legitimately bigger sets `max_response_mb` on its own
+ * portals.yml entry; the setting is the user's, so it wins over a `maxBytes`
+ * the provider passes, and every other entry keeps the default. An entry
+ * without the key leaves the ctx as it is. So does a value that is not a YAML
+ * number (a quoted string, a boolean, a list) or that does not come to a whole
+ * positive finite byte count, with a warning naming the entry.
+ *
+ * @param {object} ctx - The per-entry ctx; its fetchers are replaced in place.
+ * @param {{ name?: string, max_response_mb?: unknown }} entry
+ * @returns {object} The same ctx.
+ */
+export function applyEntryResponseCap(ctx, entry) {
+  const raw = entry?.max_response_mb;
+  if (raw === undefined || raw === null) return ctx;
+  const maxBytes = typeof raw === 'number' ? Math.floor(raw * 1024 * 1024) : NaN;
+  if (!Number.isFinite(maxBytes) || maxBytes < 1) {
+    console.error(`⚠️  ${entry?.name}: max_response_mb must be a positive number, got ${JSON.stringify(raw)} — ignored`);
+    return ctx;
+  }
+  for (const method of ['fetchJson', 'fetchText', 'fetchResponse']) {
+    const original = ctx[method];
+    if (typeof original !== 'function') continue;
+    ctx[method] = (url, opts = {}) => original(url, { ...opts, maxBytes });
+  }
+  return ctx;
 }
 
 export function loadPortalHealth(filePath = PORTAL_HEALTH_PATH) {
@@ -3736,7 +3878,7 @@ export function emptyTargetStatus(observation) {
 
 // ── Parallel fetch with concurrency limit ───────────────────────────
 
-async function parallelFetch(tasks, limit) {
+async function parallelFetch(tasks, limit, onDone = () => {}) {
   const results = [];
   let i = 0;
 
@@ -3744,12 +3886,24 @@ async function parallelFetch(tasks, limit) {
     while (i < tasks.length) {
       const task = tasks[i++];
       results.push(await task());
+      onDone();
     }
   }
 
   const workers = Array.from({ length: Math.min(limit, tasks.length) }, () => next());
   await Promise.all(workers);
   return results;
+}
+
+// stderr, so it shows under --quiet and never mixes into the --json receipt.
+export function progressTicker(total, { every = PROGRESS_EVERY, write = (line) => process.stderr.write(line), now = () => new Date() } = {}) {
+  let done = 0;
+  return () => {
+    done++;
+    if (done % every === 0 || done === total) {
+      write(`[${now().toTimeString().slice(0, 8)}] scan: ${done}/${total} sources done\n`);
+    }
+  };
 }
 
 // ── Main ────────────────────────────────────────────────────────────
@@ -3763,6 +3917,7 @@ export async function verifyOffers(offers, { headedFallback = false, throttleBas
   const {
     rejectPrivateOrInvalid, checkUrlLiveness, checkUrlLivenessWithFallback,
     createHeadedPageProvider, newLivenessPage, installLivenessRouteGuard, jitteredDelayMs, sleep,
+    takeSuppressedBlockCount,
   } = await import('./liveness-browser.mjs');
 
   // The HTTP rung can run concurrently; each provider retains its own rate
@@ -3797,7 +3952,12 @@ export async function verifyOffers(offers, { headedFallback = false, throttleBas
         );
       }
       try {
-        browser = await chromium.launch({ headless: true });
+        browser = await chromium.launch(
+          browserLaunchOptions(
+            { headless: true },
+            { projectRoot: DATA_ROOT, processEnv: BROWSER_PROCESS_ENV },
+          ),
+        );
       } catch (err) {
         throw new Error(
           `--verify could not launch Chromium (run "npx playwright install chromium" or re-run without --verify): ${err.message}`,
@@ -3806,7 +3966,10 @@ export async function verifyOffers(offers, { headedFallback = false, throttleBas
       }
       page = await newLivenessPage(browser);
       await installLivenessRouteGuard(page);
-      headed = headedFallback ? createHeadedPageProvider(chromium) : null;
+      headed = headedFallback ? createHeadedPageProvider(chromium, {
+        projectRoot: DATA_ROOT,
+        processEnv: BROWSER_PROCESS_ENV,
+      }) : null;
     }
     // Space only browser work, including a search after an API 404 and the
     // offer after a successful migration. API-only verdicts need no WAF delay.
@@ -3819,12 +3982,16 @@ export async function verifyOffers(offers, { headedFallback = false, throttleBas
     ? checkUrlLivenessWithFallback(page, url, { getHeadedPage: () => headed.get() })
     : checkUrlLiveness(page, url);
 
-  // Three permanent buckets + one transient passthrough:
-  //   verified  → active pages and transient nav errors (retry next scan)
+  // Two permanent buckets, one observational, one transient passthrough:
+  //   verified  → active pages, transient nav errors and a still-empty page
+  //               (empty_page)
   //   expired   → classifier-confirmed dead postings (HTTP 4xx, redirect markers,
-  //               body patterns, listing pages, insufficient content)
-  //   dropped   → page loaded but classifier saw no Apply control. --verify is an
-  //               opt-in stricter filter; keeping these defeats the purpose.
+  //               body patterns, listing pages)
+  //   dropped   → page loaded but classifier saw no Apply control, including a
+  //               page too short to read (insufficient_content). --verify is an
+  //               opt-in stricter filter; keeping these defeats the purpose. Not
+  //               proof the posting is closed, so the row never pins the URL and
+  //               the next --verify scan loads the page again (#4832).
   //   invalid   → up-front URL guard rejections (malformed / non-http / private)
   const verified = [];
   const verificationStatusByOffer = new Map();
@@ -3880,10 +4047,13 @@ export async function verifyOffers(offers, { headedFallback = false, throttleBas
         // with a precise status, dedup-blocking them on subsequent scans.
         invalid.push({ ...offer, code, reason });
         console.log(`  ⛔ invalid   ${offer.company} | ${offer.title} (${reason})`);
-      } else if (result === 'uncertain' && code === 'no_apply_control') {
-        // Page loaded but classifier could not find an Apply control. Treat like
-        // expired for routing — drop from pipeline AND record in scan-history so
-        // we don't burn a verify cycle on the same URL next scan.
+      } else if (result === 'uncertain' && (code === 'no_apply_control' || code === 'insufficient_content')) {
+        // Page loaded but classifier could not find an Apply control (or too
+        // little text to hold one: insufficient_content). Drop from
+        // pipeline and record in scan-history for visibility only: the row does
+        // not pin the URL (OBSERVATIONAL_SCAN_HISTORY_STATUSES), so the next
+        // --verify scan checks it again rather than losing a live posting whose
+        // button the classifier does not recognise (#4832).
         dropped.push({ ...offer, reason });
         console.log(`  ⚠️ no-apply  ${offer.company} | ${offer.title} (${reason})`);
       } else {
@@ -3901,6 +4071,9 @@ export async function verifyOffers(offers, { headedFallback = false, throttleBas
       if (browser) await browser.close();
     }
   }
+  // The route guard counts, rather than logs, subresources a DNS filter blocks.
+  const quietBlocks = typeof takeSuppressedBlockCount === 'function' ? takeSuppressedBlockCount() : 0;
+  if (quietBlocks) console.warn(`--verify: ${quietBlocks} tracker/analytics requests skipped (no usable address, e.g. a DNS ad-blocker); not counted against any posting`);
 
   return { verified, expired, dropped, invalid, migrated, verificationStatusByOffer };
 }
@@ -3950,7 +4123,10 @@ const USAGE = `Usage:
   node scan.mjs --posted-before 2026-08-01   # absolute upper bound on posting date
   node scan.mjs --json                       # emit one machine-readable receipt on stdout
   node scan.mjs --quiet                      # suppress the manifesto footer
-  node scan.mjs --help                       # print this usage block and exit`;
+  node scan.mjs --help                       # print this usage block and exit
+
+Exit status: 0 when the scan ran, 1 on a configuration or fatal error, 2 when
+every target it tried failed (with --json: when any target failed).`;
 
 async function main() {
   const args = process.argv.slice(2);
@@ -4060,19 +4236,28 @@ async function main() {
     process.exit(1);
   }
   const config = rawConfig && typeof rawConfig === 'object' ? rawConfig : {};
+  const typos = portalTopLevelTypos(config);
+  if (typos.length > 0) {
+    for (const typo of typos) {
+      console.error(
+        `Error: ${PORTALS_PATH}: unknown top-level key "${typo.key}" — did you mean "${typo.suggestion}"? The misspelled key is ignored, so this scan would report success without applying it.`,
+      );
+    }
+    console.error('Example: node scan.mjs --dry-run --json');
+    process.exit(1);
+  }
   const companies = Array.isArray(config.tracked_companies) ? config.tracked_companies : [];
   const boards = Array.isArray(config.job_boards) ? config.job_boards : [];
   const titleFilter = buildTitleFilter(config.title_filter);
 
   // Seniority tier classifier integration
   let classifyTier = null;
-  const skipTiers = Array.isArray(config.skip_tiers)
-    ? config.skip_tiers.filter(t => typeof t === 'string').map(t => t.toLowerCase())
-    : [];
-  if (skipTiers.length > 0) {
-    const mod = await import('./classify-tier.mjs');
-    classifyTier = mod.classifyTier || mod.default;
-  }
+  const TIERS = ['intern', 'entry', 'mid', 'senior'];
+  const tierList = list => list.filter(t => typeof t === 'string').map(t => t.toLowerCase());
+  const skipTiers = Array.isArray(config.skip_tiers) ? tierList(config.skip_tiers) : [];
+  // #5778. An entry's own skip_tiers replaces the global list for that entry;
+  // [] turns the tier filter off there.
+  const entrySkipTiers = entry => (Array.isArray(entry.skip_tiers) ? tierList(entry.skip_tiers) : skipTiers);
 
   const locationFilter = buildLocationFilter(config.location_filter);
   const postingAgeFilter = buildPostingAgeFilter(config.max_posting_age_days);
@@ -4088,6 +4273,18 @@ async function main() {
   const countryEligibilityFilter = buildCountryEligibilityFilter(config.country_eligibility_filter, candidateCountry);
   const visaFilter = buildVisaFilter(config.visa_filter);
   const visaEnabled = Boolean(config.visa_filter) && config.visa_filter.enabled !== false;
+  // Stated years of experience (jd-years.mjs). Runs on the new offers only,
+  // after every other cut, so it costs at most one JD request per posting
+  // that would otherwise reach pipeline.md. Independent of skip_tiers: that
+  // reads the title, this reads the JD body.
+  // The profile is read only when an enabled block needs its years, so a
+  // profile problem is never reported for a filter that is off.
+  const experienceBlock = config.experience_filter;
+  const needsProfileYears = experienceBlock !== null && typeof experienceBlock === 'object'
+    && !Array.isArray(experienceBlock) && (experienceBlock.enabled === undefined || experienceBlock.enabled === true)
+    && experienceBlock.years == null;
+  const experienceFilter = resolveExperienceFilter(experienceBlock, needsProfileYears ? loadCandidateYears() : undefined);
+  if (!experienceFilter.enabled && experienceFilter.reason) console.warn(`⚠️  ${experienceFilter.reason}`);
 
   // 3. Resolve a provider for each enabled company / board
   const targets = [];
@@ -4208,6 +4405,16 @@ async function main() {
         exitOnConfigError(`${target.name}: filter_on "${field}" has no field_filters.${field} block in portals.yml`);
       }
     }
+    if (target.skip_tiers !== undefined
+      && (!Array.isArray(target.skip_tiers)
+        || target.skip_tiers.some(t => typeof t !== 'string' || !TIERS.includes(t.toLowerCase())))) {
+      exitOnConfigError(`${target.name}: skip_tiers must be a list of ${TIERS.join(', ')}, or [] to turn the tier filter off`);
+    }
+  }
+  const tierFilterActive = skipTiers.length > 0 || targets.some(t => entrySkipTiers(t).length > 0);
+  if (tierFilterActive) {
+    const mod = await import('./classify-tier.mjs');
+    classifyTier = mod.classifyTier || mod.default;
   }
 
   const localParserCount = targets.filter(t => t._provider.id === 'local-parser').length;
@@ -4251,8 +4458,9 @@ async function main() {
   let totalFilteredCooldown = 0;
   const cooldownOffers = [];
   // Config-rejected offers, kept so the scan-history row can say what the
-  // summary counter only counts. Both lists stay empty under --dry-run, the
-  // same as every other history write below.
+  // summary counter only counts. All three lists stay empty under --dry-run,
+  // the same as every other history write below.
+  const titleFilteredOffers = [];
   const locationFilteredOffers = [];
   const ageFilteredOffers = [];
   let totalFound = 0;
@@ -4279,6 +4487,9 @@ async function main() {
   const newOffers = [];
   const verifyDedupKeys = new Map();
   const errors = [...resolveErrors];
+  // Targets whose fetch threw. Not errors.length: that also holds resolve
+  // errors and a local parser rescued by its API fallback, which succeeded.
+  let failedTargets = 0;
   const emptyTargets = [];
   const unverifiedZeroTargets = [];
 
@@ -4307,6 +4518,9 @@ async function main() {
       process.exit(130);
     });
   }
+
+  // Values providers resolve once and reuse on later scans (provider-id-cache.mjs).
+  const idCaches = openProviderIdCache(path.join(DATA_ROOT, PROVIDER_ID_CACHE_DIR));
 
   const tasks = targets.map(company => async () => {
     let provider = company._provider;
@@ -4342,7 +4556,14 @@ async function main() {
       // Present only when portals.yml sets preferred_languages: a provider that
       // returns language versions selectively also returns the preferred ones.
       ...(preferredLanguageRank ? { preferredLanguageRank } : {}),
+      // This scan's own title decision, for a provider that pays extra per
+      // posting (Workday's multi-location detail GETs) and can skip postings
+      // the title filter below will drop. Absent when this company's filter_on
+      // leaves the title out, since then no title is dropped.
+      ...(normalizeFilterOn(company.filter_on).includes('title') ? { titleWanted: (title) => titleFilter(title) } : {}),
+      idCache: idCaches.forProvider(provider.id),
     };
+    applyEntryResponseCap(ctx, company);
     let sourceName = provider.id === 'local-parser' ? 'local-parser' : `${provider.id}-api`;
     try {
       let jobs;
@@ -4354,6 +4575,7 @@ async function main() {
         if (!fallback || fallback.error) throw parserErr;
         provider = fallback.provider;
         sourceName = `${provider.id}-api`;
+        ctx.idCache = idCaches.forProvider(provider.id);
         jobs = await provider.fetch(company, ctx);
         errors.push({
           company: company.name,
@@ -4385,6 +4607,7 @@ async function main() {
       }
 
       const declaredFields = normalizeFilterOn(company.filter_on);
+      const companySkipTiers = entrySkipTiers(company);
       const orderedJobs = preferredLanguageRank ? orderByPreferredLanguage(jobs, preferredLanguageRank) : jobs;
       for (const job of orderedJobs) {
         const listingToken = refreshListingKey(job);
@@ -4444,6 +4667,7 @@ async function main() {
         }
         if (failedField === 'title') {
           totalFilteredTitle++;
+          if (!dryRun) titleFilteredOffers.push({ ...job, source: sourceName });
           continue;
         }
         if (failedField !== null) {
@@ -4451,7 +4675,7 @@ async function main() {
           continue;
         }
         if (sawAbsentField) totalPassedFieldAbsent++;
-        if (classifyTier && skipTiers.includes(classifyTier(job.title))) {
+        if (classifyTier && companySkipTiers.includes(classifyTier(job.title))) {
           totalFilteredTier++;
           continue;
         }
@@ -4511,7 +4735,15 @@ async function main() {
         // the prebuilt aggregate of located rows. An unknown ID keeps the
         // historical duplicate decision. Aggregators use URL dedup only.
         const baseKey = companyRoleDedupKey(job.company, job.title, canonicalizeCompany);
-        const key = company.aggregator === true
+        // No employer, no company+role identity. A board that cannot name a
+        // posting's employer returns `company: ''` (providers/_types.js allows
+        // it; builtin, platsbanken, justjoin and vdab do it), and `::{title}`
+        // then stood for every unnamed employer at once: a second "Senior
+        // Software Engineer" from a different company was dropped as a
+        // duplicate of the first. Seeding already skips such rows
+        // (collectSeenCompanyRoles), so they dedup by URL only, as an
+        // aggregator's do.
+        const key = company.aggregator === true || !canonicalizeCompany(job.company)
           ? null
           : (dedupIncludeLocation
             ? companyRoleDedupKey(job.company, job.title, canonicalizeCompany, job.location)
@@ -4569,6 +4801,7 @@ async function main() {
         });
       }
     } catch (err) {
+      failedTargets++;
       errors.push({
         company: company.name,
         error: err.message,
@@ -4578,7 +4811,34 @@ async function main() {
     }
   });
 
-  await parallelFetch(tasks, CONCURRENCY);
+  const companyFetches = () => parallelFetch(tasks, CONCURRENCY, progressTicker(tasks.length));
+  if (process.env.CAREER_OPS_HTTP_CACHE === '0') {
+    await companyFetches();
+  } else {
+    const ttlMs = resolveHttpCacheTtlMs(process.env.CAREER_OPS_HTTP_CACHE_TTL_MS);
+    await withHttpCache({
+      dir: path.join(DATA_ROOT, 'data', 'cache', 'http'),
+      ttlMs,
+      write: !dryRun,
+    }, async () => {
+      await companyFetches();
+      const stats = httpCacheStats();
+      if (!stats || (stats.hits === 0 && stats.revalidated === 0)) return;
+      const parts = [];
+      if (stats.hits > 0) parts.push(`reused ${stats.hits} board responses saved in the last ${formatHttpCacheWindow(ttlMs)}`);
+      if (stats.revalidated > 0) parts.push(`rechecked ${stats.revalidated} older board responses`);
+      process.stderr.write(`scan: ${parts.join(', and ')}. Set CAREER_OPS_HTTP_CACHE=0 to always download.\n`);
+    });
+  }
+  // --dry-run leaves no trace, this cache included.
+  if (!dryRun) {
+    try {
+      await idCaches.save();
+    } catch (err) {
+      // Losing the cache costs a lookup on the next scan, not this scan's results.
+      console.warn(`⚠️  could not save the provider id cache: ${err.message}`);
+    }
+  }
 
   // 5.5. Optional liveness verification — drop expired and guard-rejected postings
   let verifiedOffers = newOffers;
@@ -4645,6 +4905,22 @@ async function main() {
     verifiedOffers = acceptedOffers;
   }
 
+  // 5.6. Experience filter: read each new offer's stated years. Only a required
+  // overall bar whose lowest reading is beyond the band drops (action: drop);
+  // an unread JD, or one with no such bar, is kept and labelled.
+  let experienceDropped = [];
+  if (experienceFilter.enabled && verifiedOffers.length > 0) {
+    console.log(`\nReading stated years of experience for ${verifiedOffers.length} new offer(s)...`);
+    // A first scan with the filter on can read hundreds of JDs; say how far along.
+    const { kept, dropped } = await applyExperienceFilter(verifiedOffers, experienceFilter, {
+      onProgress: (done, total) => {
+        if (done % PROGRESS_EVERY === 0 || done === total) process.stderr.write(`[${new Date().toTimeString().slice(0, 8)}] scan: ${done}/${total} JDs read\n`);
+      },
+    });
+    verifiedOffers = kept;
+    experienceDropped = dropped;
+  }
+
   // 5.7. Cross-listing check (#1597): fingerprint each new offer's JD body and
   // compare against recent history rows from a DIFFERENT company — the same
   // requirements text under two names is usually an agency re-post of a direct
@@ -4662,6 +4938,13 @@ async function main() {
   if (!dryRun && verifiedOffers.length > 0) {
     await appendToPipeline(verifiedOffers);
     await appendToScanHistory(verifiedOffers, date);
+  }
+  // Postings the experience filter dropped: recorded for visibility, no dedup
+  // weight (OBSERVATIONAL_SCAN_HISTORY_STATUSES), so changing your years or
+  // stretch_years hands them back on the next scan. Once per posting.
+  if (!dryRun && experienceDropped.length > 0) {
+    const newRows = unrecordedOffers(experienceDropped, 'skipped_experience', readIfExists(SCAN_HISTORY_PATH));
+    if (newRows.length > 0) await appendToScanHistory(newRows, date, 'skipped_experience');
   }
   if (!dryRun && cooldownOffers.length > 0) {
     const cooldownGroups = {};
@@ -4684,23 +4967,30 @@ async function main() {
   if (!dryRun && expiredForHistory.length > 0) {
     await appendToScanHistory(expiredForHistory, date, 'skipped_expired');
   }
-  // Offers the location and posting-age cuts removed: recorded for visibility,
-  // never added to pipeline.md. Both are OBSERVATIONAL_SCAN_HISTORY_STATUSES,
-  // so the rows carry no dedup weight — the threshold that rejected them is one
-  // the user edits, and a row written under the old threshold must not suppress
-  // the same posting once it moves.
-  // Each posting is recorded once per status, not once per scan.
-  if (!dryRun && (locationFilteredOffers.length > 0 || ageFilteredOffers.length > 0)) {
+  // Offers the title, location and posting-age cuts removed: recorded for
+  // visibility, never added to pipeline.md. All three are
+  // OBSERVATIONAL_SCAN_HISTORY_STATUSES, so the rows carry no dedup weight —
+  // the setting that rejected them is one the user edits, and a row written
+  // under the old setting must not suppress the same posting once it moves.
+  // Each posting is recorded once per status, not once per scan, so the file
+  // grows with new postings rather than with scans (#2695).
+  if (!dryRun && (titleFilteredOffers.length > 0 || locationFilteredOffers.length > 0 || ageFilteredOffers.length > 0)) {
     const historyText = readIfExists(SCAN_HISTORY_PATH);
+    const newTitleRows = unrecordedOffers(titleFilteredOffers, 'skipped_title', historyText);
     const newLocationRows = unrecordedOffers(locationFilteredOffers, 'skipped_location', historyText);
     const newAgeRows = unrecordedOffers(ageFilteredOffers, 'skipped_age', historyText);
+    if (newTitleRows.length > 0) await appendToScanHistory(newTitleRows, date, 'skipped_title');
     if (newLocationRows.length > 0) await appendToScanHistory(newLocationRows, date, 'skipped_location');
     if (newAgeRows.length > 0) await appendToScanHistory(newAgeRows, date, 'skipped_age');
   }
-  // Pages that loaded but had no Apply control: record so we don't re-verify
-  // them next scan, but never let them reach pipeline.md.
+  // Pages that loaded but had no Apply control: recorded for visibility and
+  // never added to pipeline.md. The row carries no dedup weight
+  // (OBSERVATIONAL_SCAN_HISTORY_STATUSES), because "no visible Apply control"
+  // is not proof the posting is closed; the next scan verifies it again.
+  // Each posting is recorded once, not once per scan.
   if (!dryRun && droppedOffers.length > 0) {
-    await appendToScanHistory(droppedOffers, date, 'skipped_no_apply_control');
+    const newDroppedRows = unrecordedOffers(droppedOffers, 'skipped_no_apply_control', readIfExists(SCAN_HISTORY_PATH));
+    if (newDroppedRows.length > 0) await appendToScanHistory(newDroppedRows, date, 'skipped_no_apply_control');
   }
   // Guard-rejected URLs (invalid / unsupported protocol / blocked host) are
   // recorded with a precise status so subsequent scans dedup-skip them via
@@ -4732,7 +5022,7 @@ async function main() {
     console.log(`Filtered by field:     ${totalFilteredDeclaredField} removed`);
     console.log(`Passed, field absent:  ${totalPassedFieldAbsent} ungated`);
   }
-  if (skipTiers.length > 0) {
+  if (tierFilterActive) {
     console.log(`Filtered by tier:      ${totalFilteredTier} removed`);
   }
   if (config.location_filter || totalFilteredLocation > 0) {
@@ -4761,6 +5051,12 @@ async function main() {
   if (Object.keys(windows).length > 0 || totalFilteredCooldown > 0) {
     console.log(`Filtered by cooldown:  ${totalFilteredCooldown} removed`);
   }
+  if (experienceFilter.enabled) {
+    const band = `${experienceFilter.years} yrs + ${experienceFilter.stretchYears} stretch`;
+    console.log(experienceFilter.action === 'drop'
+      ? `Filtered by experience: ${experienceDropped.length} removed (band: JD minimum ≤ ${band})`
+      : `Experience filter:     label only, nothing removed (band: JD minimum ≤ ${band})`);
+  }
   console.log(`Duplicates:            ${totalDupes} skipped`);
   if (blacklist.size > 0) {
     if (includeBlacklisted) {
@@ -4768,6 +5064,20 @@ async function main() {
     } else {
       console.log(`Blacklisted:           ${totalFilteredBlacklist} skipped (blacklist)`);
     }
+  }
+  if (experienceDropped.length > 0) {
+    console.log(`\nRemoved by experience_filter (the JD's lowest stated requirement is above your band):`);
+    for (const offer of experienceDropped) {
+      console.log(`  - ${offer.company} — ${offer.title}: requires ${offer.years.req?.display}`);
+      console.log(`    "${offer.years.req?.mentions.find(m => m.kind === 'required' && m.scope === 'overall' && m.floor === offer.years.req?.min)?.quote ?? ''}"`);
+      console.log(`    ${offer.url}`);
+    }
+  }
+  if (experienceFilter.enabled && verifiedOffers.length > 0) {
+    const counts = { in: 0, out: 0, unknown: 0 };
+    for (const o of verifiedOffers) if (o.years) counts[o.years.verdict]++;
+    const unread = verifiedOffers.filter(o => o.years && !o.years.req).length;
+    console.log(`Stated years (kept):   ${counts.in} in band, ${counts.unknown} unknown (${unread} unread)${counts.out ? `, ${counts.out} above band (labelled)` : ''}`);
   }
   if (crossListings.length > 0) {
     console.log(`\n⚠️  Possible cross-listings (same JD text, different company) — warn only, nothing was dropped:`);
@@ -4985,7 +5295,7 @@ async function main() {
   // The run completed (or was a dry run) — disarm the failure row.
   registerRunFailureSnapshot(null);
 
-  console.log(`\n→ Run /career-ops pipeline to evaluate new offers.`);
+  console.log(`\n${pipelineRunHint()}`);
   console.log('→ Share results and get help: https://discord.gg/8pRpHETxa4');
 
   if (jsonMode) {
@@ -5009,10 +5319,24 @@ async function main() {
     }, errors.length > 0 ? 2 : 0);
   }
 
+  // A run in which every target it tried failed read nothing, and exiting 0
+  // told cron and the web scheduler it succeeded with zero new offers. Exit 2,
+  // the receipt's failure code, so the outage is visible. Only when all failed:
+  // a few dead boards are routine, and every run would turn red. An empty
+  // config tried nothing and still exits 0. This runs after the bookkeeping
+  // above, so the scan-runs and portal-health rows are already written; the
+  // message goes to stderr last, where a scheduler reads the cause.
+  const attempted = targets.length + resolveErrors.length;
+  const everyTargetFailed = attempted > 0 && failedTargets + resolveErrors.length === attempted;
+  if (everyTargetFailed && !jsonMode) {
+    console.error(`Error: every scan target failed (${attempted} of ${attempted}); no board could be read. See the errors above.`);
+    process.exitCode = 2;
+  }
+
   // One-time-ever manifesto note: first successful REAL run only. The state
   // file keeps it from ever repeating; --dry-run must leave no trace, and a
   // piped/quiet run is not the moment for it.
-  if (!dryRun && process.stdout.isTTY && !process.argv.includes('--quiet') && !existsSync('.manifesto-noted')) {
+  if (!dryRun && !everyTargetFailed && process.stdout.isTTY && !process.argv.includes('--quiet') && !existsSync('.manifesto-noted')) {
     // OSC 8 hyperlink where support is known, so the click attributes as
     // utm_source=cli while the visible text stays clean; otherwise print the
     // URL with the utm so typed visits attribute too.

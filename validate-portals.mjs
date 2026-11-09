@@ -14,10 +14,12 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSy
 import { join, dirname, resolve } from 'path';
 import { tmpdir } from 'os';
 import { fileURLToPath, pathToFileURL } from 'url';
-import * as yaml from 'js-yaml';
+import { loadYaml } from './lib/yaml-document.mjs';
 import { flagValue, hasFlag, validateFlags } from './lib/cli-flags.mjs';
+import { isMainModule } from './lib/is-main-module.mjs';
 import { getCareerOpsRoot } from './path-resolver.mjs';
 import { barePrefixDomainKeywords } from './title-keywords.mjs';
+import { nearestKey } from './validate-profile.mjs';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const PROVIDERS_DIR = join(ROOT, 'providers');
@@ -98,6 +100,20 @@ function validateUrl(value, path, errors) {
   }
 }
 
+// buildTitleFilter reads only an array as a keyword list and drops anything else,
+// so a bare string leaves the filter matching every title. validateKeywordList
+// accepts one (location_filter and content_filter do wrap it), so the title
+// filter's own lists are checked here. A warning, not an error: title_filter has
+// always been lenient about this and a hard failure would break configs that
+// currently load.
+function warnBareStringKeywords(block, path, warnings) {
+  for (const key of ['positive', 'negative']) {
+    if (typeof block[key] === 'string') {
+      add(warnings, `${path}.${key}`, `a bare string is ignored by the title filter, so this list does nothing; write it as a list: [${JSON.stringify(block[key])}]`);
+    }
+  }
+}
+
 function validateKeywordList(value, path, errors) {
   if (value === undefined || value === null) return;
   const arr = Array.isArray(value) ? value : [value];
@@ -173,6 +189,52 @@ const TITLE_FILTER_FIELDS = ['positive', 'negative', 'seniority_boost'];
 // whitelist this validation exists to catch.
 const FIELD_FILTER_FIELDS = ['positive', 'negative'];
 
+// Settings a scan actually reads. A key outside this list is left alone: people
+// keep private notes in the same file, and those must not fail a scan. A key
+// one or two edits from a real setting is different. `tracked_companys` is not
+// `tracked_companies`, so the company list is read as missing, the scan reports
+// zero companies, and the process exits 0.
+export const PORTAL_TOP_LEVEL_KEYS = [
+  'title_filter',
+  'title_filter_full',
+  'title_filter_overrides',
+  'search_queries',
+  'tracked_companies',
+  'job_boards',
+  'scan_history',
+  'preferred_languages',
+  'interamt_searches',
+  'dayforce_boards',
+  'location_filter',
+  'country_eligibility_filter',
+  'salary_filter',
+  'experience_filter',
+  'portal_prune_quiet_days',
+  'max_posting_age_days',
+  'trust_filter',
+  'content_filter',
+  'visa_filter',
+  'skip_tiers',
+  'domain_filter',
+  'field_filters',
+  'company_aliases',
+  'portal_health_threshold',
+  'portal_health_stale_days',
+];
+
+export function portalTopLevelTypos(config) {
+  if (!isObject(config)) return [];
+  const known = new Set(PORTAL_TOP_LEVEL_KEYS);
+  const found = [];
+  for (const key of Object.keys(config)) {
+    if (known.has(key)) continue;
+    const suggestion = nearestKey(key, PORTAL_TOP_LEVEL_KEYS, 2);
+    if (!suggestion) continue;
+    found.push({ key, suggestion });
+  }
+  return found;
+}
+
 export async function validatePortalsConfig(config, { providerIds = new Set() } = {}) {
   const errors = [];
   const warnings = [];
@@ -182,10 +244,19 @@ export async function validatePortalsConfig(config, { providerIds = new Set() } 
     return { errors, warnings };
   }
 
+  for (const typo of portalTopLevelTypos(config)) {
+    add(
+      errors,
+      typo.key,
+      `unknown top-level key "${typo.key}" — did you mean "${typo.suggestion}"? The misspelled key is ignored, so the setting never applies`,
+    );
+  }
+
   if (config.title_filter !== undefined) {
     if (!isObject(config.title_filter)) {
       add(errors, 'title_filter', 'title_filter must be an object');
     } else {
+      warnBareStringKeywords(config.title_filter, 'title_filter', warnings);
       validateKeywordList(config.title_filter.positive, 'title_filter.positive', errors);
       validateKeywordList(config.title_filter.negative, 'title_filter.negative', errors);
       validateKeywordList(config.title_filter.seniority_boost, 'title_filter.seniority_boost', errors);
@@ -211,6 +282,7 @@ export async function validatePortalsConfig(config, { providerIds = new Set() } 
           add(errors, `title_filter_full.${key}`, `unknown title_filter_full field - expected one of ${TITLE_FILTER_FIELDS.join(', ')}`);
         }
       }
+      warnBareStringKeywords(config.title_filter_full, 'title_filter_full', warnings);
       validateKeywordList(config.title_filter_full.positive, 'title_filter_full.positive', errors);
       validateKeywordList(config.title_filter_full.negative, 'title_filter_full.negative', errors);
       validateKeywordList(config.title_filter_full.seniority_boost, 'title_filter_full.seniority_boost', errors);
@@ -322,6 +394,9 @@ export async function validatePortalsConfig(config, { providerIds = new Set() } 
       if (config.location_filter.strict !== undefined && typeof config.location_filter.strict !== 'boolean') {
         add(errors, 'location_filter.strict', 'must be a boolean when set');
       }
+      if (config.location_filter.remote_title_fallback !== undefined && typeof config.location_filter.remote_title_fallback !== 'boolean') {
+        add(errors, 'location_filter.remote_title_fallback', 'must be a boolean when set');
+      }
     }
   }
 
@@ -376,6 +451,28 @@ export async function validatePortalsConfig(config, { providerIds = new Set() } 
     }
   }
 
+  if (config.experience_filter !== undefined) {
+    const ef = config.experience_filter;
+    if (!isObject(ef)) {
+      add(errors, 'experience_filter', 'experience_filter must be an object');
+    } else {
+      if (ef.enabled !== undefined && typeof ef.enabled !== 'boolean') {
+        add(errors, 'experience_filter.enabled', 'must be a boolean when set');
+      }
+      for (const key of ['years', 'stretch_years']) {
+        if (ef[key] !== undefined && (typeof ef[key] !== 'number' || !Number.isFinite(ef[key]) || ef[key] < 0 || ef[key] > 60)) {
+          add(errors, `experience_filter.${key}`, 'must be a number from 0 to 60 when set');
+        }
+      }
+      if (ef.action !== undefined && ef.action !== 'drop' && ef.action !== 'label') {
+        add(errors, 'experience_filter.action', 'must be "drop" or "label" when set');
+      }
+      if (ef.concurrency !== undefined && (!Number.isInteger(ef.concurrency) || ef.concurrency < 1 || ef.concurrency > 16)) {
+        add(errors, 'experience_filter.concurrency', 'must be an integer from 1 to 16 when set');
+      }
+    }
+  }
+
   if (config.search_queries !== undefined && !Array.isArray(config.search_queries)) {
     add(errors, 'search_queries', 'search_queries must be an array when set');
   }
@@ -396,6 +493,13 @@ export async function validatePortalsConfig(config, { providerIds = new Set() } 
       if (!isObject(entry)) {
         add(errors, base, `${noun} entry must be an object`);
         continue;
+      }
+      // Every consumer reads only a boolean `false` as "off". js-yaml follows
+      // YAML 1.2, where `no`, `off` and a quoted "false" are strings, so such an
+      // entry is scanned while looking disabled. Flagged here, because the
+      // scanners cannot tell a typo from a deliberate non-boolean.
+      if (entry.enabled !== undefined && typeof entry.enabled !== 'boolean') {
+        add(errors, `${base}.enabled`, `enabled must be true or false, got ${JSON.stringify(entry.enabled)} - only a boolean false turns this ${noun} off, so it is still scanned`);
       }
       if (entry.enabled === false) continue;
 
@@ -479,7 +583,7 @@ async function validateFile(filePath) {
     throw new Error(`file not found: ${filePath}`);
   }
   const providerIds = await loadProviderIds();
-  const parsed = yaml.load(readFileSync(filePath, 'utf-8'));
+  const parsed = loadYaml(readFileSync(filePath, 'utf-8'));
   return validatePortalsConfig(parsed, { providerIds });
 }
 
@@ -500,6 +604,14 @@ tracked_companies:
       throw new Error(`expected 2 errors, got ${result.errors.length}`);
     }
     console.log('validate-portals self-test OK');
+
+    const typoFile = join(tmp, 'typo.yml');
+    writeFileSync(typoFile, 'tracked_companys:\n  - name: "Example Co"\n    careers_url: "https://boards.example.com/example"\n', 'utf-8');
+    const typo = await validateFile(typoFile);
+    const typoPaths = typo.errors.map((e) => e.path);
+    if (!typoPaths.includes('tracked_companys')) {
+      throw new Error(`expected tracked_companys to be rejected, got ${JSON.stringify(typo.errors)}`);
+    }
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
@@ -560,7 +672,9 @@ async function main() {
   if (result.errors.length > 0) process.exit(1);
 }
 
-main().catch((err) => {
-  console.error(`validate-portals failed: ${err.message}`);
-  process.exit(1);
-});
+if (isMainModule(import.meta.url)) {
+  main().catch((err) => {
+    console.error(`validate-portals failed: ${err.message}`);
+    process.exit(1);
+  });
+}

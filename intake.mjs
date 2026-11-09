@@ -32,6 +32,7 @@
 //   node intake.mjs --commit --all  # record every source with new material —
 //                                   # only when the user merged all of them
 //   node intake.mjs --self-test     # pure-function self-test, no filesystem
+//   node intake.mjs --help          # usage, then exit 0. An unknown flag exits 1.
 
 import { createHash } from 'crypto';
 import { execFileSync } from 'child_process';
@@ -41,8 +42,9 @@ import {
 import { dirname, extname, join, relative, resolve, sep } from 'path';
 import { fileURLToPath } from 'url';
 import { isMainModule } from './lib/is-main-module.mjs';
+import { validateFlags } from './lib/cli-flags.mjs';
 import { getCareerOpsRoot } from './path-resolver.mjs';
-import { writeFileAtomic } from './tracker-utils.mjs';
+import { writeFileAtomic, acquireTrackerLock } from './tracker-utils.mjs';
 import { isNestedCheckout } from './lib/mjs-files.mjs';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
@@ -361,26 +363,30 @@ const COMMIT_ALL = Symbol('commit-all');
 // confirmed for merge, or COMMIT_ALL. A blanket commit after a per-item
 // confirmation would mark declined sources as ingested and silently bury them
 // on every future run, so an empty list records nothing.
-function commitState(result, only = []) {
-  const all = only === COMMIT_ALL;
-  const state = loadState();
-  state.ingested = state.ingested || {};
-  const now = new Date().toISOString();
-  let count = 0;
-  for (const s of result.sources) {
-    if (!s.hash || s.status === 'ingested') continue;
-    if (!all && !only.includes(s.path)) continue;
-    state.ingested[s.path] = { hash: s.hash, ingestedAt: now };
-    count += 1;
-  }
+async function commitState(result, only = []) {
   mkdirSync(dirname(STATE_FILE), { recursive: true });
-  // Atomic for the same reason as hired-share's: a truncating write that is
-  // interrupted leaves unparseable JSON, which is the condition the loader
-  // above now refuses to silently paper over.
-  writeFileAtomic(STATE_FILE, JSON.stringify(state, null, 2) + '\n');
-  return count;
+  const lock = await acquireTrackerLock(`${STATE_FILE}.lock`, { tracker: STATE_FILE });
+  try {
+    const all = only === COMMIT_ALL;
+    const state = loadState();
+    state.ingested = state.ingested || {};
+    const now = new Date().toISOString();
+    let count = 0;
+    for (const s of computeDelta(state, result.sources.filter(source => source.status !== 'ingested'))) {
+      if (!s.hash || s.status === 'ingested') continue;
+      if (!all && !only.includes(s.path)) continue;
+      state.ingested[s.path] = { hash: s.hash, ingestedAt: now };
+      count += 1;
+    }
+    // Atomic for the same reason as hired-share's: a truncating write that is
+    // interrupted leaves unparseable JSON, which is the condition the loader
+    // above now refuses to silently paper over.
+    writeFileAtomic(STATE_FILE, JSON.stringify(state, null, 2) + '\n');
+    return count;
+  } finally {
+    lock.release();
+  }
 }
-
 function printSummary(result) {
   console.log(`documents/: ${result.documentsDir}`);
   console.log(`PDF extractor: ${result.pdfExtractor || 'none — ' + PDF_INSTALL_HINT}`);
@@ -455,14 +461,30 @@ const isMain = isMainModule(import.meta.url);
 // instead of calling process.exit(0). `--text` writes a whole CV to stdout and
 // is meant to be piped; process.exit() is synchronous and can truncate a pipe
 // write that hasn't drained. Falling off the end leaves exitCode at 0.
-function main() {
+const INTAKE_USAGE = [
+  'Usage: node intake.mjs [--summary]',
+  '       node intake.mjs --text <path>',
+  '       node intake.mjs --commit <path> [<path> ...]',
+  '       node intake.mjs --commit --all',
+  '       node intake.mjs --self-test',
+].join('\n');
+
+const INTAKE_KNOWN_FLAGS = ['--summary', '--text', '--commit', '--all', '--self-test', '--help', '-h'];
+
+async function main() {
   const args = process.argv.slice(2);
+  // Unknown flags used to be ignored, so `intake --txt path` scanned the
+  // whole folder and exited 0. --commit is not a value flag: `--commit --all`
+  // and `--commit --summary` are real. --text=path has to be read below or
+  // declaring --text as a value flag would scan again.
+  validateFlags(args, INTAKE_KNOWN_FLAGS, INTAKE_USAGE, { valueFlags: ['--text'], requireOperand: true });
   if (args.includes('--self-test')) runSelfTest();
 
   ensureScaffold();
+  const textEq = args.find((arg) => typeof arg === 'string' && arg.startsWith('--text='));
   const textIdx = args.indexOf('--text');
-  if (textIdx !== -1) {
-    const target = args[textIdx + 1];
+  if (textEq !== undefined || textIdx !== -1) {
+    const target = textEq !== undefined ? textEq.slice('--text='.length) : args[textIdx + 1];
     if (!target) { console.error('Usage: node intake.mjs --text <path relative to documents/>'); process.exit(1); }
     const abs = resolve(DOCS_DIR, target);
     // Scan output only ever emits paths inside documents/ — refuse anything
@@ -511,7 +533,7 @@ function main() {
       );
       process.exit(1);
     }
-    const count = commitState(result, all ? COMMIT_ALL : only);
+    const count = await commitState(result, all ? COMMIT_ALL : only);
     console.log(`Recorded ${count} source(s) as ingested → ${STATE_FILE}`);
     return;
   }
@@ -525,7 +547,7 @@ if (isMain) {
   // reaches here as a throw, because it is raised deep inside extractAll().
   // Anything else is a bug in this script and keeps its stack trace.
   try {
-    main();
+    await main();
   } catch (err) {
     if (!(err instanceof StateError)) throw err;
     console.error(err.message);

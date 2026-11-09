@@ -65,10 +65,13 @@
 import { chromium } from 'playwright';
 import { readFileSync, existsSync, mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
-import * as yaml from 'js-yaml';
+import { loadYaml } from './lib/yaml-document.mjs';
 import {
   appendToPipeline,
   appendToScanHistory,
+  appendUnrecordedToScanHistory,
+  BROWSER_PROCESS_ENV,
+  DATA_ROOT as SCAN_DATA_ROOT,
   loadSeenUrls,
   normalizeUrlForDedup,
   buildTitleFilter,
@@ -89,6 +92,7 @@ import { htmlToText } from './providers/_html-to-text.mjs';
 import { decodeEntities } from './providers/_html-entities.mjs';
 import { BOT_CHALLENGE_PATTERNS } from './liveness-core.mjs';
 import { validateFlags } from './lib/cli-flags.mjs';
+import { browserLaunchOptions } from './lib/browser-launch.mjs';
 
 // ── Constants ────────────────────────────────────────────────────────
 
@@ -367,7 +371,7 @@ export function parseArgs(argv = process.argv.slice(2)) {
 export function loadConfig(portalsPath = PORTALS_PATH, singleTenant = null) {
   let config = {};
   if (existsSync(portalsPath)) {
-    config = yaml.load(readFileSync(portalsPath, 'utf-8')) || {};
+    config = loadYaml(readFileSync(portalsPath, 'utf-8')) || {};
   }
 
   const rawBoards = Array.isArray(config.dayforce_boards) ? config.dayforce_boards : [];
@@ -592,7 +596,10 @@ export async function scanBoard(page, boardCfg, filters = {}, { debug = false } 
  */
 export async function scanBoardWithRetry(boardCfg, filters, {
   debug = false,
-  launch = () => chromium.launch({ headless: true }),
+  launch = () => chromium.launch(browserLaunchOptions(
+    { headless: true },
+    { projectRoot: SCAN_DATA_ROOT, processEnv: BROWSER_PROCESS_ENV },
+  )),
   retryDelayMs = RETRY_DELAY_MS,
 } = {}) {
   let lastError = null;
@@ -681,12 +688,14 @@ async function main() {
   if (!dryRun) {
     if (newOffers.length > 0) await appendToPipeline(newOffers);
     if (newOffers.length > 0) await appendToScanHistory(newOffers, date, 'added');
-    if (titleSkipped.length > 0) await appendToScanHistory(titleSkipped, date, 'skipped_title');
-    if (locationSkipped.length > 0) await appendToScanHistory(locationSkipped, date, 'skipped_location');
-    if (contentSkipped.length > 0) await appendToScanHistory(contentSkipped, date, 'skipped_content');
-    if (countryEligibilitySkipped.length > 0) await appendToScanHistory(countryEligibilitySkipped, date, 'skipped_country_eligibility');
-    if (visaSkipped.length > 0) await appendToScanHistory(visaSkipped, date, 'skipped_visa');
-    if (dupeSkipped.length > 0) await appendToScanHistory(dupeSkipped, date, 'skipped_dup');
+    // Every run hands the same skipped postings back, so each is recorded
+    // once per status, not once per run (#2695, as scan.mjs records its own).
+    await appendUnrecordedToScanHistory(titleSkipped, date, 'skipped_title');
+    await appendUnrecordedToScanHistory(locationSkipped, date, 'skipped_location');
+    await appendUnrecordedToScanHistory(contentSkipped, date, 'skipped_content');
+    await appendUnrecordedToScanHistory(countryEligibilitySkipped, date, 'skipped_country_eligibility');
+    await appendUnrecordedToScanHistory(visaSkipped, date, 'skipped_visa');
+    await appendUnrecordedToScanHistory(dupeSkipped, date, 'skipped_dup');
   }
 
   console.log(`\n${'━'.repeat(45)}`);
