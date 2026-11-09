@@ -46,7 +46,7 @@ jobs:
           node-version: 24
       - name: Restore dependencies
         id: deps
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             node_modules
