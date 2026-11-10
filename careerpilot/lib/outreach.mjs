@@ -216,8 +216,8 @@ export function parseAddresses(raw) {
 }
 
 // The candidate's own email (outreach:template, with the resume) to addresses they paste on the Email page:
-// one Gmail message per address, so no recipient ever sees another. An address CareerPilot already sent it to,
-// or one that bounced, is skipped.
+// one Gmail message per address, so no recipient ever sees another. An address already emailed (by CareerPilot
+// or from the candidate's Gmail), or one that bounced, is skipped.
 export async function sendBulk(db, gmail, raw, env = process.env) {
   const addresses = parseAddresses(raw);
   if (!addresses.length) return { error: 'No email addresses found.' };
@@ -230,10 +230,13 @@ export async function sendBulk(db, gmail, raw, env = process.env) {
   for (const email of addresses) {
     const contact = await upsertContact(db, { email, sourceType: 'manual', domainMatch: true });
     if (contact.opted_out) { results.push({ email, ok: false, error: 'bounced before or opted out' }); continue; }
-    if (await one(db, `SELECT 1 FROM outreach WHERE contact_id = ? AND kind = 'direct' AND status IN ('sent', 'sending', 'unknown', 'bounced')`, [contact.id])) {
+    // Never a second email: not after any CareerPilot email to this address (this box, outreach, applications),
+    // nor after one the candidate sent from Gmail themselves.
+    if (await one(db, `SELECT 1 FROM outreach WHERE contact_id = ? AND status IN ('sent', 'sending', 'unknown', 'bounced')`, [contact.id])) {
       results.push({ email, ok: false, error: 'already sent' });
       continue;
     }
+    if ((await gmail.listIds(`in:sent to:${email}`, 1)).length) { results.push({ email, ok: false, error: 'already emailed from your Gmail' }); continue; }
     const r = await send(db, gmail, { contact, job: null, kind: 'direct', subject: template.subject, body: template.text, html: template.html ?? null,
       attach: true, composer: 'template:candidate' }, profile, resume);
     results.push({ email, ok: r.ok, error: r.error });

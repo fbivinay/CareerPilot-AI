@@ -501,7 +501,9 @@ test('pasted addresses each get their own email with the resume, once', async ()
   assert.deepEqual(parseAddresses('HR <hr@acme.in>, a@b.co\nhr@acme.in; x@y.io'), ['hr@acme.in', 'a@b.co', 'x@y.io']);
   const db = await openDb({ url: ':memory:' });
   const messages = [];
-  const gmail = { send: async (m) => { messages.push(m); return { id: `g${messages.length}`, threadId: `t${messages.length}` }; } };
+  const gmailSent = ['mine@x.io'];
+  const gmail = { send: async (m) => { messages.push(m); return { id: `g${messages.length}`, threadId: `t${messages.length}` }; },
+    listIds: async (q) => (gmailSent.some((a) => q === `in:sent to:${a}`) ? ['m1'] : []) };
   await kvSet(db, 'outreach:template', { subject: 'Reaching Out Regarding Job Opportunities', text: 'Hello', html: '<p>Hello</p>' });
   const env = { APP_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString('base64') };
   await vaultPut(db, 'profile', JSON.stringify(profile), env);
@@ -510,17 +512,22 @@ test('pasted addresses each get their own email with the resume, once', async ()
   assert.deepEqual(first.results.map((r) => r.ok), [true, true]);
   assert.deepEqual(messages.map((m) => m.to), ['hr@acme.in', 'a@b.co']); // one message per address
   assert.ok(messages.every((m) => m.subject === 'Reaching Out Regarding Job Opportunities' && m.attachments.length === 1));
-  const again = await sendBulk(db, gmail, 'a@b.co x@y.io', env);
-  assert.deepEqual(again.results, [{ email: 'a@b.co', ok: false, error: 'already sent' }, { email: 'x@y.io', ok: true, error: undefined }]);
+  const again = await sendBulk(db, gmail, 'a@b.co x@y.io mine@x.io', env);
+  assert.deepEqual(again.results, [{ email: 'a@b.co', ok: false, error: 'already sent' }, { email: 'x@y.io', ok: true, error: undefined },
+    { email: 'mine@x.io', ok: false, error: 'already emailed from your Gmail' }]);
   assert.equal(messages.length, 3);
   assert.match((await sendBulk(db, gmail, 'no addresses here', env)).error, /No email addresses/);
+  // An address CareerPilot's own outreach already emailed gets nothing more.
+  const { run } = await import('../lib/db.mjs');
+  await run(db, `UPDATE outreach SET kind = 'initial' WHERE contact_id = (SELECT id FROM contacts WHERE email = 'hr@acme.in')`);
+  assert.equal((await sendBulk(db, gmail, 'hr@acme.in', env)).results[0].error, 'already sent');
 });
 
 test('addresses queued on the dashboard are all sent by the bulk stage, then the queue is empty', async () => {
   const { kvGet, kvSet } = await import('../lib/db.mjs');
   const db = await openDb({ url: ':memory:' });
   const messages = [];
-  const gmail = { send: async (m) => { messages.push(m); return { id: `g${messages.length}`, threadId: `t${messages.length}` }; } };
+  const gmail = { send: async (m) => { messages.push(m); return { id: `g${messages.length}`, threadId: `t${messages.length}` }; }, listIds: async () => [] };
   await kvSet(db, 'outreach:template', { subject: 'S', text: 'Hello' });
   const env = { APP_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString('base64') };
   await vaultPut(db, 'profile', JSON.stringify(profile), env);
