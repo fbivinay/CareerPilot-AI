@@ -202,15 +202,24 @@ export async function sentEmails(f = {}) {
       : byThread.get(o.thread_id) ?? (o.replied_at ? { category: 'recruiter_reply', at: o.replied_at } : null) })),
     ...mine.map((m) => ({ ...m, by: 'you', reply: m.reply_category ? { category: m.reply_category, at: m.reply_at, from: m.reply_from } : null })),
   ].sort((a, b) => String(b.sent_at).localeCompare(String(a.sent_at)));
-  const counts = { all: rows.length, you: 0, careerpilot: 0, replied: 0, none: 0, bounce: 0, other: 0, ...Object.fromEntries(DECISIONS.map((d) => [d, 0])) };
+  // "Reached" = sent and not bounced; "today" = reached on today's date in India time.
+  const istDay = (iso) => (iso ? new Date(iso).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }) : '');
+  const today = istDay(new Date().toISOString());
+  const reached = (r) => replyGroup(r) !== 'bounce';
+  const sentToday = (r) => reached(r) && istDay(r.sent_at) === today;
+  const counts = { all: rows.length, you: 0, careerpilot: 0, reached: 0, today: 0, replied: 0, none: 0, bounce: 0, other: 0,
+    ...Object.fromEntries(DECISIONS.map((d) => [d, 0])) };
   for (const r of rows) {
     const g = replyGroup(r);
     counts[r.by]++;
     counts[g]++;
     if (g !== 'none' && g !== 'bounce') counts.replied++;
+    if (reached(r)) counts.reached++;
+    if (sentToday(r)) counts.today++;
   }
-  const shown = rows.filter((r) => (!f.by || r.by === f.by)
-    && (!f.reply || (f.reply === 'replied' ? !['none', 'bounce'].includes(replyGroup(r)) : replyGroup(r) === f.reply)));
+  const replyMatch = (r) => (f.reply === 'replied' ? !['none', 'bounce'].includes(replyGroup(r))
+    : f.reply === 'reached' ? reached(r) : replyGroup(r) === f.reply);
+  const shown = rows.filter((r) => (!f.by || r.by === f.by) && (!f.reply || replyMatch(r)) && (f.when !== 'today' || sentToday(r)));
   const p = page(f.page);
   return { rows: shown.slice((p - 1) * PAGE_SIZE, p * PAGE_SIZE), total: shown.length, page: p, counts };
 }

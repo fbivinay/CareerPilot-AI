@@ -25,8 +25,8 @@ export default async function Email({ searchParams }) {
       <h2 className="kicker mb-3">Sent</h2>
       <div className="mb-10 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
         <Stat label="Job emails sent" value={c.all} to="/email" hint="One per conversation" />
-        <Stat label="Sent by you" value={c.you} to={to({ by: 'you' })} />
-        <Stat label="Sent by CareerPilot" value={c.careerpilot} to={to({ by: 'careerpilot' })} />
+        <Stat label="Actually reached" value={c.reached} to={to({ reply: 'reached' })} hint="Sent, not bounced" tone="good" />
+        <Stat label="Sent today" value={c.today} to={to({ when: 'today' })} hint="Reached today" />
         <Stat label="Replied" value={c.replied} to={to({ reply: 'replied' })} hint={`${pct(c.replied, c.all)} of sent`} />
         <Stat label="No reply yet" value={c.none} to={to({ reply: 'none' })} />
         <Stat label="Bounced" value={c.bounce} to={to({ reply: 'bounce' })} tone={c.bounce ? 'bad' : undefined} hint="Address did not exist" />
@@ -43,7 +43,8 @@ export default async function Email({ searchParams }) {
 
       <Filters base="/email" params={params} fields={[
         { name: 'by', label: 'Sent by', options: [['', 'Anyone'], ['you', 'You'], ['careerpilot', 'CareerPilot']] },
-        { name: 'reply', label: 'Reply', options: [['', 'All'], ['replied', 'Replied'], ['none', 'No reply yet'], ['assessment', 'Assessment'],
+        { name: 'when', label: 'When', options: [['', 'Any time'], ['today', 'Today']] },
+        { name: 'reply', label: 'Reply', options: [['', 'All'], ['reached', 'Actually reached'], ['replied', 'Replied'], ['none', 'No reply yet'], ['assessment', 'Assessment'],
           ['interview', 'Interview'], ['offer', 'Offer'], ['rejection', 'Rejection'], ['other', 'Other reply'], ['bounce', 'Bounced']] },
       ]} />
       <Table head={['Sent', 'By', 'To', 'Subject', 'Reply']} empty="No job emails yet.">

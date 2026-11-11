@@ -67,7 +67,9 @@ test('email page tiles equal their drill-down lists', async () => {
   const { counts: c, total } = await q.sentEmails({});
   assert.equal(total, c.all);
   for (const by of ['you', 'careerpilot']) assert.equal(c[by], (await q.sentEmails({ by })).total, by);
-  for (const reply of ['replied', 'none', 'bounce', 'assessment', 'interview', 'offer', 'rejection', 'other']) {
+  assert.equal(c.today, (await q.sentEmails({ when: 'today' })).total, 'today');
+  assert.equal(c.reached, c.all - c.bounce);
+  for (const reply of ['reached', 'replied', 'none', 'bounce', 'assessment', 'interview', 'offer', 'rejection', 'other']) {
     assert.equal(c[reply], (await q.sentEmails({ reply })).total, reply);
   }
   assert.equal(c.you + c.careerpilot, c.all);
