@@ -116,8 +116,12 @@ export function classifyEmail(msg, { ourThreadIds = new Set() } = {}) {
   // Curly apostrophes ("won’t", Headout) read as straight ones, so the phrases need one spelling only.
   const parts = sentences(`${subject}\n${own}`.toLowerCase().replace(/[‘’]/g, "'")).filter((p) => !DISCLAIMER.test(p));
   const inOurThread = ourThreadIds.has(msg.threadId);
-  if (/^(mailer-daemon|postmaster)@/i.test(fromAddr)
-    && /delivery status notification|undeliverable|delivery (has )?failed|address not found|returned mail|failure notice|could not be delivered/i.test(subject)) {
+  // A delay notice is not a failure: the server is still retrying, and sends a failure notice if it gives up.
+  if (/delivery status notification \(delay\)|delivery (has been )?delayed/i.test(subject)) return { category: 'other', confidence: 0.95 };
+  if ((/^(mailer-daemon|postmaster)@/i.test(fromAddr)
+    && /delivery status notification|undeliverable|delivery (has )?failed|address not found|returned mail|failure notice|could not be delivered/i.test(subject))
+    // Mail filters (Trend Micro, Mimecast) return a blocked message from their own no-reply address.
+    || /^(undeliverable:|undelivered mail returned to sender|mail delivery failed|delivery status notification \(failure\))/i.test(subject.trim())) {
     return { category: 'bounce', confidence: 0.95 };
   }
   if (inOurThread && OPT_OUT.test(own.slice(0, 1500))) return { category: 'opt_out', confidence: 0.9 };

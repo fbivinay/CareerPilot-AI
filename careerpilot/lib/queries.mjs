@@ -191,14 +191,20 @@ export async function sentEmails(f = {}) {
     all(db, `SELECT o.id, o.gmail_thread_id thread_id, o.subject, o.sent_at, o.status, o.replied_at, c.email to_addr, c.name to_name, c.company,
         (SELECT count(*) FROM outreach x WHERE x.followup_of = o.id AND x.status IN ('sent', 'bounced')) followups
       FROM outreach o JOIN contacts c ON c.id = o.contact_id WHERE o.followup_of IS NULL AND o.status IN ('sent', 'bounced')`),
-    all(db, `SELECT thread_id, category, received_at at, coalesce(from_name, from_addr) sender FROM emails
+    all(db, `SELECT thread_id, category, received_at at, coalesce(from_name, from_addr) sender, snippet FROM emails
       WHERE category NOT IN ('ignored', 'other') AND thread_id IN (SELECT gmail_thread_id FROM outreach WHERE gmail_thread_id IS NOT NULL)`),
     all(db, 'SELECT * FROM sent_mail'),
   ]);
+  // Per thread: the reply that decides its row, and any delivery failure (which outranks every reply).
   const byThread = new Map();
-  for (const e of replies) byThread.set(e.thread_id, laterReply(byThread.get(e.thread_id), { category: e.category, at: e.at, from: e.sender }));
+  const bounces = new Map();
+  for (const e of replies) {
+    const r = { category: e.category, at: e.at, from: e.sender, snippet: e.snippet };
+    if (e.category === 'bounce') bounces.set(e.thread_id, r);
+    byThread.set(e.thread_id, laterReply(byThread.get(e.thread_id), r));
+  }
   const rows = [
-    ...cp.map((o) => ({ ...o, by: 'careerpilot', reply: o.status === 'bounced' ? { category: 'bounce', at: null }
+    ...cp.map((o) => ({ ...o, by: 'careerpilot', reply: o.status === 'bounced' || bounces.has(o.thread_id) ? (bounces.get(o.thread_id) ?? { category: 'bounce', at: null })
       : byThread.get(o.thread_id) ?? (o.replied_at ? { category: 'recruiter_reply', at: o.replied_at } : null) })),
     ...mine.map((m) => ({ ...m, by: 'you', reply: m.reply_category ? { category: m.reply_category, at: m.reply_at, from: m.reply_from } : null })),
   ].sort((a, b) => String(b.sent_at).localeCompare(String(a.sent_at)));

@@ -68,6 +68,7 @@ export default async function Email({ searchParams }) {
                 {r.reply ? <>
                   <Badge value={tone}>{label}</Badge> {r.reply.at && <span className="text-ink-3">{fmtDateTime(r.reply.at)}</span>}
                   {r.reply.from && <div className="text-ink-3">{r.reply.from}</div>}
+                  {r.reply.snippet && <div className="mt-1 max-w-xs text-ink-2 line-clamp-3" title={r.reply.snippet}>{r.reply.snippet}</div>}
                 </> : <span className="text-ink-3">No reply yet</span>}
               </Td>
             </tr>

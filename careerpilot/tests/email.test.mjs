@@ -230,3 +230,10 @@ test('one Gmail sync at a time; Gmail’s push watch is renewed daily, and at on
   assert.equal(watched.length, 3);
   assert.ok((await kvGet(db, 'gmail:watch')).expiration && !(await kvGet(db, 'gmail:watch')).error);
 });
+
+test('delivery failures from mail filters are bounces; delay notices are not', () => {
+  assert.equal(c('Undelivered Mail Returned to Sender', "I'm sorry to have to inform you that your message could not be delivered", 'no-reply@tmes-in.trendmicro.com').category, 'bounce');
+  assert.equal(c('Undeliverable: Reaching Out Regarding Job Opportunities', 'Delivery has failed', 'postmaster@tcs.com').category, 'bounce');
+  assert.equal(c('Delivery Status Notification (Failure)', 'Address not found', 'mailer-daemon@googlemail.com').category, 'bounce');
+  assert.notEqual(c('Delivery Status Notification (Delay)', 'Delivery incomplete. Gmail will retry', 'mailer-daemon@googlemail.com').category, 'bounce');
+});
