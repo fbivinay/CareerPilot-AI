@@ -44,7 +44,10 @@ const SIGNALS = [
       /\b(have|has) not been (selected|shortlisted)\b/, /\bwill not be (proceeding|progressing|moving forward)\b/,
       /\b(unable|not able) to (move forward|proceed|offer you)\b/, /\bdecided not to (proceed|progress|move forward)\b/,
       /\bpursue other candidates\b/, /\bposition has (now )?been filled\b/, /\bnot (to )?progress(ing)? your application\b/,
-      /\b(won't|will not) be moving forward\b/, /\bno longer (being )?considered\b/],
+      /\b(won't|will not) be moving forward\b/, /\bno longer (being )?considered\b/,
+      // Answers to a cold email: nothing open for the candidate ("we do not have any open roles that align").
+      /\b(do not|don't|does not|doesn't)( currently)? have (any |an? )?(suitable |active |current |relevant |open |immediate )?(openings?|open roles?|open positions?|positions?|vacanc(y|ies)|opportunit(y|ies)|requirements?|roles?)\b(?! (for|in|on) (which|the following))/,
+      /\b(there are|we have|currently,? there are) no (suitable |active |current |relevant |immediate )?(openings|open roles|open positions|vacancies|positions|requirements|roles)\b/],
     weak: [/\bunfortunately\b/],
   }],
   ['interview', {
@@ -152,6 +155,8 @@ export function classifyEmail(msg, { ourThreadIds = new Set() } = {}) {
   // Weak hints only count from hiring senders or in our own threads; elsewhere "interview" is just a word.
   if (inOurThread || platformSender(fromAddr)) {
     for (const [category, { weak }] of SIGNALS) {
+      // A bare mention ("we will reach out for an interview if suitable") is not an interview, test or offer.
+      if (['interview', 'assessment', 'offer'].includes(category)) continue;
       if (parts.some((p) => weak.some((re) => hit(p, re)))) return { category, confidence: 0.6 };
     }
   }

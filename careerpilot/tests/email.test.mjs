@@ -237,3 +237,15 @@ test('delivery failures from mail filters are bounces; delay notices are not', (
   assert.equal(c('Delivery Status Notification (Failure)', 'Address not found', 'mailer-daemon@googlemail.com').category, 'bounce');
   assert.notEqual(c('Delivery Status Notification (Delay)', 'Delivery incomplete. Gmail will retry', 'mailer-daemon@googlemail.com').category, 'bounce');
 });
+
+test('replies to a cold email: "no openings" is a rejection, a canned mention of interviews is not an interview', () => {
+  const ours = { ourThreadIds: new Set(['t1']) };
+  for (const text of ['After reviewing your application and qualifications, we regret to inform you that we currently do not have a position that matches.',
+    'Currently, we do not have an opportunity that matches your profile.', 'While we do not have any open roles that align with your profile at this time, we will keep your resume.',
+    'However, we do not have any openings as on date.', 'Currently, we do not have any active openings.', 'Currently, there are no open roles available.']) {
+    assert.equal(c('Re: Reaching Out Regarding Job Opportunities', text, 'hr@acme.in', ours).category, 'rejection', text);
+  }
+  assert.equal(c('Re: Reaching Out', 'We receive a large number of profiles. If shortlisted, our team will contact you for an interview.', 'careers@moolya.com', ours).category, 'recruiter_reply');
+  assert.equal(c('Re: Reaching Out', 'Please share the following details so we can process your application further: notice period, interview availability.', 'careers@x.com', ours).category, 'recruiter_reply');
+  assert.equal(c('Re: Reaching Out', 'Thank you for your interest. Please apply on our careers portal for the roles we have open.', 'hr@acme.in', ours).category, 'recruiter_reply');
+});
