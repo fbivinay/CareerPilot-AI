@@ -1,21 +1,5 @@
 version: 2
-updates:
-  # Dependabot does not recurse into nested manifests, so every tracked
-  # package.json is listed (#4899).
-  - package-ecosystem: "npm"
-    directories: ["/", "/web", "/scaffolder"]
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 5
-
-  - package-ecosystem: "gomod"
-    directory: "/dashboard"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 3
-
-  - package-ecosystem: "github-actions"
-    directory: "/"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 3
+# Emptied on purpose: the career-ops update (v1.40.0) shipped the upstream project's Dependabot config,
+# which opened PRs for upstream's web/, dashboard/ and Actions dependencies and set off upstream's PR
+# workflows on this repo. A locally changed file is kept by update-system.mjs, so this stays empty.
+updates: []
