@@ -179,7 +179,8 @@ export async function openDb({ url, authToken } = {}) {
 }
 
 export async function getDb() {
-  shared ??= openDb();
+  // A failed open is not kept: a warm instance would otherwise repeat the old error after the database recovers.
+  shared ??= openDb().catch((err) => { shared = undefined; throw err; });
   return shared;
 }
 
