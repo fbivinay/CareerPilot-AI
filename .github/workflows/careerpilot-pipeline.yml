@@ -41,7 +41,7 @@ jobs:
           gh workflow run careerpilot-tick.yml --repo "$GITHUB_REPOSITORY" -f backstop=true || failed=1
           exit "${failed:-0}"
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
       - name: Restore dependencies
