@@ -241,20 +241,21 @@ export async function unconfirmed() {
 
 export async function overview() {
   const db = await getDb();
-  const appIn = async (set) => count(db, `SELECT count(*) n FROM applications a JOIN jobs j ON j.id = a.job_id
-    WHERE a.status IN (${placeholders(set)}) AND ${SHOWN_APP}`, set);
-  const [discovered, live, qualified, qualifiedHigh, ready, blocked, failed, applied, acknowledged, assessment, interview, offer, rejected,
-    review, unknownSends] = await Promise.all([
-    count(db, `SELECT count(*) n FROM jobs j WHERE j.status != 'duplicate' AND ${SHOWN_JOB}`),
-    count(db, `SELECT count(*) n FROM jobs j WHERE j.status IN ('qualified','excluded','new') AND ${SHOWN_JOB}`),
-    count(db, `SELECT count(*) n FROM jobs j WHERE ${QUALIFIED_JOB} AND ${SHOWN_JOB}`),
-    count(db, `SELECT count(*) n FROM jobs j WHERE ${QUALIFIED_JOB} AND j.confidence = 'high' AND ${SHOWN_JOB}`),
-    appIn(['ready']), appIn(['blocked']), appIn(['failed']), appIn(APPLIED), appIn(ACKNOWLEDGED), appIn(['assessment']),
-    appIn(['interview']), appIn(['offer']), appIn(['rejected']),
+  // One pass over jobs and one over applications, not one query per number: Turso bills every row each query
+  // reads (free plan: 500M a month).
+  const [jobs, byStatus, review, unknownSends] = await Promise.all([
+    one(db, `SELECT total(status != 'duplicate') discovered, total(status IN ('qualified','excluded','new')) live,
+        total(q) qualified, total(q AND confidence = 'high') qualifiedHigh
+      FROM (SELECT j.status, j.confidence, ${QUALIFIED_JOB} q FROM jobs j WHERE ${SHOWN_JOB})`),
+    all(db, `SELECT a.status, count(*) n FROM applications a JOIN jobs j ON j.id = a.job_id WHERE ${SHOWN_APP} GROUP BY a.status`),
     count(db, `SELECT count(*) n FROM emails e WHERE e.needs_review = 1 AND e.reviewed = 0 AND ${SHOWN_EMAIL}`),
     count(db, `SELECT count(*) n FROM outreach WHERE status = 'unknown'`),
   ]);
-  return { discovered, live, qualified, qualifiedHigh, ready, blocked, failed, applied, acknowledged, assessment, interview, offer, rejected,
+  const [discovered, live, qualified, qualifiedHigh] = ['discovered', 'live', 'qualified', 'qualifiedHigh'].map((k) => Number(jobs[k]));
+  const appIn = (set) => byStatus.reduce((n, r) => n + (set.includes(r.status) ? Number(r.n) : 0), 0);
+  const [ready, blocked, failed] = [appIn(['ready']), appIn(['blocked']), appIn(['failed'])];
+  return { discovered, live, qualified, qualifiedHigh, ready, blocked, failed, applied: appIn(APPLIED), acknowledged: appIn(ACKNOWLEDGED),
+    assessment: appIn(['assessment']), interview: appIn(['interview']), offer: appIn(['offer']), rejected: appIn(['rejected']),
     review, unknownSends, pending: ready + blocked + failed + review + unknownSends };
 }
 
