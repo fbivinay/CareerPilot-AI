@@ -220,7 +220,7 @@ export function parseAddresses(raw) {
 // The candidate's own email (outreach:template, with the resume) to addresses they paste on the Email page:
 // one Gmail message per address, so no recipient ever sees another. An address already emailed (by CareerPilot
 // or from the candidate's Gmail), or one that bounced, is skipped.
-export async function sendBulk(db, gmail, raw, env = process.env) {
+export async function sendBulk(db, gmail, raw, env = process.env, onResult = async () => {}) {
   const addresses = parseAddresses(raw);
   if (!addresses.length) return { error: 'No email addresses found.' };
   if (addresses.length > MAX_BULK) return { error: `${addresses.length} addresses: send at most ${MAX_BULK} at a time.` };
@@ -229,6 +229,7 @@ export async function sendBulk(db, gmail, raw, env = process.env) {
   const resume = await loadResumePdf(db, env);
   if (!template?.subject || !template?.text || !profile || !resume) return { error: 'The email template, profile or resume is missing.' };
   const results = [];
+  const add = async (x) => { results.push(x); await onResult(x); };
   const cap = Number(env.BULK_DAILY_CAP ?? DAILY_CAP);
   for (const email of addresses) {
     // Gmail stops all sending (applications too) for about a day past ~500 in 24 hours: stop short of it, and
@@ -237,14 +238,14 @@ export async function sendBulk(db, gmail, raw, env = process.env) {
     const recent = Number((await one(db, `SELECT count(*) n FROM outreach WHERE status IN ('sent', 'bounced', 'sending', 'unknown') AND created_at >= ?`, [day])).n);
     if (recent >= cap) return { results, paused: `${recent} emails sent in the last 24 hours (limit ${cap}, to stay under Gmail's ~500).` };
     const contact = await upsertContact(db, { email, sourceType: 'manual', domainMatch: true });
-    if (contact.opted_out) { results.push({ email, ok: false, error: 'bounced before or opted out' }); continue; }
+    if (contact.opted_out) { await add({ email, ok: false, error: 'bounced before or opted out' }); continue; }
     // Never a second email: not after any CareerPilot email to this address (this box, outreach, applications),
     // nor after one the candidate sent from Gmail themselves.
     if (await one(db, `SELECT 1 FROM outreach WHERE contact_id = ? AND status IN ('sent', 'sending', 'unknown', 'bounced')`, [contact.id])) {
-      results.push({ email, ok: false, error: 'already sent' });
+      await add({ email, ok: false, error: 'already sent' });
       continue;
     }
-    if ((await gmail.listIds(`in:sent to:${email}`, 1)).length) { results.push({ email, ok: false, error: 'already emailed from your Gmail' }); continue; }
+    if ((await gmail.listIds(`in:sent to:${email}`, 1)).length) { await add({ email, ok: false, error: 'already emailed from your Gmail' }); continue; }
     const r = await send(db, gmail, { contact, job: null, kind: 'direct', subject: template.subject, body: template.text, html: template.html ?? null,
       attach: true, composer: 'template:candidate' }, profile, resume);
     if (!r.ok && RATE_LIMITED.test(r.error ?? '')) {
@@ -252,7 +253,7 @@ export async function sendBulk(db, gmail, raw, env = process.env) {
       const when = until && new Date(until).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' });
       return { results, paused: `Gmail's daily sending limit was reached${when ? `; Gmail allows more after ${when}` : ''}.` };
     }
-    results.push({ email, ok: r.ok, error: r.error });
+    await add({ email, ok: r.ok, error: r.error });
   }
   return { results };
 }
@@ -273,16 +274,25 @@ export async function queueBulk(db, raw) {
 // concurrency group keeps runs one at a time.
 export async function sendQueued(db, gmail, env = process.env) {
   const done = [];
-  for (let batch; (batch = (await kvGet(db, 'bulk:queue', [])).slice(0, MAX_BULK)).length;) {
-    const res = await sendBulk(db, gmail, batch.join(' '), env);
+  const startedAt = now();
+  const total = (await kvGet(db, 'bulk:queue', [])).length;
+  // bulk:last is the Email page's live progress: each address leaves the queue and joins the results as soon as
+  // it is tried, so a run cut off mid-batch neither re-tries nor loses one.
+  const progress = (extra) => kvSet(db, 'bulk:last', { at: now(), startedAt, total: Math.max(total, done.length), results: done, ...extra });
+  const onResult = async (r) => {
+    done.push(r);
+    await kvSet(db, 'bulk:queue', (await kvGet(db, 'bulk:queue', [])).filter((a) => a !== r.email));
+    await progress({ running: true });
+  };
+  if (!total) return { sent: 0, skipped: 0 };
+  await progress({ running: true });
+  let paused = null;
+  for (let batch; !paused && (batch = (await kvGet(db, 'bulk:queue', [])).slice(0, MAX_BULK)).length;) {
+    const res = await sendBulk(db, gmail, batch.join(' '), env, onResult);
     if (res.error) { await kvSet(db, 'bulk:last', { at: now(), error: res.error }); return res; }
-    // Only the addresses tried leave the queue; a pause keeps the rest for the next run.
-    const tried = new Set(res.results.map((r) => r.email));
-    await kvSet(db, 'bulk:queue', (await kvGet(db, 'bulk:queue', [])).filter((a) => !tried.has(a)));
-    done.push(...res.results);
-    await kvSet(db, 'bulk:last', { at: now(), results: done, ...(res.paused ? { paused: res.paused } : {}) });
-    if (res.paused) break;
+    paused = res.paused ?? null;
   }
+  await progress(paused ? { paused } : {});
   return { sent: done.filter((r) => r.ok).length, skipped: done.filter((r) => !r.ok).length };
 }
 

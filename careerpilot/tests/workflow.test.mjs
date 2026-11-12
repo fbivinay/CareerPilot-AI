@@ -562,3 +562,24 @@ test('the bulk stage pauses at Gmail\'s sending limit or the daily cap and keeps
   assert.deepEqual(await kvGet(db, 'bulk:queue'), ['c@d.co', 'e@f.co']);
   assert.match((await kvGet(db, 'bulk:last')).paused, /last 24 hours/);
 });
+
+test('the bulk stage reports progress after every address and ends not running', async () => {
+  const { kvGet, kvSet } = await import('../lib/db.mjs');
+  const db = await openDb({ url: ':memory:' });
+  const seen = [];
+  const gmail = { listIds: async () => [], send: async () => {
+    const p = await kvGet(db, 'bulk:last');
+    seen.push([p.running, p.results.length, p.total, (await kvGet(db, 'bulk:queue')).length]);
+    return { id: `g${seen.length}`, threadId: `t${seen.length}` };
+  } };
+  await kvSet(db, 'outreach:template', { subject: 'S', text: 'Hello' });
+  const env = { APP_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString('base64') };
+  await vaultPut(db, 'profile', JSON.stringify(profile), env);
+  await vaultPut(db, 'resume.pdf', Buffer.from('%PDF-1.7 test'), env);
+  await queueBulk(db, 'a@b.co c@d.co e@f.co');
+  await sendQueued(db, gmail, env);
+  assert.deepEqual(seen, [[true, 0, 3, 3], [true, 1, 3, 2], [true, 2, 3, 1]]);
+  const last = await kvGet(db, 'bulk:last');
+  assert.equal(last.running, undefined);
+  assert.equal(last.results.length, 3);
+});
