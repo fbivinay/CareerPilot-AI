@@ -70,7 +70,7 @@ export default async function Overview() {
       <div className="grid gap-6 lg:grid-cols-2">
         <Card title="Automation runs">
           <KV items={[
-            ['Last run', s.last ? `${fmtDateTime(s.last.at)}${s.last.failed ? ' (with errors)' : ''}` : 'Never'],
+            ['Last run', s.last ? `${fmtDateTime(s.last.at)}${s.last.failed ? ' (with errors)' : ''}${s.last.paused ? ` · ${s.last.paused}` : ''}` : 'Never'],
             ...Object.entries(s.runs).map(([name, r]) => {
               const skipped = typeof r?.result?.skipped === 'string' ? r.result.skipped : null; // a stage's reason for not running
               return [name, r ? <span key={name}><Badge value={!r.ok ? 'failed' : skipped ? 'blocked' : 'qualified'}>{!r.ok ? 'failed' : skipped ? 'skipped' : 'ok'}</Badge> <span className="text-ink-3">{fmtDateTime(r.at)}</span>{skipped && <span className="text-ink-3"> · {skipped}</span>}{r.error && <span className="text-bad"> · {r.error}</span>}</span> : 'not run yet'];

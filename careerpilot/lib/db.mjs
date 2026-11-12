@@ -186,6 +186,25 @@ export async function getDb() {
 
 export const now = () => new Date().toISOString();
 
+// Turso's free plan blocks every read once a month's reads pass 500M (it took the site down on 2026-11-12).
+// Automation stops at 80% of that, leaving the rest to the dashboard; it starts again when Turso's month
+// resets. Checked through Turso's platform API (TURSO_API_TOKEN), which costs no database reads.
+export const READ_LIMIT = 500e6;
+export const READ_STOP = 0.8;
+export async function readBudgetPause(env = process.env, fetchImpl = fetch) {
+  if (!env.TURSO_API_TOKEN) return null;
+  const api = async (p) => {
+    const res = await fetchImpl(`https://api.turso.tech/v1/organizations${p}`, { headers: { Authorization: `Bearer ${env.TURSO_API_TOKEN}` } });
+    if (!res.ok) throw new Error(`Turso API ${res.status}`);
+    return res.json();
+  };
+  const [org] = await api('');
+  const used = Number((await api(`/${org.slug}/usage`)).organization.usage.rows_read);
+  return used >= READ_LIMIT * READ_STOP
+    ? `Paused: database reads at ${Math.round(used / 1e6)}M of the free ${READ_LIMIT / 1e6}M this month. Resumes when Turso's month resets.`
+    : null;
+}
+
 // A read retries once on a passing server error (Turso answered 502 to the dashboard for a minute on
 // 2026-10-19); a write never does, since it may already have gone through.
 const transient = (err) => [502, 503, 504].includes(err?.cause?.status);

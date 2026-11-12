@@ -38,6 +38,7 @@ jobs:
     env:
       TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
       TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+      TURSO_API_TOKEN: ${{ secrets.TURSO_API_TOKEN }} # read-limit guard (lib/db.mjs readBudgetPause)
       APP_ENCRYPTION_KEY: ${{ secrets.APP_ENCRYPTION_KEY }}
       RETRY: ${{ inputs.retry && '--retry' || '' }}
     steps:

@@ -5,7 +5,7 @@
 // the remaining stages still run. Work that cannot be done now (quota, auth) stays queued.
 import { existsSync } from 'node:fs';
 import path from 'node:path';
-import { getDb, kvGet, kvSet, now } from '../lib/db.mjs';
+import { getDb, kvGet, kvSet, now, readBudgetPause } from '../lib/db.mjs';
 import { getSettings } from '../lib/settings.mjs';
 import { scanBoards, seedCuratedBoards, sweepAggregator } from '../lib/discover.mjs';
 import { describeMissing, reevaluateAll } from '../lib/jobs.mjs';
@@ -60,7 +60,14 @@ const STAGES = {
 async function main() {
   const which = process.argv[2] ?? 'all';
   const names = which === 'all' ? Object.keys(STAGES) : which.split(',');
+  // An unreachable Turso API never stops a run; only a measured near-limit month does.
+  const paused = await readBudgetPause().catch((err) => { log.warn('read budget check failed', { error: err.message }); return null; });
   const db = await getDb();
+  if (paused) {
+    log.warn(paused);
+    await kvSet(db, 'run:last', { at: now(), stages: names, failed: false, paused });
+    return;
+  }
   const settings = await getSettings(db);
   gmailStatus = await connectionStatus(db);
   gmail = gmailStatus.canRead ? await gmailClient(db) : null;

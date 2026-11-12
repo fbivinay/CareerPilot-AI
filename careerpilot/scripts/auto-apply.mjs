@@ -14,7 +14,7 @@
 import { existsSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { chromium } from 'playwright';
-import { getDb, kvSet, now } from '../lib/db.mjs';
+import { getDb, kvSet, now, readBudgetPause } from '../lib/db.mjs';
 import { getSettings } from '../lib/settings.mjs';
 import { connectionStatus, gmailClient } from '../lib/gmail-oauth.mjs';
 import { answersKeyOf, autoApply, dailyBudget, queue } from '../lib/apply/runner.mjs';
@@ -30,6 +30,13 @@ const shots = arg('--shots');
 if (shots) mkdirSync(shots, { recursive: true });
 const deadline = Date.now() + Number(process.env.RUN_BUDGET_MINUTES ?? 30) * 60_000;
 
+// Near Turso's free read limit, apply nothing (--pending prints 0, so the workflow skips the browser).
+const paused = await readBudgetPause().catch((err) => { log.warn('read budget check failed', { error: err.message }); return null; });
+if (paused) {
+  log.warn(paused);
+  console.log(0);
+  process.exit(0);
+}
 const db = await getDb();
 const settings = await getSettings(db);
 // --pending: only print how many applications a run would attempt (no browser), so the scheduled workflow
