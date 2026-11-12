@@ -17,7 +17,12 @@ export function BulkSend({ subject, pending, last }) {
   const waiting = !running && !last?.paused && (pending > 0 || !!state?.queued);
   useEffect(() => {
     if (!running && !waiting) return;
-    const t = setInterval(() => router.refresh(), 3000);
+    // Every refresh re-reads the database: skip it in a hidden tab, and give up waiting on a run that never started.
+    const since = Date.now();
+    const t = setInterval(() => {
+      if (waiting && Date.now() - since > STALE_MS) return clearInterval(t);
+      if (!document.hidden) router.refresh();
+    }, 3000);
     return () => clearInterval(t);
   }, [running, waiting, router]);
 
