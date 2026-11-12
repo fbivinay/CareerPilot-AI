@@ -137,7 +137,7 @@ export async function sendBlockedAlert(db, gmail, { to, env = process.env } = {}
   return { sent: fresh.length };
 }
 
-export async function sendDigest(db, gmail, settings, { to, env = process.env } = {}) {
+export async function sendDigest(db, gmail, settings, { to, env = process.env, reads = null } = {}) {
   const today = now().slice(0, 10);
   if ((await kvGet(db, 'digest:last')) === today) return { skipped: 'already sent today' };
   if (!to) return { skipped: 'connected mailbox unknown' };
@@ -153,6 +153,8 @@ export async function sendDigest(db, gmail, settings, { to, env = process.env } 
   if (upcoming.length) lines.push('Interviews / assessments (last 7 days):', ...upcoming.map((u) => `- ${u.subject} ${(JSON.parse(u.extracted ?? '{}').dates ?? []).join(', ')}`), '');
   if (review.length) lines.push('Emails needing your review:', ...review.map((r) => `- [${r.category}] ${r.subject}`), '');
   if (ready.length) lines.push('Applications waiting for you:', ...ready.map((r) => `- ${r.title} at ${r.company} (${r.status}): ${r.url}`), '');
+  // Turso's free plan blocks every read past 500M a month; automation pauses itself at 400M (db.mjs).
+  if (reads != null) lines.push(`Database reads this month: ${(reads / 1e6).toFixed(1)}M of the free 500M.`, '');
   lines.push('Open the dashboard for details.');
   if (env.CAREERPILOT_DRY_RUN === '1') return { dryRun: true, wouldSend: lines.length, ready: ready.length, review: review.length };
   await gmail.send({ to, subject: `CareerPilot: ${ready.length} applications, ${review.length} emails need you`, text: lines.join('\n') });

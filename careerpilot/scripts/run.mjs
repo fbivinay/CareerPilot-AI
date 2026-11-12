@@ -5,7 +5,7 @@
 // the remaining stages still run. Work that cannot be done now (quota, auth) stays queued.
 import { existsSync } from 'node:fs';
 import path from 'node:path';
-import { getDb, kvGet, kvSet, now, readBudgetPause } from '../lib/db.mjs';
+import { getDb, kvGet, kvSet, now, readBudgetPause, tursoReadsUsed } from '../lib/db.mjs';
 import { getSettings } from '../lib/settings.mjs';
 import { scanBoards, seedCuratedBoards, sweepAggregator } from '../lib/discover.mjs';
 import { describeMissing, reevaluateAll } from '../lib/jobs.mjs';
@@ -54,7 +54,7 @@ const STAGES = {
   outreach: needsSending((db, settings) => runOutreach(db, gmail, settings, { deadline: deadline - 60_000 })),
   // Blocked applications are emailed on every run; the digest goes once a day.
   digest: needsSending(async (db, settings) => ({ blocked: await sendBlockedAlert(db, gmail, { to: gmailStatus.email }),
-    digest: await sendDigest(db, gmail, settings, { to: gmailStatus.email }) })),
+    digest: await sendDigest(db, gmail, settings, { to: gmailStatus.email, reads: await tursoReadsUsed().catch(() => null) }) })),
 };
 
 async function main() {

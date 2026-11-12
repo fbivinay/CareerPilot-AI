@@ -191,7 +191,7 @@ export const now = () => new Date().toISOString();
 // resets. Checked through Turso's platform API (TURSO_API_TOKEN), which costs no database reads.
 export const READ_LIMIT = 500e6;
 export const READ_STOP = 0.8;
-export async function readBudgetPause(env = process.env, fetchImpl = fetch) {
+export async function tursoReadsUsed(env = process.env, fetchImpl = fetch) {
   if (!env.TURSO_API_TOKEN) return null;
   const api = async (p) => {
     const res = await fetchImpl(`https://api.turso.tech/v1/organizations${p}`, { headers: { Authorization: `Bearer ${env.TURSO_API_TOKEN}` } });
@@ -199,8 +199,11 @@ export async function readBudgetPause(env = process.env, fetchImpl = fetch) {
     return res.json();
   };
   const [org] = await api('');
-  const used = Number((await api(`/${org.slug}/usage`)).organization.usage.rows_read);
-  return used >= READ_LIMIT * READ_STOP
+  return Number((await api(`/${org.slug}/usage`)).organization.usage.rows_read);
+}
+export async function readBudgetPause(env = process.env, fetchImpl = fetch) {
+  const used = await tursoReadsUsed(env, fetchImpl);
+  return used != null && used >= READ_LIMIT * READ_STOP
     ? `Paused: database reads at ${Math.round(used / 1e6)}M of the free ${READ_LIMIT / 1e6}M this month. Resumes when Turso's month resets.`
     : null;
 }
