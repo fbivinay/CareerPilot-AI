@@ -23,7 +23,9 @@ export function BulkSend({ subject, pending, last }) {
           {state.queued} queued. {state.started ? 'Sending now; refresh in about a minute to see each result.' : 'They go out with the next pipeline run (within 30 minutes).'}
         </p>
       )}
-      {pending > 0 && !state?.queued && <p className="text-sm text-ink-2">{pending} waiting to be sent. Refresh in a minute.</p>}
+      {pending > 0 && !state?.queued && (last?.paused
+        ? <p className="text-sm text-bad">{pending} waiting, paused: {last.paused} They go out automatically with the next runs once Gmail allows.</p>
+        : <p className="text-sm text-ink-2">{pending} waiting to be sent. Refresh in a minute.</p>)}
       {last?.error && <p className="text-sm text-bad">Last batch ({fmt(last.at)}): {last.error}</p>}
       {last?.results && (
         <details className="text-sm">

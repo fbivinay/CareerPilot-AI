@@ -210,6 +210,8 @@ export async function recordBounce(db, { threadId, emailId }) {
 }
 
 // Addresses pasted on the Email page, in any form (one per line, commas, "Name <a@b.com>"), deduplicated.
+const DAILY_CAP = 450;
+const RATE_LIMITED = /Gmail API (429|403)\b[\s\S]*(rate ?limit|quota exceeded)/i;
 export const MAX_BULK = 50; // Gmail send quota is ~54 a minute; a batch must finish inside one request
 export function parseAddresses(raw) {
   return [...new Set((String(raw ?? '').match(/[^\s@<>,;:"'()[\]]+@[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}/gi) ?? []).map((a) => a.toLowerCase()))];
@@ -227,7 +229,13 @@ export async function sendBulk(db, gmail, raw, env = process.env) {
   const resume = await loadResumePdf(db, env);
   if (!template?.subject || !template?.text || !profile || !resume) return { error: 'The email template, profile or resume is missing.' };
   const results = [];
+  const cap = Number(env.BULK_DAILY_CAP ?? DAILY_CAP);
   for (const email of addresses) {
+    // Gmail stops all sending (applications too) for about a day past ~500 in 24 hours: stop short of it, and
+    // stop at Gmail's own limit, leaving the rest queued for later.
+    const day = new Date(Date.now() - 24 * 3600_000).toISOString();
+    const recent = Number((await one(db, `SELECT count(*) n FROM outreach WHERE status IN ('sent', 'bounced', 'sending', 'unknown') AND created_at >= ?`, [day])).n);
+    if (recent >= cap) return { results, paused: `${recent} emails sent in the last 24 hours (limit ${cap}, to stay under Gmail's ~500).` };
     const contact = await upsertContact(db, { email, sourceType: 'manual', domainMatch: true });
     if (contact.opted_out) { results.push({ email, ok: false, error: 'bounced before or opted out' }); continue; }
     // Never a second email: not after any CareerPilot email to this address (this box, outreach, applications),
@@ -239,6 +247,11 @@ export async function sendBulk(db, gmail, raw, env = process.env) {
     if ((await gmail.listIds(`in:sent to:${email}`, 1)).length) { results.push({ email, ok: false, error: 'already emailed from your Gmail' }); continue; }
     const r = await send(db, gmail, { contact, job: null, kind: 'direct', subject: template.subject, body: template.text, html: template.html ?? null,
       attach: true, composer: 'template:candidate' }, profile, resume);
+    if (!r.ok && RATE_LIMITED.test(r.error ?? '')) {
+      const until = /Retry after (\S+?Z)/.exec(r.error)?.[1];
+      const when = until && new Date(until).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' });
+      return { results, paused: `Gmail's daily sending limit was reached${when ? `; Gmail allows more after ${when}` : ''}.` };
+    }
     results.push({ email, ok: r.ok, error: r.error });
   }
   return { results };
@@ -263,9 +276,12 @@ export async function sendQueued(db, gmail, env = process.env) {
   for (let batch; (batch = (await kvGet(db, 'bulk:queue', [])).slice(0, MAX_BULK)).length;) {
     const res = await sendBulk(db, gmail, batch.join(' '), env);
     if (res.error) { await kvSet(db, 'bulk:last', { at: now(), error: res.error }); return res; }
-    await kvSet(db, 'bulk:queue', (await kvGet(db, 'bulk:queue', [])).filter((a) => !batch.includes(a)));
+    // Only the addresses tried leave the queue; a pause keeps the rest for the next run.
+    const tried = new Set(res.results.map((r) => r.email));
+    await kvSet(db, 'bulk:queue', (await kvGet(db, 'bulk:queue', [])).filter((a) => !tried.has(a)));
     done.push(...res.results);
-    await kvSet(db, 'bulk:last', { at: now(), results: done });
+    await kvSet(db, 'bulk:last', { at: now(), results: done, ...(res.paused ? { paused: res.paused } : {}) });
+    if (res.paused) break;
   }
   return { sent: done.filter((r) => r.ok).length, skipped: done.filter((r) => !r.ok).length };
 }

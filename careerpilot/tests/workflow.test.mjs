@@ -539,3 +539,26 @@ test('addresses queued on the dashboard are all sent by the bulk stage, then the
   assert.deepEqual(await kvGet(db, 'bulk:queue'), []);
   assert.equal((await kvGet(db, 'bulk:last')).results.length, 3);
 });
+
+test('the bulk stage pauses at Gmail\'s sending limit or the daily cap and keeps the rest queued', async () => {
+  const { kvGet, kvSet } = await import('../lib/db.mjs');
+  const db = await openDb({ url: ':memory:' });
+  let calls = 0;
+  const gmail = { listIds: async () => [], send: async () => {
+    if (++calls > 1) throw new Error('Gmail API 429: { "error": { "code": 429, "message": "User-rate limit exceeded.  Retry after 2026-11-12T05:12:08.264Z (Mail sending)" } }');
+    return { id: 'g1', threadId: 't1' };
+  } };
+  await kvSet(db, 'outreach:template', { subject: 'S', text: 'Hello' });
+  const env = { APP_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString('base64') };
+  await vaultPut(db, 'profile', JSON.stringify(profile), env);
+  await vaultPut(db, 'resume.pdf', Buffer.from('%PDF-1.7 test'), env);
+  await queueBulk(db, 'a@b.co c@d.co e@f.co');
+  assert.deepEqual(await sendQueued(db, gmail, env), { sent: 1, skipped: 0 });
+  assert.deepEqual(await kvGet(db, 'bulk:queue'), ['c@d.co', 'e@f.co']); // the limited one and the rest stay
+  assert.match((await kvGet(db, 'bulk:last')).paused, /daily sending limit/);
+  // At the cap, nothing is even tried.
+  calls = -100;
+  assert.deepEqual(await sendQueued(db, gmail, { ...env, BULK_DAILY_CAP: '1' }), { sent: 0, skipped: 0 });
+  assert.deepEqual(await kvGet(db, 'bulk:queue'), ['c@d.co', 'e@f.co']);
+  assert.match((await kvGet(db, 'bulk:last')).paused, /last 24 hours/);
+});
