@@ -213,6 +213,7 @@ export async function recordBounce(db, { threadId, emailId }) {
 const DAILY_CAP = 450;
 const RATE_LIMITED = /Gmail API (429|403)\b[\s\S]*(rate ?limit|quota exceeded)/i;
 export const MAX_BULK = 50; // Gmail send quota is ~54 a minute; a batch must finish inside one request
+const istTime = (d) => d.toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' });
 export function parseAddresses(raw) {
   return [...new Set((String(raw ?? '').match(/[^\s@<>,;:"'()[\]]+@[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}/gi) ?? []).map((a) => a.toLowerCase()))];
 }
@@ -235,8 +236,14 @@ export async function sendBulk(db, gmail, raw, env = process.env, onResult = asy
     // Gmail stops all sending (applications too) for about a day past ~500 in 24 hours: stop short of it, and
     // stop at Gmail's own limit, leaving the rest queued for later.
     const day = new Date(Date.now() - 24 * 3600_000).toISOString();
-    const recent = Number((await one(db, `SELECT count(*) n FROM outreach WHERE status IN ('sent', 'bounced', 'sending', 'unknown') AND created_at >= ?`, [day])).n);
-    if (recent >= cap) return { results, paused: `${recent} emails sent in the last 24 hours (limit ${cap}, to stay under Gmail's ~500).` };
+    const SENT_SINCE = `FROM outreach WHERE status IN ('sent', 'bounced', 'sending', 'unknown') AND created_at >= ?`;
+    const recent = Number((await one(db, `SELECT count(*) n ${SENT_SINCE}`, [day])).n);
+    if (recent >= cap) {
+      // Sending resumes when the email that takes the count back under the cap leaves the 24-hour window.
+      const edge = await one(db, `SELECT created_at ${SENT_SINCE} ORDER BY created_at LIMIT 1 OFFSET ?`, [day, recent - cap]);
+      const when = edge && istTime(new Date(Date.parse(edge.created_at) + 24 * 3600_000));
+      return { results, paused: `${recent} emails sent in the last 24 hours (limit ${cap}, to stay under Gmail's ~500)${when ? `; sending resumes around ${when}` : ''}.` };
+    }
     const contact = await upsertContact(db, { email, sourceType: 'manual', domainMatch: true });
     if (contact.opted_out) { await add({ email, ok: false, error: 'bounced before or opted out' }); continue; }
     // Never a second email: not after any CareerPilot email to this address (this box, outreach, applications),
@@ -250,7 +257,7 @@ export async function sendBulk(db, gmail, raw, env = process.env, onResult = asy
       attach: true, composer: 'template:candidate' }, profile, resume);
     if (!r.ok && RATE_LIMITED.test(r.error ?? '')) {
       const until = /Retry after (\S+?Z)/.exec(r.error)?.[1];
-      const when = until && new Date(until).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' });
+      const when = until && istTime(new Date(until));
       return { results, paused: `Gmail's daily sending limit was reached${when ? `; Gmail allows more after ${when}` : ''}.` };
     }
     await add({ email, ok: r.ok, error: r.error });

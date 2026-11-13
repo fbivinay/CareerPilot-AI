@@ -560,7 +560,7 @@ test('the bulk stage pauses at Gmail\'s sending limit or the daily cap and keeps
   calls = -100;
   assert.deepEqual(await sendQueued(db, gmail, { ...env, BULK_DAILY_CAP: '1' }), { sent: 0, skipped: 0 });
   assert.deepEqual(await kvGet(db, 'bulk:queue'), ['c@d.co', 'e@f.co']);
-  assert.match((await kvGet(db, 'bulk:last')).paused, /last 24 hours/);
+  assert.match((await kvGet(db, 'bulk:last')).paused, /last 24 hours.*; sending resumes around \d/);
 });
 
 test('the bulk stage reports progress after every address and ends not running', async () => {
