@@ -78,7 +78,9 @@ export function BulkSend({ subject, pending, last }) {
 
 // Estimated finish of everything queued, from the 24-hour limit, the send log and this run's speed.
 function Eta({ last, remaining }) {
-  const cap = last?.cap ?? DAILY_CAP;
+  // Without the send log (a run from before the estimate existed) it would ignore the 24-hour cap: show nothing.
+  if (!last?.sentTimes) return null;
+  const cap = last.cap ?? DAILY_CAP;
   const at = bulkEta({ sentTimes: last?.sentTimes, remaining, cap, paceMs: observedPace(last) });
   if (!at) return null;
   return (
