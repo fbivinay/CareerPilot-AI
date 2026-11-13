@@ -222,6 +222,97 @@ export function applicationDetails(msg) {
   };
 }
 
+// ---- Assessments (the Email page's Assessments list) ----
+// Gmail's full-text search over the whole mailbox finds candidates (ASSESSMENT_QUERY); assessmentOf reads each
+// one in full and decides. Checked against the candidate's real mail (SHL, Adaface, emailed test papers, test
+// invitations by the employer itself) and the noise around it (newsletters, practice-test promos, auto-replies).
+// Platforms, by the domain names they send from and host tests on (matched as whole domain labels).
+const VENDORS = [['SHL', 'shl'], ['HackerRank', 'hackerrank|hackerrankforwork'], ['Codility', 'codility'], ['HackerEarth', 'hackerearth'],
+  ['Mercer Mettl', 'mettl|mercer-mettl'], ['TestGorilla', 'testgorilla'], ['iMocha', 'imocha|interviewmocha'], ['CodeSignal', 'codesignal'],
+  ['AMCAT', 'amcat|aspiringminds|myamcat'], ['HirePro', 'hirepro'], ['Talview', 'talview'], ['Xobin', 'xobin'], ['DoSelect', 'doselect'],
+  ['Coderbyte', 'coderbyte'], ['Adaface', 'adaface'], ['Testlify', 'testlify'], ['Vervoe', 'vervoe'], ['Harver', 'harver'],
+  ['Pymetrics', 'pymetrics'], ['HireVue', 'hirevue'], ['Criteria', 'criteriacorp'], ['Cappfinity', 'cappfinity'], ['Wonderlic', 'wonderlic'],
+  ['DevSkiller', 'devskiller'], ['CodinGame', 'codingame'], ['Karat', 'karat'], ['CoderPad', 'coderpad'], ['Glider', 'glider'],
+  ['eLitmus', 'elitmus'], ['TestDome', 'testdome'], ['InterviewBit', 'interviewbit'], ['Superset', 'joinsuperset']].map(([n, k]) => [n, k.split('|')]);
+const vendorOf = (domains) => {
+  for (const d of domains) {
+    const labels = d.toLowerCase().split('.');
+    const v = VENDORS.find(([, keys]) => keys.some((k) => labels.includes(k)));
+    if (v) return v[0];
+  }
+  return null;
+};
+// Gmail search terms (OR'd). Platform names are words Gmail indexes in the sender, the text and the links.
+export const ASSESSMENT_QUERY = `{assessment assessments "online test" "coding test" "coding round" "coding challenge" "aptitude test" "aptitude round"
+  "technical test" "written test" "screening test" "skill test" "skills test" "online exam" "take-home" "take home" assignment "case study"
+  "test link" "test invitation" proctored psychometric quiz subject:test subject:tests subject:exam ${VENDORS.flatMap(([, keys]) => keys).join(' ')}}`.replace(/\s+/g, ' ');
+
+// Phrases that only ever mean a hiring test, and broader ones that do only in mail about hiring.
+const ASSESS_SPECIFIC = [
+  /\binvites? you to (complete|take|attempt) (one or more |an? |the |your )?(online )?(assessments?|tests?)\b/,
+  /\b(online|coding|technical|aptitude|written|screening|psychometric|cognitive|programming|hiring|employment|pre-employment) (tests?|assessments?|rounds?|challenges?|exams?)\b/,
+  /\b(assessment|test) (link|invitation|invite|instructions|questions|paper)\b/, /\btake[\s-]?home (assignment|task|test|exercise|challenge|project)\b/,
+];
+const ASSESS_GENERIC = [
+  /\b(complete|take|attempt|start|begin|finish|submit)\b[^.!?\n]{0,40}\b(assessments?|tests?|assignments?|case stud(y|ies)|challenges?|exams?)\b/,
+  /\b(assessment|test) (details|schedule|window|deadline|platform)\b/, /\bproctored\b/, /\bskills? (tests?|assessments?)\b/,
+  /\b(case study|assignment)\b[^.!?\n]{0,60}\b(submit|deadline|within|due|minutes|hours)\b/,
+];
+const ASSESS_WEAK = /\b(assessments?|tests?|assignments?|exams?|quiz|case study)\b/;
+const MAYBE_SUBJECT = /\b(assessments?|assignments?|online tests?|tests? (link|invitation|questions|instructions|details|schedule)|exams?|case study)\b/;
+// Some reason to think the mail is about hiring, so a school assignment or a product "test" does not count.
+const HIRING = /\b(recruit\w*|hiring|position|role|job|candidates?|candidature|shortlist\w*|placements?|internships?|interview\w*|applications?|applied|selection|talent|employ\w*|analyst|engineer|developer|scientist|associate|intern|trainee|freelance)\b/;
+const PROMO = /\b(practi[cs]e|mock tests?|prepare for|preparation|become a pro|webinar|workshop|masterclass|scholarships?|enrol+(ment)?|registrations?|register( now)?|free (course|trial)|discount|% off|bootcamp|hackathon|course|certification|newsletter|weekly|digest|tips)\b/;
+const AUTO_REPLY = /^(automatic reply|auto[- ]?reply|autoreply|out of (the )?office|undeliverable|delivery status)/i;
+const NOT_ASSESSMENT_SENDERS = /@([\w-]+\.)*(classroom\.google\.com|selfstudys\.com|buddy4study\.\w+|b4sletter\.in|substack\.com|beehiiv\.com|medium\.com|mailchimpapp\.net|buttondown\.email|ghost\.io)$/i;
+const RESULT = /\b(your (test |assessment )?results? (is|are) (out|live|now available|available|declared)|results? (is|are) (out|live|declared)|you have (successfully )?(cleared|qualified|passed)|(did not|didn't) (clear|qualify|pass)|not (been )?(cleared|qualified)|cleared the (test|assessment|round))\b/;
+const SUBMITTED = /\b(thank you for (completing|taking|submitting|attempting)|successfully (submitted|completed)|(have|has) (been )?received your (submission|test|assessment|answers))\b/;
+const REMINDER = /\b(reminder|remind|pending|last chance|yet to (start|complete|attempt|take)|not (yet )?(started|completed|attempted))\b/;
+
+// Returns null (not an assessment) or { tier: 'sure' | 'maybe', kind, vendor, company, deadline }.
+export function assessmentOf(msg) {
+  const subject = decode(msg.subject ?? '');
+  const from = String(msg.fromAddr ?? '');
+  if (AUTO_REPLY.test(subject.trim()) || NOT_ASSESSMENT_SENDERS.test(from) || NEWSLETTER_SENDERS.test(from)) return null;
+  // The whole mail: its own text, and the HTML part too, since some mails put the details only there.
+  const html = String(msg.html ?? '').slice(0, 200_000).replace(/<(script|style)[\s\S]*?<\/\1>/gi, ' ');
+  const body = `${unwrap(stripQuoted(msg.text))}\n${stripTags(html)}`.slice(0, 40_000).replace(/\*/g, '');
+  const lower = (s) => s.toLowerCase().replace(/[‘’]/g, "'");
+  const subj = lower(subject);
+  const text = lower(`${subject}\n${body}`);
+  const head = text.slice(0, 3000);
+  const parts = sentences(text);
+  // A platform counts from the sender or a link to it; a platform named in passing ("practice on HackerRank") does not.
+  const linkHosts = (`${msg.text ?? ''} ${msg.html ?? ''}`.slice(0, 200_000).match(/https?:\/\/[^\s"'<>/)?#]+/g) ?? []).map((u) => u.replace(/^https?:\/\//, ''));
+  const vendorSender = vendorOf([from.split('@')[1] ?? '']);
+  const vendor = vendorSender ?? vendorOf(linkHosts);
+  const any = (res) => parts.some((p) => res.some((re) => hit(p, re)));
+  const hiring = !!vendorSender || HIRING.test(text);
+  // A promotion (practice tests, courses, contests) names tests all the time; only its subject is trusted here.
+  const promo = PROMO.test(subj) || (!!alertPlatform(from) && !ASSESS_SPECIFIC.some((re) => re.test(subj)));
+  const cls = classifyEmail(msg);
+  let tier = null;
+  if (!promo && (any(ASSESS_SPECIFIC) || (hiring && (any(ASSESS_GENERIC) || (vendor && parts.some((p) => ASSESS_WEAK.test(p))))))) tier = 'sure';
+  else if (!promo && hiring && MAYBE_SUBJECT.test(subj)) tier = 'maybe';
+  if (!tier) return null;
+  // A confirmation that merely describes the hiring process ("the next step is an online test") is only possible.
+  if (tier === 'sure' && cls.category === 'application_confirmation' && !vendor) tier = 'maybe';
+  const kind = RESULT.test(head) || cls.category === 'rejection' || /\b(results?|scores?)\b/.test(subj) ? 'result'
+    : SUBMITTED.test(head) ? 'submitted' : REMINDER.test(head) ? 'reminder' : 'invitation';
+  const named = applicationDetails(msg).company;
+  const display = clean(msg.fromName ?? '').replace(/\b(careers?|recruit\w*|talent( acquisition)?|hr( ops| team)?|hiring|team|jobs)\b/gi, '').replace(/\s+/g, ' ').trim();
+  const generic = !display || vendorOf([display.replace(/\s+/g, '')]) || /no-?reply|notification|support|admin/i.test(display);
+  const deadline = (body.match(/\b(?:complete|take|attempt|submit|finish|start)\b[^.\n]{0,60}?\bwithin \d+ (?:business |working )?(?:hours?|days?)\b[^\n.]{0,40}/i)
+    ?? body.match(/\b(?:deadline|due (?:by|on|date)|expires? on|valid (?:till|until|up ?to)|(?:complete|submit|finish|attempt)[^.\n]{0,30}?\b(?:by|before))\b[^\n.]{0,70}/i))?.[0]
+    ?.replace(/\s+/g, ' ').trim() ?? null;
+  // Last resort: the sender's own domain (hr@anklesaria.com: Anklesaria), never a mail provider's or a platform's.
+  const domain = (from.split('@')[1] ?? '').toLowerCase();
+  const own = !vendorSender && !/^(gmail|googlemail|yahoo|outlook|hotmail|live|icloud|rediffmail|proton(mail)?)\./.test(domain)
+    ? domain.replace(/\.(co|com|org|net|ac|gov|edu)\.[a-z]{2}$/, '.x').split('.').slice(-2)[0] : null;
+  const company = named ?? (generic ? null : display) ?? (own ? own[0].toUpperCase() + own.slice(1) : null);
+  return { tier, kind, vendor, company, deadline };
+}
+
 const MONTHS = 'jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?';
 const DATE_RE = new RegExp(`\\b(\\d{1,2}(?:st|nd|rd|th)?\\s+(?:${MONTHS})(?:,?\\s+\\d{4})?|(?:${MONTHS})\\s+\\d{1,2}(?:st|nd|rd|th)?(?:,?\\s+\\d{4})?|\\d{1,2}[/-]\\d{1,2}[/-]\\d{2,4})(?:[^\\n.]{0,20}?\\b(\\d{1,2}[:.]\\d{2}\\s*(?:am|pm)?|\\d{1,2}\\s*(?:am|pm)))?`, 'gi');
 

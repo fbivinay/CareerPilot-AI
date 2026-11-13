@@ -15,8 +15,8 @@ export default async function Email({ searchParams }) {
   const params = await searchParams;
   const db = await getDb();
   const dispatch = async () => (process.env.GITHUB_DISPATCH_TOKEN ? dispatchWorkflow('careerpilot-bulk.yml') : null);
-  const [{ rows, total, page, counts: c }, template, queue, last] = await Promise.all([sentEmails(params), kvGet(db, 'outreach:template'),
-    kvGet(db, 'bulk:queue', []), resumeBulkIfDue(db, dispatch)]);
+  const [{ rows, total, page, counts: c }, template, queue, last, assessments] = await Promise.all([sentEmails(params), kvGet(db, 'outreach:template'),
+    kvGet(db, 'bulk:queue', []), resumeBulkIfDue(db, dispatch), kvGet(db, 'assessments')]);
   const to = (patch) => href('/email', {}, patch);
   return (
     <>
@@ -43,6 +43,8 @@ export default async function Email({ searchParams }) {
         <Stat label="Rejections" value={c.rejection} to={to({ reply: 'rejection' })} />
         <Stat label="Other replies" value={c.other} to={to({ reply: 'other' })} hint="Answers and acknowledgements" />
       </div>
+
+      <Assessments data={assessments} />
 
       <Filters base="/email" params={params} fields={[
         { name: 'by', label: 'Sent by', options: [['', 'Anyone'], ['you', 'You'], ['careerpilot', 'CareerPilot']] },
@@ -80,5 +82,57 @@ export default async function Email({ searchParams }) {
       </Table>
       <Pager base="/email" params={params} total={total} page={page} />
     </>
+  );
+}
+
+const KIND = { invitation: ['assessment', 'Invitation'], reminder: ['assessment', 'Reminder'], submitted: ['confirmed', 'Submitted'], result: ['interview', 'Result'] };
+
+// Every assessment or test email anywhere in Gmail, one row per conversation (lib/gmail-sync.mjs, scanAssessments).
+function Assessments({ data }) {
+  const items = data?.items ?? [];
+  const sure = items.filter((a) => a.tier === 'sure');
+  const maybe = items.filter((a) => a.tier !== 'sure');
+  const searched = data?.at ? `Searched all of Gmail, Spam and Trash included, ${fmtDateTime(data.at)}.` : 'The first search runs with the next Gmail sync.';
+  return (
+    <>
+      <h2 className="kicker mb-3">Assessments{sure.length > 0 && ` · ${sure.length}`}</h2>
+      <p className="mb-3 text-sm text-ink-2">Test and assessment emails from any company or platform, newest first. {searched}</p>
+      <div className="mb-10 space-y-3">
+        <Table head={['Received', 'Company', 'Email', 'Status', 'Deadline']} empty="No assessment emails found.">
+          {sure.map((a) => <AssessmentRow key={a.threadId} a={a} />)}
+        </Table>
+        {maybe.length > 0 && (
+          <details className="text-sm">
+            <summary className="cursor-pointer text-ink-2">{maybe.length} possible — they mention a test, but less clearly</summary>
+            <div className="mt-2">
+              <Table head={['Received', 'Company', 'Email', 'Status', 'Deadline']}>{maybe.map((a) => <AssessmentRow key={a.threadId} a={a} />)}</Table>
+            </div>
+          </details>
+        )}
+      </div>
+    </>
+  );
+}
+
+function AssessmentRow({ a }) {
+  const [tone, label] = KIND[a.kind] ?? KIND.invitation;
+  return (
+    <tr className="hover:bg-surface-2">
+      <Td className="whitespace-nowrap text-xs">{fmtDateTime(a.at)}{a.count > 1 && <div className="text-ink-3">{a.count} emails</div>}</Td>
+      <Td>
+        {a.company ?? <span className="text-ink-3">Not named</span>}
+        {a.vendor && <div className="text-xs text-ink-3">on {a.vendor}</div>}
+      </Td>
+      <Td className="max-w-md">
+        <A to={gmailLink(a.threadId)} external>{a.subject || '(no subject)'}</A>
+        <div className="text-xs text-ink-3">{a.from}</div>
+        {a.snippet && <div className="mt-1 text-xs text-ink-2 line-clamp-2" title={a.snippet}>{a.snippet}</div>}
+      </Td>
+      <Td className="text-xs">
+        <Badge value={tone}>{label}</Badge>
+        {a.folder && <div className="mt-1"><Badge value="failed">In {a.folder === 'spam' ? 'Spam' : 'Trash'}</Badge></div>}
+      </Td>
+      <Td className="max-w-xs text-xs text-ink-2">{a.deadline ?? '—'}</Td>
+    </tr>
   );
 }

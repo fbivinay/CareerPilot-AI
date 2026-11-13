@@ -8,7 +8,7 @@
 import { all, audit, kvGet, kvSet, now, one, run } from './db.mjs';
 import { aiJson, AiUnavailable } from './ai.mjs';
 import { CAREERPILOT_APP, transition } from './applications.mjs';
-import { alertPlatform, applicationDetails, classifyEmail, extractDetails, isJobEmail, laterReply, parseJobAlert, platformSender, unwrap } from './email-intel.mjs';
+import { alertPlatform, applicationDetails, ASSESSMENT_QUERY, assessmentOf, classifyEmail, extractDetails, isJobEmail, laterReply, parseJobAlert, platformSender, unwrap } from './email-intel.mjs';
 import { upsertJob } from './jobs.mjs';
 import { domainMatchesCompany, upsertContact } from './contacts.mjs';
 import { recordBounce } from './outreach.mjs';
@@ -327,7 +327,9 @@ export async function syncGmail(db, gmail, settings, { waitMs = 120_000, pushTop
   }
   try {
     if (pushTopic) await renewWatch(db, gmail, pushTopic);
-    return await syncMail(db, gmail, settings, opts);
+    const stats = await syncMail(db, gmail, settings, opts);
+    stats.assessments = await scanAssessments(db, gmail, opts);
+    return stats;
   } finally {
     await kvSet(db, 'lock:gmail', new Date(0).toISOString());
   }
@@ -367,6 +369,55 @@ async function syncMail(db, gmail, settings, { lookbackDays = 30, max = 5000, de
   if (newest && !cut) await kvSet(db, 'gmail:last_sync', newest);
   await kvSet(db, 'gmail:status', { ok: true, at: now() });
   return stats;
+}
+
+// The Email page's Assessments list: every assessment or test email anywhere in Gmail (Spam and Trash too),
+// whatever it is about. Gmail's full-text search finds candidates; each is read in full and judged by
+// assessmentOf. The first pass covers the whole mailbox (over several runs if the deadline cuts it); later passes
+// only mail since the last finished pass. The list the page shows is kept in kv (one read per page view).
+export async function scanAssessments(db, gmail, { deadline = Infinity } = {}) {
+  const startedAt = now();
+  const last = await kvGet(db, 'assessments:last_scan');
+  const after = last ? ` after:${Math.floor(Date.parse(last) / 1000) - 86400}` : '';
+  const ids = await gmail.listIds(`${ASSESSMENT_QUERY} -in:sent -in:chats -in:drafts${after}`, 20_000, { spamTrash: true });
+  const known = new Set();
+  for (let i = 0; i < ids.length; i += 500) {
+    const part = ids.slice(i, i + 500);
+    for (const r of await all(db, `SELECT id FROM assessments WHERE id IN (${part.map(() => '?').join(',')})`, part)) known.add(r.id);
+  }
+  const stats = { listed: ids.length, checked: 0, found: 0, cut: false };
+  for (const id of ids) {
+    if (known.has(id)) continue;
+    if (Date.now() > deadline) { stats.cut = true; break; }
+    const msg = await gmail.get(id);
+    const a = assessmentOf(msg);
+    stats.checked++;
+    if (!a) { await run(db, `INSERT OR IGNORE INTO assessments (id, tier, checked_at) VALUES (?, 'no', ?)`, [id, now()]); continue; }
+    stats.found++;
+    const folder = msg.labelIds.includes('SPAM') ? 'spam' : msg.labelIds.includes('TRASH') ? 'trash' : null;
+    await run(db, `INSERT OR REPLACE INTO assessments (id, thread_id, received_at, from_addr, from_name, subject, company, vendor, kind, tier,
+      deadline, snippet, folder, checked_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [id, msg.threadId, msg.date, msg.fromAddr, msg.fromName || null, msg.subject, a.company, a.vendor, a.kind, a.tier, a.deadline,
+      (msg.snippet ?? '').slice(0, 240), folder, now()]);
+  }
+  if (!stats.cut) await kvSet(db, 'assessments:last_scan', startedAt);
+  const prev = await kvGet(db, 'assessments');
+  await kvSet(db, 'assessments', stats.found || !prev ? await assessmentList(db) : { ...prev, at: now() });
+  return stats;
+}
+
+// One entry per conversation, newest first: its latest assessment email decides the status shown.
+export async function assessmentList(db) {
+  const rows = await all(db, `SELECT * FROM assessments WHERE tier != 'no' ORDER BY received_at`);
+  const threads = new Map();
+  for (const r of rows) {
+    const t = threads.get(r.thread_id) ?? { threadId: r.thread_id, firstAt: r.received_at, count: 0, tier: 'maybe' };
+    Object.assign(t, { at: r.received_at, kind: r.kind, subject: t.subject ?? r.subject, from: r.from_name || r.from_addr, fromAddr: r.from_addr,
+      company: r.company ?? t.company ?? null, vendor: r.vendor ?? t.vendor ?? null, deadline: r.deadline ?? t.deadline ?? null,
+      snippet: r.snippet, folder: r.folder, count: t.count + 1, tier: t.tier === 'sure' || r.tier === 'sure' ? 'sure' : 'maybe' });
+    threads.set(r.thread_id, t);
+  }
+  return { at: now(), items: [...threads.values()].sort((a, b) => String(b.at).localeCompare(String(a.at))) };
 }
 
 export { linkEmail };

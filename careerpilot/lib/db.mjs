@@ -129,6 +129,24 @@ const SCHEMA = [
   `CREATE INDEX IF NOT EXISTS emails_application ON emails(application_id)`,
   // The candidate's own job emails (the Email page): the first one they sent in each conversation, and the
   // reply it got (gmail-sync.mjs, syncSent and recordReply).
+  // Assessment and test mail found anywhere in Gmail (gmail-sync.mjs, scanAssessments): tier 'no' rows are checked
+  // ids only, with no content.
+  `CREATE TABLE IF NOT EXISTS assessments (
+    id TEXT PRIMARY KEY,
+    thread_id TEXT,
+    received_at TEXT,
+    from_addr TEXT,
+    from_name TEXT,
+    subject TEXT,
+    company TEXT,
+    vendor TEXT,
+    kind TEXT,
+    tier TEXT NOT NULL,
+    deadline TEXT,
+    snippet TEXT,
+    folder TEXT,
+    checked_at TEXT NOT NULL
+  )`,
   `CREATE TABLE IF NOT EXISTS sent_mail (
     id TEXT PRIMARY KEY,
     thread_id TEXT NOT NULL UNIQUE,

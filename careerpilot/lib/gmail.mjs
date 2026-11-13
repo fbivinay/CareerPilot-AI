@@ -76,11 +76,11 @@ export function createGmail({ clientId, clientSecret, refreshToken, fetchImpl = 
   }
 
   return {
-    async listIds(q, max = 200) {
+    async listIds(q, max = 200, { spamTrash = false } = {}) {
       const ids = [];
       let pageToken;
       do {
-        const params = new URLSearchParams({ q, maxResults: '100', ...(pageToken ? { pageToken } : {}) });
+        const params = new URLSearchParams({ q, maxResults: '100', ...(spamTrash && { includeSpamTrash: 'true' }), ...(pageToken ? { pageToken } : {}) });
         const page = await api(`/messages?${params}`, 5);
         ids.push(...(page.messages ?? []).map((m) => m.id));
         pageToken = page.nextPageToken;
