@@ -110,9 +110,28 @@ export function createGmail({ clientId, clientSecret, refreshToken, fetchImpl = 
 
 const b64 = (s) => Buffer.from(s ?? '', 'base64url').toString('utf8');
 
+// Drops <script> and <style> blocks in one linear pass. (A lazy regex over attacker-sent HTML full of unclosed
+// "<script" re-scans to the end for every opener: quadratic, minutes on one crafted email.) An unclosed block
+// runs to the end of the text.
+export function stripScripts(html) {
+  const s = String(html);
+  const low = s.toLowerCase();
+  let out = '';
+  let i = 0;
+  for (;;) {
+    const a = low.indexOf('<script', i);
+    const b = low.indexOf('<style', i);
+    const at = a < 0 ? b : b < 0 ? a : Math.min(a, b);
+    if (at < 0) return out + s.slice(i);
+    out += `${s.slice(i, at)} `;
+    const end = low.indexOf(at === a ? '</script' : '</style', at);
+    if (end < 0) return out;
+    i = low.indexOf('>', end) + 1 || s.length;
+  }
+}
+
 export function htmlToPlain(html) {
-  return decodeEntities(String(html)
-    .replace(/<(script|style)[\s\S]*?<\/\1>/gi, ' ')
+  return decodeEntities(stripScripts(html)
     .replace(/<br\s*\/?>|<\/(p|div|tr|li|h\d)>/gi, '\n')
     .replace(/<[^>]+>/g, ' '))
     .replace(/[ \t ]+/g, ' ')

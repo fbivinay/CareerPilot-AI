@@ -1,3 +1,4 @@
+import { stripScripts } from './gmail.mjs';
 // Rule-first email understanding: category, confidence, extracted next steps, job-alert parsing and
 // application details. An LLM (no-training provider only) is consulted just for messages the rules
 // cannot decide. Formats here were checked against real hiring mail (foundit, SHL, LinkedIn, ATSs).
@@ -275,7 +276,7 @@ export function assessmentOf(msg) {
   const from = String(msg.fromAddr ?? '');
   if (AUTO_REPLY.test(subject.trim()) || NOT_ASSESSMENT_SENDERS.test(from) || NEWSLETTER_SENDERS.test(from)) return null;
   // The whole mail: its own text, and the HTML part too, since some mails put the details only there.
-  const html = String(msg.html ?? '').slice(0, 200_000).replace(/<(script|style)[\s\S]*?<\/\1>/gi, ' ');
+  const html = stripScripts(String(msg.html ?? '').slice(0, 200_000));
   const body = `${unwrap(stripQuoted(msg.text))}\n${stripTags(html)}`.slice(0, 40_000).replace(/\*/g, '');
   const lower = (s) => s.toLowerCase().replace(/[‘’]/g, "'");
   const subj = lower(subject);

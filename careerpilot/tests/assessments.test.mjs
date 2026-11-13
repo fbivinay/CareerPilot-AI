@@ -65,3 +65,13 @@ test('the whole mailbox is searched once, Spam and Trash too, then only new mail
   assert.match(queries[1][0], /after:\d+/);
   assert.deepEqual(gets, ['a', 'b']);
 });
+
+test('hostile HTML (thousands of unclosed <script> tags) is handled in linear time', async () => {
+  const { stripScripts, htmlToPlain } = await import('../lib/gmail.mjs');
+  assert.equal(stripScripts('a<script>x</script>b<STYLE x>y</style >c<script>open'), 'a b c ');
+  const evil = '<script'.repeat(30_000);
+  const t = Date.now();
+  htmlToPlain(evil);
+  assessmentOf(mail({ fromAddr: 'x@y.com', subject: 'Assessment', html: evil }));
+  assert.ok(Date.now() - t < 2000, `${Date.now() - t} ms`);
+});
