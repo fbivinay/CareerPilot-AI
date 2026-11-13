@@ -37,7 +37,8 @@ export default async function Email({ searchParams }) {
 
       <h2 className="kicker mb-3">Replies</h2>
       <div className="mb-10 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
-        <Stat label="Assessments" value={c.assessment} to={to({ reply: 'assessment' })} />
+        <Stat label="Assessments" value={(assessments?.items ?? []).filter((a) => a.tier === 'sure').length} to="#assessments"
+          hint="From all of Gmail, not only replies" />
         <Stat label="Interviews" value={c.interview} to={to({ reply: 'interview' })} tone={c.interview ? 'good' : undefined} />
         <Stat label="Offers" value={c.offer} to={to({ reply: 'offer' })} tone={c.offer ? 'good' : undefined} />
         <Stat label="Rejections" value={c.rejection} to={to({ reply: 'rejection' })} />
@@ -95,7 +96,7 @@ function Assessments({ data }) {
   const searched = data?.at ? `Searched all of Gmail, Spam and Trash included, ${fmtDateTime(data.at)}.` : 'The first search runs with the next Gmail sync.';
   return (
     <>
-      <h2 className="kicker mb-3">Assessments{sure.length > 0 && ` · ${sure.length}`}</h2>
+      <h2 id="assessments" className="kicker mb-3 scroll-mt-24">Assessments{sure.length > 0 && ` · ${sure.length}`}</h2>
       <p className="mb-3 text-sm text-ink-2">Test and assessment emails from any company or platform, newest first. {searched}</p>
       <div className="mb-10 space-y-3">
         <Table head={['Received', 'Company', 'Email', 'Status', 'Deadline']} empty="No assessment emails found.">
