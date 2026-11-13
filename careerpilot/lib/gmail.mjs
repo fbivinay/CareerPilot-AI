@@ -118,9 +118,13 @@ export function stripScripts(html) {
   const low = s.toLowerCase();
   let out = '';
   let i = 0;
+  // Each tag's next position is kept and searched again only once passed (-1 stays -1), so the whole text is
+  // scanned a bounded number of times.
+  let a = low.indexOf('<script');
+  let b = low.indexOf('<style');
   for (;;) {
-    const a = low.indexOf('<script', i);
-    const b = low.indexOf('<style', i);
+    if (a >= 0 && a < i) a = low.indexOf('<script', i);
+    if (b >= 0 && b < i) b = low.indexOf('<style', i);
     const at = a < 0 ? b : b < 0 ? a : Math.min(a, b);
     if (at < 0) return out + s.slice(i);
     out += `${s.slice(i, at)} `;

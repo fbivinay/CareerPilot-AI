@@ -72,6 +72,7 @@ test('hostile HTML (thousands of unclosed <script> tags) is handled in linear ti
   const evil = '<script'.repeat(30_000);
   const t = Date.now();
   htmlToPlain(evil);
+  htmlToPlain('<script></script>'.repeat(60_000)); // closed blocks, no <style: each must not re-scan the rest
   assessmentOf(mail({ fromAddr: 'x@y.com', subject: 'Assessment', html: evil }));
   assert.ok(Date.now() - t < 2000, `${Date.now() - t} ms`);
 });
