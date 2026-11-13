@@ -1,4 +1,6 @@
 import { getDb, kvGet } from '@/lib/db.mjs';
+import { dispatchWorkflow } from '@/lib/gmail-oauth.mjs';
+import { resumeBulkIfDue } from '@/lib/outreach.mjs';
 import { sentEmails } from '@/lib/queries.mjs';
 import { BulkSend } from './bulk-send.jsx';
 import { A, Badge, Filters, PageHeader, Pager, Stat, Table, Td, fmtDateTime, gmailLink, href, pct } from '../_ui/kit.jsx';
@@ -12,8 +14,9 @@ const REPLY = { rejection: ['rejected', 'Rejected'], interview: ['interview', 'I
 export default async function Email({ searchParams }) {
   const params = await searchParams;
   const db = await getDb();
+  const dispatch = async () => (process.env.GITHUB_DISPATCH_TOKEN ? dispatchWorkflow('careerpilot-bulk.yml') : null);
   const [{ rows, total, page, counts: c }, template, queue, last] = await Promise.all([sentEmails(params), kvGet(db, 'outreach:template'),
-    kvGet(db, 'bulk:queue', []), kvGet(db, 'bulk:last')]);
+    kvGet(db, 'bulk:queue', []), resumeBulkIfDue(db, dispatch)]);
   const to = (patch) => href('/email', {}, patch);
   return (
     <>

@@ -560,7 +560,16 @@ test('the bulk stage pauses at Gmail\'s sending limit or the daily cap and keeps
   calls = -100;
   assert.deepEqual(await sendQueued(db, gmail, { ...env, BULK_DAILY_CAP: '1' }), { sent: 0, skipped: 0 });
   assert.deepEqual(await kvGet(db, 'bulk:queue'), ['c@d.co', 'e@f.co']);
-  assert.match((await kvGet(db, 'bulk:last')).paused, /last 24 hours.*; sending resumes around \d/);
+  const last = await kvGet(db, 'bulk:last');
+  assert.match(last.paused, /last 24 hours.*; sending resumes around \d/);
+  // The Email page restarts the sender once, and only after the resume time.
+  const { resumeBulkIfDue } = await import('../lib/outreach.mjs');
+  let starts = 0;
+  const dispatch = async () => ({ ok: ++starts > 0 });
+  assert.equal((await resumeBulkIfDue(db, dispatch, Date.parse(last.resumeAt) - 1000)).restartedAt, undefined);
+  assert.ok((await resumeBulkIfDue(db, dispatch, Date.parse(last.resumeAt) + 1000)).restartedAt);
+  await resumeBulkIfDue(db, dispatch, Date.parse(last.resumeAt) + 2000);
+  assert.equal(starts, 1);
 });
 
 test('the bulk stage reports progress after every address and ends not running', async () => {

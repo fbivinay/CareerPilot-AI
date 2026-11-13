@@ -14,7 +14,16 @@ export function BulkSend({ subject, pending, last }) {
   const results = last?.results ?? [];
   const sent = results.filter((r) => r.ok).length;
   const running = !!last?.running && Date.now() - Date.parse(last.at) < STALE_MS;
-  const waiting = !running && !last?.paused && (pending > 0 || !!state?.queued);
+  // A paused batch counts as waiting again once the page has restarted its sender (resumeBulkIfDue).
+  const paused = !running && !!last?.paused && !last.restartedAt;
+  const waiting = !running && !paused && (pending > 0 || !!state?.queued);
+  // Reload at the resume time, so the page restarts the sender and shows it without a manual refresh.
+  useEffect(() => {
+    const ms = paused && pending > 0 ? Date.parse(last.resumeAt) - Date.now() : NaN;
+    if (!(ms < 2 ** 31)) return;
+    const t = setTimeout(() => router.refresh(), Math.max(ms, 0) + 5000);
+    return () => clearTimeout(t);
+  }, [paused, pending, last?.resumeAt, router]);
   useEffect(() => {
     if (!running && !waiting) return;
     // Every refresh re-reads the database: skip it in a hidden tab, and give up waiting on a run that never started.
@@ -44,7 +53,7 @@ export function BulkSend({ subject, pending, last }) {
           <div className="bar"><div className="bar-sweep" /></div>
         </div>
       )}
-      {!running && last?.paused && (
+      {paused && (
         <p className="text-sm text-bad">{pending > 0 && `${pending} waiting, paused: `}{last.paused} They go out automatically once Gmail allows.</p>
       )}
       {last?.error && <p className="text-sm text-bad">Last batch ({fmt(last.at)}): {last.error}</p>}
