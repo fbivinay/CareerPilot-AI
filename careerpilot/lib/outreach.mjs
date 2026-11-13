@@ -210,18 +210,25 @@ export async function recordBounce(db, { threadId, emailId }) {
 }
 
 // Addresses pasted on the Email page, in any form (one per line, commas, "Name <a@b.com>"), deduplicated.
-const DAILY_CAP = 450;
+export const DAILY_CAP = 499; // Gmail's limit is 500 in any 24 hours; past it Gmail stops all sending for about a day
+const DAY = 24 * 3600_000;
 const RATE_LIMITED = /Gmail API (429|403)\b[\s\S]*(rate ?limit|quota exceeded)/i;
 export const MAX_BULK = 50; // Gmail send quota is ~54 a minute; a batch must finish inside one request
-const istTime = (d) => d.toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' });
+const SENT_SINCE = `FROM outreach WHERE status IN ('sent', 'bounced', 'sending', 'unknown') AND created_at >= ?`;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 export function parseAddresses(raw) {
   return [...new Set((String(raw ?? '').match(/[^\s@<>,;:"'()[\]]+@[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}/gi) ?? []).map((a) => a.toLowerCase()))];
 }
+// Send times (ISO, oldest first) of the emails that count toward the 24-hour cap.
+const sentWindow = async (db) => (await all(db, `SELECT created_at ${SENT_SINCE} ORDER BY created_at`, [new Date(Date.now() - DAY).toISOString()]))
+  .map((r) => r.created_at);
 
 // The candidate's own email (outreach:template, with the resume) to addresses they paste on the Email page:
 // one Gmail message per address, so no recipient ever sees another. An address already emailed (by CareerPilot
 // or from the candidate's Gmail), or one that bounced, is skipped.
-export async function sendBulk(db, gmail, raw, env = process.env, onResult = async () => {}) {
+// `window` is the 24-hour send log, kept up to date here as emails go out. With a `deadline`, the run stops in
+// time (returning `more`), and waits for room in the 24-hour window itself when that comes before the deadline.
+export async function sendBulk(db, gmail, raw, env = process.env, onResult = async () => {}, { window = null, deadline = Infinity } = {}) {
   const addresses = parseAddresses(raw);
   if (!addresses.length) return { error: 'No email addresses found.' };
   if (addresses.length > MAX_BULK) return { error: `${addresses.length} addresses: send at most ${MAX_BULK} at a time.` };
@@ -232,17 +239,17 @@ export async function sendBulk(db, gmail, raw, env = process.env, onResult = asy
   const results = [];
   const add = async (x) => { results.push(x); await onResult(x); };
   const cap = Number(env.BULK_DAILY_CAP ?? DAILY_CAP);
+  window ??= await sentWindow(db);
   for (const email of addresses) {
-    // Gmail stops all sending (applications too) for about a day past ~500 in 24 hours: stop short of it, and
-    // stop at Gmail's own limit, leaving the rest queued for later.
-    const day = new Date(Date.now() - 24 * 3600_000).toISOString();
-    const SENT_SINCE = `FROM outreach WHERE status IN ('sent', 'bounced', 'sending', 'unknown') AND created_at >= ?`;
-    const recent = Number((await one(db, `SELECT count(*) n ${SENT_SINCE}`, [day])).n);
-    if (recent >= cap) {
-      // Sending resumes when the email that takes the count back under the cap leaves the 24-hour window.
-      const edge = await one(db, `SELECT created_at ${SENT_SINCE} ORDER BY created_at LIMIT 1 OFFSET ?`, [day, recent - cap]);
-      const resumeAt = edge ? new Date(Date.parse(edge.created_at) + 24 * 3600_000).toISOString() : null;
-      return { results, resumeAt, paused: `${recent} emails sent in the last 24 hours (limit ${cap}, to stay under Gmail's ~500)${resumeAt ? `; sending resumes around ${istTime(new Date(resumeAt))}` : ''}.` };
+    if (Date.now() > deadline) return { results, more: true };
+    // Stop short of Gmail's limit, leaving the rest queued: sending resumes when the email that takes the count
+    // back under the cap leaves the 24-hour window.
+    for (;;) {
+      while (window.length && Date.parse(window[0]) < Date.now() - DAY) window.shift();
+      if (window.length < cap) break;
+      const resumeAt = Date.parse(window[window.length - cap]) + DAY + 1000;
+      if (Number.isFinite(deadline) && resumeAt < deadline - 10_000) { await sleep(resumeAt - Date.now()); continue; }
+      return { results, resumeAt: new Date(resumeAt).toISOString(), paused: `${window.length} emails sent in the last 24 hours (limit ${cap}, Gmail's is 500).` };
     }
     const contact = await upsertContact(db, { email, sourceType: 'manual', domainMatch: true });
     if (contact.opted_out) { await add({ email, ok: false, error: 'bounced before or opted out' }); continue; }
@@ -256,10 +263,9 @@ export async function sendBulk(db, gmail, raw, env = process.env, onResult = asy
     const r = await send(db, gmail, { contact, job: null, kind: 'direct', subject: template.subject, body: template.text, html: template.html ?? null,
       attach: true, composer: 'template:candidate' }, profile, resume);
     if (!r.ok && RATE_LIMITED.test(r.error ?? '')) {
-      const until = /Retry after (\S+?Z)/.exec(r.error)?.[1];
-      const when = until && istTime(new Date(until));
-      return { results, resumeAt: until ?? null, paused: `Gmail's daily sending limit was reached${when ? `; Gmail allows more after ${when}` : ''}.` };
+      return { results, resumeAt: /Retry after (\S+?Z)/.exec(r.error)?.[1] ?? null, paused: "Gmail's daily sending limit was reached." };
     }
+    if (r.ok) window.push(now());
     await add({ email, ok: r.ok, error: r.error });
   }
   return { results };
@@ -279,30 +285,33 @@ export async function queueBulk(db, raw) {
 // ponytail: queue is one kv value; an address queued in the instant between the read and the write below is
 // kept (the write removes only what was sent), but two runs at once could both send it. The workflow's
 // concurrency group keeps runs one at a time.
-export async function sendQueued(db, gmail, env = process.env) {
+// A run out of time with addresses left calls `onMore` (careerpilot-bulk.yml starts its next run).
+export async function sendQueued(db, gmail, env = process.env, { deadline = Infinity, onMore = null } = {}) {
   const done = [];
   const startedAt = now();
   const total = (await kvGet(db, 'bulk:queue', [])).length;
+  if (!total) return { sent: 0, skipped: 0 };
+  const window = await sentWindow(db);
+  const cap = Number(env.BULK_DAILY_CAP ?? DAILY_CAP);
   // bulk:last is the Email page's live progress: each address leaves the queue and joins the results as soon as
-  // it is tried, so a run cut off mid-batch neither re-tries nor loses one.
-  const progress = (extra) => kvSet(db, 'bulk:last', { at: now(), startedAt, total: Math.max(total, done.length), results: done, ...extra });
+  // it is tried, so a run cut off mid-batch neither re-tries nor loses one. `sentTimes` and `cap` feed the page's
+  // finish-time estimate (lib/bulk-eta.mjs).
+  const progress = (extra) => kvSet(db, 'bulk:last', { at: now(), startedAt, total: Math.max(total, done.length), results: done, cap, sentTimes: window, ...extra });
   const onResult = async (r) => {
     done.push(r);
     await kvSet(db, 'bulk:queue', (await kvGet(db, 'bulk:queue', [])).filter((a) => a !== r.email));
     await progress({ running: true });
   };
-  if (!total) return { sent: 0, skipped: 0 };
   await progress({ running: true });
-  let paused = null;
-  let resumeAt = null;
-  for (let batch; !paused && (batch = (await kvGet(db, 'bulk:queue', [])).slice(0, MAX_BULK)).length;) {
-    const res = await sendBulk(db, gmail, batch.join(' '), env, onResult);
+  let res = {};
+  for (let batch; !res.paused && !res.more && (batch = (await kvGet(db, 'bulk:queue', [])).slice(0, MAX_BULK)).length;) {
+    res = await sendBulk(db, gmail, batch.join(' '), env, onResult, { window, deadline });
     if (res.error) { await kvSet(db, 'bulk:last', { at: now(), error: res.error }); return res; }
-    ({ paused = null, resumeAt = null } = res);
   }
   // resumeAt lets the Email page restart the sender itself once the 24-hour window has room again.
-  await progress(paused ? { paused, resumeAt } : {});
-  return { sent: done.filter((r) => r.ok).length, skipped: done.filter((r) => !r.ok).length };
+  await progress(res.paused ? { paused: res.paused, resumeAt: res.resumeAt } : {});
+  if (res.more && onMore) await onMore().catch((err) => log.warn('could not start the next bulk run', { error: err.message }));
+  return { sent: done.filter((r) => r.ok).length, skipped: done.filter((r) => !r.ok).length, ...(res.more && { more: true }) };
 }
 
 // The Email page restarts a batch paused at the sending limit once its resume time has passed: one start per

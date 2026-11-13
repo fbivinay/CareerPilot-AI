@@ -2,6 +2,9 @@
 import { useActionState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { sendBulkEmail } from '../actions.js';
+import { bulkEta, observedPace } from '@/lib/bulk-eta.mjs';
+
+const DAILY_CAP = 499; // lib/outreach.mjs; bulk:last carries the cap in force once a run has started
 
 const fmt = (iso) => new Date(iso).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' });
 const STALE_MS = 3 * 60_000; // a run that stopped writing progress this long ago was cut off
@@ -54,8 +57,14 @@ export function BulkSend({ subject, pending, last }) {
         </div>
       )}
       {paused && (
-        <p className="text-sm text-bad">{pending > 0 && `${pending} waiting, paused: `}{last.paused} They go out automatically once Gmail allows.</p>
+        <div className="space-y-1">
+          <p className="text-sm text-bad">{pending > 0 && `${pending} waiting, paused: `}{last.paused} They go out automatically once Gmail allows.</p>
+          {pending > 0 && last.resumeAt && (
+            <p className="text-sm font-medium" suppressHydrationWarning>Next run starts around {fmt(last.resumeAt)}.</p>
+          )}
+        </div>
       )}
+      {(running || waiting || paused) && <Eta last={last} remaining={pending || state?.queued || 0} />}
       {last?.error && <p className="text-sm text-bad">Last batch ({fmt(last.at)}): {last.error}</p>}
       {!running && results.length > 0 && (
         <details className="text-sm">
@@ -64,6 +73,19 @@ export function BulkSend({ subject, pending, last }) {
         </details>
       )}
     </form>
+  );
+}
+
+// Estimated finish of everything queued, from the 24-hour limit, the send log and this run's speed.
+function Eta({ last, remaining }) {
+  const cap = last?.cap ?? DAILY_CAP;
+  const at = bulkEta({ sentTimes: last?.sentTimes, remaining, cap, paceMs: observedPace(last) });
+  if (!at) return null;
+  return (
+    <p className="text-sm text-ink-2" suppressHydrationWarning>
+      {remaining} to go · all sent by around <strong>{fmt(at)}</strong>
+      <span className="text-ink-3"> (estimate: {cap} emails per 24 hours at the current speed)</span>
+    </p>
   );
 }
 

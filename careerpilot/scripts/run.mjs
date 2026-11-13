@@ -12,7 +12,7 @@ import { describeMissing, reevaluateAll } from '../lib/jobs.mjs';
 import { RULES_VERSION } from '../lib/match.mjs';
 import { aiScoreJobs } from '../lib/ai-match.mjs';
 import { GmailAuthError } from '../lib/gmail.mjs';
-import { connectionStatus, gmailClient, markAuthFailure } from '../lib/gmail-oauth.mjs';
+import { connectionStatus, dispatchWorkflow, gmailClient, markAuthFailure } from '../lib/gmail-oauth.mjs';
 import { syncGmail } from '../lib/gmail-sync.mjs';
 import { prepareApplications, sendBlockedAlert, sendDigest } from '../lib/prepare.mjs';
 import { runOutreach, sendQueued } from '../lib/outreach.mjs';
@@ -50,7 +50,9 @@ const STAGES = {
     pushTopic: process.env.GMAIL_PUSH_TOPIC || null })),
   prepare: (db, settings) => prepareApplications(db, settings),
   // Addresses pasted on the Email page (queued there; careerpilot-bulk.yml runs only this stage).
-  bulk: needsSending((db) => sendQueued(db, gmail)),
+  // Out of time with addresses left, careerpilot-bulk.yml (which has the dispatch token) starts its next run.
+  bulk: needsSending((db) => sendQueued(db, gmail, process.env, { deadline: deadline - 75_000,
+    onMore: process.env.GITHUB_DISPATCH_TOKEN ? () => dispatchWorkflow('careerpilot-bulk.yml') : null })),
   outreach: needsSending((db, settings) => runOutreach(db, gmail, settings, { deadline: deadline - 60_000 })),
   // Blocked applications are emailed on every run; the digest goes once a day.
   digest: needsSending(async (db, settings) => ({ blocked: await sendBlockedAlert(db, gmail, { to: gmailStatus.email }),

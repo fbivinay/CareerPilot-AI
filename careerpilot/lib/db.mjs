@@ -106,6 +106,7 @@ const SCHEMA = [
   // The Email page counts each email's follow-ups; without this every sent email scanned the whole table
   // (n² rows read per page view, which used up Turso's monthly reads on 2026-11-12).
   `CREATE INDEX IF NOT EXISTS outreach_followup ON outreach(followup_of)`,
+  `CREATE INDEX IF NOT EXISTS outreach_created ON outreach(created_at)`, // the 24-hour send window (lib/outreach.mjs)
   `CREATE TABLE IF NOT EXISTS emails (
     id TEXT PRIMARY KEY,
     thread_id TEXT,

@@ -561,7 +561,10 @@ test('the bulk stage pauses at Gmail\'s sending limit or the daily cap and keeps
   assert.deepEqual(await sendQueued(db, gmail, { ...env, BULK_DAILY_CAP: '1' }), { sent: 0, skipped: 0 });
   assert.deepEqual(await kvGet(db, 'bulk:queue'), ['c@d.co', 'e@f.co']);
   const last = await kvGet(db, 'bulk:last');
-  assert.match(last.paused, /last 24 hours.*; sending resumes around \d/);
+  assert.match(last.paused, /last 24 hours/);
+  assert.ok(Date.parse(last.resumeAt) > Date.now() + 23 * 3600_000); // the one email sent leaves the window in ~24 h
+  assert.equal(last.cap, 1);
+  assert.equal(last.sentTimes.length, 1);
   // The Email page restarts the sender once, and only after the resume time.
   const { resumeBulkIfDue } = await import('../lib/outreach.mjs');
   let starts = 0;
@@ -591,4 +594,35 @@ test('the bulk stage reports progress after every address and ends not running',
   const last = await kvGet(db, 'bulk:last');
   assert.equal(last.running, undefined);
   assert.equal(last.results.length, 3);
+  assert.equal(last.sentTimes.length, 3);
+});
+
+test('a bulk run out of time leaves the rest queued and starts the next run', async () => {
+  const { kvGet, kvSet } = await import('../lib/db.mjs');
+  const db = await openDb({ url: ':memory:' });
+  let n = 0;
+  const gmail = { listIds: async () => [], send: async () => ({ id: `g${++n}`, threadId: `t${n}` }) };
+  await kvSet(db, 'outreach:template', { subject: 'S', text: 'Hello' });
+  const env = { APP_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString('base64') };
+  await vaultPut(db, 'profile', JSON.stringify(profile), env);
+  await vaultPut(db, 'resume.pdf', Buffer.from('%PDF-1.7 test'), env);
+  await queueBulk(db, 'a@b.co c@d.co e@f.co');
+  let starts = 0;
+  const r = await sendQueued(db, gmail, env, { deadline: Date.now() - 1, onMore: async () => { starts++; } });
+  assert.deepEqual(r, { sent: 0, skipped: 0, more: true });
+  assert.equal(starts, 1);
+  assert.equal((await kvGet(db, 'bulk:queue')).length, 3);
+});
+
+test('the bulk finish estimate follows the pace, and the 24-hour cap once it is full', async () => {
+  const { bulkEta } = await import('../lib/bulk-eta.mjs');
+  const nowMs = Date.parse('2026-11-13T12:00:00Z');
+  assert.equal(bulkEta({ remaining: 0, cap: 499 }), null);
+  // Room for all: 10 emails at 4 s.
+  assert.equal(bulkEta({ remaining: 10, cap: 499, paceMs: 4000, nowMs }), nowMs + 40_000);
+  // Cap 2 already full from sends 1 h and 30 min ago: the first new email waits for the 1-h-old one to leave
+  // (23 h from now, plus the restart lag), the second for the 30-min-old one.
+  const sentTimes = [new Date(nowMs - 3600_000).toISOString(), new Date(nowMs - 1800_000).toISOString()];
+  const at = bulkEta({ sentTimes, remaining: 2, cap: 2, paceMs: 4000, nowMs });
+  assert.equal(at, nowMs + 23.5 * 3600_000 + 10 * 60_000);
 });

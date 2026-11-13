@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  actions: write # a run out of time starts the next one (scripts/run.mjs bulk stage)
 
 concurrency:
   group: careerpilot-bulk
@@ -41,6 +42,7 @@ jobs:
         working-directory: careerpilot
         env:
           RUN_BUDGET_MINUTES: '6'
+          GITHUB_DISPATCH_TOKEN: ${{ github.token }}
           TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
           TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
           TURSO_API_TOKEN: ${{ secrets.TURSO_API_TOKEN }} # read-limit guard (lib/db.mjs readBudgetPause)
