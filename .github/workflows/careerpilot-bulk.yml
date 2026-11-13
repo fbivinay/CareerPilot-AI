@@ -1,6 +1,7 @@
 # Emails pasted on the dashboard's Email page: the dashboard queues the addresses (it holds no Gmail key) and
 # starts this workflow, which sends the candidate's own email with the resume to each one separately.
-# Every careerpilot-pipeline run drains the queue too, if this start fails.
+# Every careerpilot-pipeline run drains the queue too (and starts this workflow for what it cannot finish),
+# so sending continues with the dashboard closed. A run out of time starts the next one.
 name: careerpilot-bulk
 
 on:
