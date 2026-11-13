@@ -45,7 +45,7 @@ export function BulkSend({ subject, pending, last }) {
       <button disabled={sending} className="btn-primary px-4 py-1.5 text-sm">{sending ? 'Queuing…' : 'Send'}</button>
       {state?.error && <p className="text-sm text-bad">{state.error}</p>}
 
-      {running && <Progress last={last} sent={sent} />}
+      {running && <Progress last={last} sent={sent} pending={pending} />}
       {waiting && (
         <div className="space-y-2 pt-1">
           <p className="flex items-center gap-2 text-sm font-medium"><Dot />
@@ -67,9 +67,10 @@ export function BulkSend({ subject, pending, last }) {
   );
 }
 
-function Progress({ last, sent }) {
+function Progress({ last, sent, pending }) {
   const results = last.results;
-  const total = Math.max(last.total ?? 0, results.length, 1);
+  // Done so far plus what is still queued, so addresses added during the run count toward the total.
+  const total = Math.max(results.length + pending, 1);
   const pct = Math.round((results.length / total) * 100);
   const skipped = results.length - sent;
   const latest = results.at(-1);
@@ -80,7 +81,7 @@ function Progress({ last, sent }) {
           Sending… <span key={sent} className="tick text-2xl font-bold tabular-nums">{sent}</span> sent
           {skipped > 0 && <span className="text-ink-3">· {skipped} skipped</span>}
         </p>
-        <p className="text-sm tabular-nums text-ink-2">{results.length} of {total} · {pct}%</p>
+        <p className="text-sm tabular-nums text-ink-2">{results.length} of {total} · {pct}%{pending > 0 && ` · ${pending} still queued`}</p>
       </div>
       <div className="bar" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
         <div className="bar-fill" style={{ width: `${Math.max(pct, 3)}%` }} />
