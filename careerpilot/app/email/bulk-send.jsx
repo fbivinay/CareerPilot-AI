@@ -45,8 +45,13 @@ export function BulkSend({ subject, pending, last }) {
       </p>
       <textarea name="addresses" rows={4} required placeholder={'hr@company.com\nrecruiter@other.com, careers@third.in'}
         className="field w-full rounded-2xl font-mono text-sm" />
-      <button disabled={sending} className="btn-primary px-4 py-1.5 text-sm">{sending ? 'Queuing…' : 'Send'}</button>
+      <div className="flex flex-wrap items-center gap-2">
+        <button disabled={sending} className="btn-primary px-4 py-1.5 text-sm">{sending ? 'Queuing…' : 'Send'}</button>
+        <button name="priority" value="1" disabled={sending} className="btn-ghost px-4 py-1.5 text-sm"
+          title="Put these addresses ahead of everything already queued">Priority send</button>
+      </div>
       {state?.error && <p className="text-sm text-bad">{state.error}</p>}
+      {state?.priority && !sending && <p className="text-sm text-ink-2">{state.queued} moved to the front of the queue — they go out next.</p>}
 
       {running && <Progress last={last} sent={sent} pending={pending} />}
       {waiting && (

@@ -538,6 +538,18 @@ test('addresses queued on the dashboard are all sent by the bulk stage, then the
   assert.deepEqual(messages.map((m) => m.to), ['a@b.co', 'c@d.co', 'e@f.co']);
   assert.deepEqual(await kvGet(db, 'bulk:queue'), []);
   assert.equal((await kvGet(db, 'bulk:last')).results.length, 3);
+
+  // Priority goes to the front (moving one already queued), and a running batch switches to it after its current email.
+  messages.length = 0;
+  await queueBulk(db, 'p1@x.co p2@x.co p3@x.co');
+  await queueBulk(db, 'v@x.co p3@x.co', { priority: true });
+  assert.deepEqual(await kvGet(db, 'bulk:queue'), ['v@x.co', 'p3@x.co', 'p1@x.co', 'p2@x.co']);
+  const gmail2 = { ...gmail, send: async (m) => {
+    if (m.to === 'v@x.co') await queueBulk(db, 'urgent@x.co', { priority: true }); // arrives mid-batch
+    return gmail.send(m);
+  } };
+  await sendQueued(db, gmail2, env);
+  assert.deepEqual(messages.map((m) => m.to), ['v@x.co', 'urgent@x.co', 'p3@x.co', 'p1@x.co', 'p2@x.co']);
 });
 
 test('the bulk stage pauses at Gmail\'s sending limit or the daily cap and keeps the rest queued', async () => {

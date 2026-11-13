@@ -228,7 +228,7 @@ const sentWindow = async (db) => (await all(db, `SELECT created_at ${SENT_SINCE}
 // or from the candidate's Gmail), or one that bounced, is skipped.
 // `window` is the 24-hour send log, kept up to date here as emails go out. With a `deadline`, the run stops in
 // time (returning `more`), and waits for room in the 24-hour window itself when that comes before the deadline.
-export async function sendBulk(db, gmail, raw, env = process.env, onResult = async () => {}, { window = null, deadline = Infinity } = {}) {
+export async function sendBulk(db, gmail, raw, env = process.env, onResult = async () => {}, { window = null, deadline = Infinity, interrupt = () => false } = {}) {
   const addresses = parseAddresses(raw);
   if (!addresses.length) return { error: 'No email addresses found.' };
   if (addresses.length > MAX_BULK) return { error: `${addresses.length} addresses: send at most ${MAX_BULK} at a time.` };
@@ -242,6 +242,7 @@ export async function sendBulk(db, gmail, raw, env = process.env, onResult = asy
   window ??= await sentWindow(db);
   for (const email of addresses) {
     if (Date.now() > deadline) return { results, more: true };
+    if (interrupt()) return { results };
     // Stop short of Gmail's limit, leaving the rest queued: sending resumes when the email that takes the count
     // back under the cap leaves the 24-hour window.
     for (;;) {
@@ -273,13 +274,15 @@ export async function sendBulk(db, gmail, raw, env = process.env, onResult = asy
 
 // The dashboard host holds no Gmail or encryption key (scripts/setup.mjs), so the Email page only queues the
 // addresses and starts careerpilot-bulk.yml on GitHub, whose `bulk` stage sends them (every pipeline run drains
-// the queue too, if that start fails).
-export async function queueBulk(db, raw) {
+// the queue too, if that start fails). `priority` puts the addresses at the front of the queue (moving any already
+// queued), so they go out before everything else; a run already sending switches to them after its current email.
+export async function queueBulk(db, raw, { priority = false } = {}) {
   const addresses = parseAddresses(raw);
   if (!addresses.length) return { error: 'No email addresses found.' };
   if (addresses.length > MAX_BULK) return { error: `${addresses.length} addresses: send at most ${MAX_BULK} at a time.` };
-  await kvSet(db, 'bulk:queue', [...new Set([...(await kvGet(db, 'bulk:queue', [])), ...addresses])]);
-  return { queued: addresses.length };
+  const queue = await kvGet(db, 'bulk:queue', []);
+  await kvSet(db, 'bulk:queue', [...new Set(priority ? [...addresses, ...queue] : [...queue, ...addresses])]);
+  return { queued: addresses.length, ...(priority && { priority: true }) };
 }
 
 // ponytail: queue is one kv value; an address queued in the instant between the read and the write below is
@@ -297,15 +300,24 @@ export async function sendQueued(db, gmail, env = process.env, { deadline = Infi
   // it is tried, so a run cut off mid-batch neither re-tries nor loses one. `sentTimes` and `cap` feed the page's
   // finish-time estimate (lib/bulk-eta.mjs).
   const progress = (extra) => kvSet(db, 'bulk:last', { at: now(), startedAt, total: Math.max(total, done.length), results: done, cap, sentTimes: window, ...extra });
+  // Every tried address leaves the queue, so its head is the batch's next address, unless priority addresses were
+  // put in front of it (queueBulk): then the batch stops and the next one starts from the new head.
+  let batch = [];
+  let tried = 0;
+  let jumped = false;
   const onResult = async (r) => {
     done.push(r);
-    await kvSet(db, 'bulk:queue', (await kvGet(db, 'bulk:queue', [])).filter((a) => a !== r.email));
+    const queue = (await kvGet(db, 'bulk:queue', [])).filter((a) => a !== r.email);
+    await kvSet(db, 'bulk:queue', queue);
+    jumped = ++tried < batch.length && queue.length > 0 && queue[0] !== batch[tried];
     await progress({ running: true });
   };
   await progress({ running: true });
   let res = {};
-  for (let batch; !res.paused && !res.more && (batch = (await kvGet(db, 'bulk:queue', [])).slice(0, MAX_BULK)).length;) {
-    res = await sendBulk(db, gmail, batch.join(' '), env, onResult, { window, deadline });
+  while (!res.paused && !res.more && (batch = (await kvGet(db, 'bulk:queue', [])).slice(0, MAX_BULK)).length) {
+    tried = 0;
+    jumped = false;
+    res = await sendBulk(db, gmail, batch.join(' '), env, onResult, { window, deadline, interrupt: () => jumped });
     if (res.error) { await kvSet(db, 'bulk:last', { at: now(), error: res.error }); return res; }
   }
   // resumeAt lets the Email page restart the sender itself once the 24-hour window has room again.

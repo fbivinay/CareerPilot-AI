@@ -182,7 +182,7 @@ export async function sendBulkEmail(_prev, formData) {
   await requireSession();
   const db = await getDb();
   if (!(await connectionStatus(db)).canSend) return { error: 'Gmail sending is not enabled. Connect Gmail in Settings.' };
-  const result = await queueBulk(db, formData.get('addresses'));
+  const result = await queueBulk(db, formData.get('addresses'), { priority: formData.get('priority') === '1' });
   if (result.error) return result;
   const started = process.env.GITHUB_DISPATCH_TOKEN ? (await dispatchWorkflow('careerpilot-bulk.yml').catch(() => null))?.ok : false;
   revalidatePath('/email');
