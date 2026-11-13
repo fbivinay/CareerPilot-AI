@@ -219,6 +219,28 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 export function parseAddresses(raw) {
   return [...new Set((String(raw ?? '').match(/[^\s@<>,;:"'()[\]]+@[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}/gi) ?? []).map((a) => a.toLowerCase()))];
 }
+export const PRIORITY_RESERVE = 50; // of the 24-hour cap, kept for Priority send (Email page)
+const RESERVE_LEAD = 30 * 60_000;
+
+// Whether one more email fits the 24-hour cap now (`window`: send times, oldest first, all within 24 hours).
+// Priority emails may use the whole cap; the others stop `reserve` short of it, except in the last half hour before
+// the window frees room for them again, when they may use what Priority send left unused. `reserve` ({ from, until })
+// marks that use: until those emails leave the window (24 hours after `from`) the others stop at the lower count, so
+// Priority send has its room back for the rest of the day.
+// Returns { ok, reserve } or { resumeAt } (ms).
+export function bulkRoom({ window, cap, keep, priority, reserve = null, t = Date.now() }) {
+  const free = (n) => Date.parse(window[window.length - n]) + DAY + 1000; // when the count drops below n
+  const bulkCap = cap - keep;
+  if (window.length < (priority ? cap : bulkCap)) return { ok: true, reserve };
+  if (priority) return { resumeAt: free(cap) };
+  const end = free(bulkCap);
+  const using = reserve && t >= reserve.from && t < reserve.until;
+  const usable = reserve && !using ? reserve.from + DAY : 0; // when the last use has left the window
+  if (window.length < cap && t >= end - RESERVE_LEAD && (using || t >= usable)) return { ok: true, reserve: using ? reserve : { from: t, until: end } };
+  const at = Math.max(end - RESERVE_LEAD, usable, window.length < cap ? 0 : free(cap));
+  return { resumeAt: at < end ? at : end };
+}
+
 // Send times (ISO, oldest first) of the emails that count toward the 24-hour cap.
 const sentWindow = async (db) => (await all(db, `SELECT created_at ${SENT_SINCE} ORDER BY created_at`, [new Date(Date.now() - DAY).toISOString()]))
   .map((r) => r.created_at);
@@ -228,7 +250,8 @@ const sentWindow = async (db) => (await all(db, `SELECT created_at ${SENT_SINCE}
 // or from the candidate's Gmail), or one that bounced, is skipped.
 // `window` is the 24-hour send log, kept up to date here as emails go out. With a `deadline`, the run stops in
 // time (returning `more`), and waits for room in the 24-hour window itself when that comes before the deadline.
-export async function sendBulk(db, gmail, raw, env = process.env, onResult = async () => {}, { window = null, deadline = Infinity, interrupt = () => false } = {}) {
+export async function sendBulk(db, gmail, raw, env = process.env, onResult = async () => {},
+  { window = null, deadline = Infinity, interrupt = () => false, priority = new Set() } = {}) {
   const addresses = parseAddresses(raw);
   if (!addresses.length) return { error: 'No email addresses found.' };
   if (addresses.length > MAX_BULK) return { error: `${addresses.length} addresses: send at most ${MAX_BULK} at a time.` };
@@ -239,18 +262,25 @@ export async function sendBulk(db, gmail, raw, env = process.env, onResult = asy
   const results = [];
   const add = async (x) => { results.push(x); await onResult(x); };
   const cap = Number(env.BULK_DAILY_CAP ?? DAILY_CAP);
+  const keep = Math.min(Number(env.BULK_PRIORITY_RESERVE ?? PRIORITY_RESERVE), cap - 1);
   window ??= await sentWindow(db);
+  let reserve;
   for (const email of addresses) {
     if (Date.now() > deadline) return { results, more: true };
     if (interrupt()) return { results };
-    // Stop short of Gmail's limit, leaving the rest queued: sending resumes when the email that takes the count
-    // back under the cap leaves the 24-hour window.
+    // Stop short of Gmail's limit, leaving the rest queued: sending resumes when the window has room (bulkRoom).
     for (;;) {
       while (window.length && Date.parse(window[0]) < Date.now() - DAY) window.shift();
-      if (window.length < cap) break;
-      const resumeAt = Date.parse(window[window.length - cap]) + DAY + 1000;
-      if (Number.isFinite(deadline) && resumeAt < deadline - 10_000) { await sleep(resumeAt - Date.now()); continue; }
-      return { results, resumeAt: new Date(resumeAt).toISOString(), paused: `${window.length} emails sent in the last 24 hours (limit ${cap}, Gmail's is 500).` };
+      if (window.length < cap - keep) break; // the common case, with no read of bulk:reserve
+      if (reserve === undefined) reserve = await kvGet(db, 'bulk:reserve', null);
+      const room = bulkRoom({ window, cap, keep, priority: priority.has(email), reserve });
+      if (room.ok) {
+        if (room.reserve !== reserve) await kvSet(db, 'bulk:reserve', (reserve = room.reserve));
+        break;
+      }
+      if (Number.isFinite(deadline) && room.resumeAt < deadline - 10_000) { await sleep(room.resumeAt - Date.now()); continue; }
+      return { results, resumeAt: new Date(room.resumeAt).toISOString(),
+        paused: `${window.length} emails sent in the last 24 hours (limit ${cap}, Gmail's is 500; ${keep} kept for Priority send until the last half hour).` };
     }
     const contact = await upsertContact(db, { email, sourceType: 'manual', domainMatch: true });
     if (contact.opted_out) { await add({ email, ok: false, error: 'bounced before or opted out' }); continue; }
@@ -282,6 +312,8 @@ export async function queueBulk(db, raw, { priority = false } = {}) {
   if (addresses.length > MAX_BULK) return { error: `${addresses.length} addresses: send at most ${MAX_BULK} at a time.` };
   const queue = await kvGet(db, 'bulk:queue', []);
   await kvSet(db, 'bulk:queue', [...new Set(priority ? [...addresses, ...queue] : [...queue, ...addresses])]);
+  // Priority addresses may use the reserved part of the 24-hour cap (bulkRoom).
+  if (priority) await kvSet(db, 'bulk:priority', [...new Set([...(await kvGet(db, 'bulk:priority', [])), ...addresses])]);
   return { queued: addresses.length, ...(priority && { priority: true }) };
 }
 
@@ -305,10 +337,12 @@ export async function sendQueued(db, gmail, env = process.env, { deadline = Infi
   let batch = [];
   let tried = 0;
   let jumped = false;
+  let priority = new Set();
   const onResult = async (r) => {
     done.push(r);
     const queue = (await kvGet(db, 'bulk:queue', [])).filter((a) => a !== r.email);
     await kvSet(db, 'bulk:queue', queue);
+    if (priority.delete(r.email)) await kvSet(db, 'bulk:priority', (await kvGet(db, 'bulk:priority', [])).filter((a) => a !== r.email));
     jumped = ++tried < batch.length && queue.length > 0 && queue[0] !== batch[tried];
     await progress({ running: true });
   };
@@ -317,7 +351,8 @@ export async function sendQueued(db, gmail, env = process.env, { deadline = Infi
   while (!res.paused && !res.more && (batch = (await kvGet(db, 'bulk:queue', [])).slice(0, MAX_BULK)).length) {
     tried = 0;
     jumped = false;
-    res = await sendBulk(db, gmail, batch.join(' '), env, onResult, { window, deadline, interrupt: () => jumped });
+    priority = new Set(await kvGet(db, 'bulk:priority', []));
+    res = await sendBulk(db, gmail, batch.join(' '), env, onResult, { window, deadline, interrupt: () => jumped, priority });
     if (res.error) { await kvSet(db, 'bulk:last', { at: now(), error: res.error }); return res; }
   }
   // resumeAt lets the Email page restart the sender itself once the 24-hour window has room again.

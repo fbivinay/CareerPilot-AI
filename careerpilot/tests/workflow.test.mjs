@@ -638,3 +638,27 @@ test('the bulk finish estimate follows the pace, and the 24-hour cap once it is 
   const at = bulkEta({ sentTimes, remaining: 2, cap: 2, paceMs: 4000, nowMs });
   assert.equal(at, nowMs + 23.5 * 3600_000 + 10 * 60_000);
 });
+
+test('Priority send keeps 50 of the 24-hour cap; the queue gets them only in the last half hour', async () => {
+  const { bulkRoom } = await import('../lib/outreach.mjs');
+  const M = 60_000, DAY = 1440 * M, t0 = Date.parse('2026-11-14T00:00:00Z');
+  // A queue that never empties, checked each minute for 4 days; each email goes out at once.
+  let sent = [], reserve = null, short = 0;
+  const perDay = [0, 0, 0, 0];
+  for (let t = t0; t < t0 + 4 * DAY; t += M) {
+    sent = sent.filter((s) => s > t - DAY);
+    for (let room; (room = bulkRoom({ window: sent.map((s) => new Date(s).toISOString()), cap: 499, keep: 50, priority: false, reserve, t })).ok;) {
+      reserve = room.reserve;
+      sent.push(t);
+      perDay[Math.floor((t - t0) / DAY)]++;
+    }
+    assert.ok(sent.length <= 499);
+    if (t >= t0 + DAY && sent.length > 449) short++; // minutes Priority send had less than 50
+  }
+  assert.deepEqual(perDay.slice(1), [499, 499, 499]); // nothing lost to the reserve
+  assert.ok(short <= 3 * 31, `${short} minutes without the full reserve`); // only the last half hour of each day
+  // Priority may use the reserve whenever the queue has stopped at 449.
+  const at449 = Array.from({ length: 449 }, () => new Date(t0).toISOString());
+  assert.ok(bulkRoom({ window: at449, cap: 499, keep: 50, priority: true, t: t0 + M }).ok);
+  assert.equal(bulkRoom({ window: at449, cap: 499, keep: 50, priority: false, t: t0 + M }).resumeAt, t0 + DAY - 30 * M + 1000);
+});
